@@ -137,6 +137,7 @@ final class OPDSBrowseModel: ObservableObject {
 
     func popTo(_ index: Int) {
         guard stack.indices.contains(index) else { return }
+        exitSearch() // 在搜索结果里点面包屑要先退回目录态，否则 stack 变了视图还停在结果页
         stack.removeLast(stack.count - index - 1)
     }
 

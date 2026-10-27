@@ -230,7 +230,7 @@ final class OPDSService: @unchecked Sendable {
         private var textTarget: TextTarget? = nil
         private var depthInAuthorName = false
 
-        enum TextTarget { case title, summary, feedTitle, idle }
+        enum TextTarget { case title, summary, feedTitle, entryID, idle }
 
         init(data: Data, baseURL: URL) {
             self.baseURL = baseURL
@@ -264,6 +264,10 @@ final class OPDSService: @unchecked Sendable {
                 textTarget = entry != nil ? .title : .feedTitle
             case "summary", "content":
                 if entry != nil { textBuffer = ""; textTarget = .summary }
+            case "id":
+                // Atom <id> 是条目的稳定标识（重新拉取同一 feed 时不变，
+                // 用于「已入书架/下载中」状态跨次访问保持）；feed 级 <id> 忽略
+                if entry != nil { textBuffer = ""; textTarget = .entryID }
             case "link":
                 let rel = attrs["rel"] ?? ""
                 let href = attrs["href"] ?? ""
@@ -334,13 +338,23 @@ final class OPDSService: @unchecked Sendable {
                 }
                 textTarget = .idle
                 textBuffer = ""
+            case "id":
+                if let e = entry, textTarget == .entryID {
+                    let trimmed = textBuffer.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !trimmed.isEmpty {
+                        var e2 = e
+                        e2.id = trimmed
+                        entry = e2
+                    }
+                }
+                textTarget = .idle
+                textBuffer = ""
             case "entry":
                 if var e = entry {
                     if e.title.isEmpty { e.title = "未命名" }
-                    // 去重防缓存条目重复
-                    let key = "\(e.title)|\(e.subsectionHref ?? "")|\(e.acquisitionLinks.count)"
-                    if !seenKeys.contains(key) {
-                        seenKeys.insert(key)
+                    // 去重：优先用 Atom <id>；随机兜底 id 各不相同，等于不去重（良性）
+                    if !seenKeys.contains(e.id) {
+                        seenKeys.insert(e.id)
                         feed.entries.append(e)
                     }
                     entry = nil

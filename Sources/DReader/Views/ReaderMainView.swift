@@ -12,6 +12,8 @@ struct ReaderMainView: View {
     @State private var selectionToolbarHeight: CGFloat = 52
     /// 禅意模式退出胶囊：鼠标悬停时才完全显现
     @State private var isZenPillHovered: Bool = false
+    /// 键盘速查浮层（? 唤起）
+    @State private var showKeyboardCheatSheet: Bool = false
 
     var body: some View {
         ZStack(alignment: .top) {
@@ -92,6 +94,15 @@ struct ReaderMainView: View {
                 .padding(.top, 14)
                 .transition(.move(edge: .top).combined(with: .opacity))
             }
+
+            // 键盘速查浮层（? 唤起 / Esc 关闭）
+            if showKeyboardCheatSheet {
+                KeyboardCheatSheetView {
+                    withAnimation(.easeOut(duration: 0.16)) { showKeyboardCheatSheet = false }
+                }
+                .transition(.opacity)
+                .zIndex(50)
+            }
         }
         .sheet(item: $quoteCardHighlight) { highlight in
             QuoteCardView(
@@ -165,7 +176,10 @@ struct ReaderMainView: View {
             return .ignored
         }
         .onKeyPress(.escape) {
-            if vm.isSearchPresented {
+            if showKeyboardCheatSheet {
+                withAnimation(.easeOut(duration: 0.16)) { showKeyboardCheatSheet = false }
+                return .handled
+            } else if vm.isSearchPresented {
                 vm.isSearchPresented = false
                 return .handled
             } else if vm.selectionManager.activeHighlightCard != nil {
@@ -192,6 +206,14 @@ struct ReaderMainView: View {
             return .ignored
         }
         // 键盘标注流：H = 高亮选区 / N = 高亮并写想法（webview 聚焦时走 JS 桥接，未聚焦走这里）
+        .onKeyPress(characters: CharacterSet(charactersIn: "?/")) { keyPress in
+            guard !showKeyboardCheatSheet else { return .ignored }
+            if keyPress.characters == "?" {
+                withAnimation(.easeOut(duration: 0.16)) { showKeyboardCheatSheet = true }
+                return .handled
+            }
+            return .ignored
+        }
         .onKeyPress(characters: CharacterSet(charactersIn: "hn")) { keyPress in
             guard !vm.isViewingBookshelf && !vm.isSearchPresented && !vm.isAIPanelVisible else { return .ignored }
             guard keyPress.modifiers.isEmpty else { return .ignored }
