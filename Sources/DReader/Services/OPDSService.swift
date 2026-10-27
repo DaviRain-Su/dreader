@@ -15,6 +15,8 @@ final class OPDSService: @unchecked Sendable {
         case http(Int)
         case parse(String)
         case noEpubLink
+        case mobiOnly
+        case pdfOnly
 
         var errorDescription: String? {
             switch self {
@@ -22,6 +24,8 @@ final class OPDSService: @unchecked Sendable {
             case .http(let code): return Self.sourceHintForHTTP(code) ?? "OPDS 源返回 HTTP \(code)"
             case .parse(let detail): return "OPDS 目录解析失败：\(detail)"
             case .noEpubLink: return "该书没有 EPUB 版本，DReader 暂只接 EPUB"
+            case .mobiOnly: return "这本书只有 MOBI（Kindle）版本——自建书馆（如 Calibre-Web）通常一键可转 EPUB，转好再拉回即可"
+            case .pdfOnly: return "这本书只有 PDF 版本，而 DReader 目前只读 EPUB"
             }
         }
 
@@ -407,6 +411,13 @@ extension OPDSService {
         progress?(expected > 0 ? 0.99 : 1.0)
 
         guard data.count > 4, [UInt8](data.prefix(4)) == [0x50, 0x4B, 0x03, 0x04] else {
+            // 识别常见替代格式，给出能落地的提示而不是笼统的解析失败
+            if data.count > 68, data.subdata(in: 60..<68) == Data("BOOKMOBI".utf8) {
+                throw OPDSError.mobiOnly
+            }
+            if data.prefix(4) == Data("%PDF".utf8) {
+                throw OPDSError.pdfOnly
+            }
             throw OPDSError.parse("下载内容不是合法 EPUB（zip 头缺失）")
         }
 

@@ -191,6 +191,29 @@ struct ReaderMainView: View {
             }
             return .ignored
         }
+        // 键盘标注流：H = 高亮选区 / N = 高亮并写想法（与划线工具条动作同源）
+        .onKeyPress(characters: CharacterSet(charactersIn: "hn")) { keyPress in
+            guard !vm.isViewingBookshelf && !vm.isSearchPresented && !vm.isAIPanelVisible else { return .ignored }
+            guard keyPress.modifiers.isEmpty else { return .ignored }
+            // 笔记卡片编辑中不接键，避免输入 h/n 误触
+            guard vm.selectionManager.activeHighlightCard == nil else { return .ignored }
+            guard let selection = vm.selectionManager.activeSelection else { return .ignored }
+            if keyPress.characters == "h" {
+                vm.applyHighlight(colorHex: vm.lastChosenHighlightColor)
+                return .handled
+            } else if keyPress.characters == "n" {
+                if let h = vm.applyHighlight(colorHex: vm.lastChosenHighlightColor) {
+                    vm.selectionManager.activeHighlightCard = HighlightCardInfo(
+                        highlightId: h.id,
+                        x: selection.x,
+                        y: selection.y,
+                        bottomY: selection.bottomY
+                    )
+                }
+                return .handled
+            }
+            return .ignored
+        }
     }
 
     // MARK: - Reading Workspace View
