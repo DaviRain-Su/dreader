@@ -1129,8 +1129,11 @@ struct EPUBThemeInjector {
                 if (atEnd) {
                     return { willTurn: false }; // 边界 → 翻章，走既有 DOM 切换路径
                 }
-                // 页内整页跳：偏移取页长，但不超过边界（避免跳过头露白）
+                // 页内整页跳：偏移取页长，但不超过边界（避免跳过头露白）；余量太小则不做整页翻（滑出一整页却只挪了几十像素很怪）
                 let offset = pageSize;
+                if (direction > 0 ? (maxScroll - currentScroll) : currentScroll) < 40 {
+                    return { willTurn: false };
+                }
                 if (direction > 0) {
                     offset = Math.min(pageSize, maxScroll - currentScroll);
                 } else {
@@ -1296,6 +1299,24 @@ struct EPUBThemeInjector {
                 } else if (e.key === 'ArrowUp') {
                     const vertical = window.dreaderIsVertical ? window.dreaderIsVertical() : false;
                     if (vertical) { e.preventDefault(); window.dreaderScrollPage(-1); }
+                } else if ((e.key === 'h' || e.key === 'H') && !e.metaKey && !e.ctrlKey && !e.altKey) {
+                    // 键盘标注流：H = 高亮选区（webview 聚焦时 here 生效；SwiftUI onKeyPress 是另一条兜底路径）
+                    const sel = window.getSelection();
+                    if (sel && !sel.isCollapsed) {
+                        e.preventDefault();
+                        if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.selectionBridge) {
+                            window.webkit.messageHandlers.selectionBridge.postMessage({ type: 'keyboardHighlight' });
+                        }
+                    }
+                } else if ((e.key === 'n' || e.key === 'N') && !e.metaKey && !e.ctrlKey && !e.altKey) {
+                    // N = 高亮并写想法
+                    const sel = window.getSelection();
+                    if (sel && !sel.isCollapsed) {
+                        e.preventDefault();
+                        if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.selectionBridge) {
+                            window.webkit.messageHandlers.selectionBridge.postMessage({ type: 'keyboardThought' });
+                        }
+                    }
                 }
             });
 

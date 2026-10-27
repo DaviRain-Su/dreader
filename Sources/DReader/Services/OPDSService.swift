@@ -180,18 +180,27 @@ final class OPDSService: @unchecked Sendable {
         return try parseFeed(data, baseURL: url)
     }
 
-    /// 目录内搜索：把 {searchTerms} 模板替换为编码后的关键词
+    /// 目录内搜索：把 {searchTerms} 模板替换为编码后的关键词。
+    /// 注意不能用 .urlQueryAllowed——它会把 & + = ? 原样留下，破坏模板 query；用 RFC3986 unreserved 严格编码。
     func search(template: String, terms: String, source: Source?) async throws -> Feed {
-        let encoded = terms.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? terms
+        let encoded = terms.addingPercentEncoding(withAllowedCharacters: Self.rfc3986Unreserved) ?? terms
         let href = template.replacingOccurrences(of: "{searchTerms}", with: encoded)
         return try await fetchFeed(href: href, source: source)
     }
+
+    private static let rfc3986Unreserved = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
 
     /// 相对 href 依据 feed 所在 URL 解析为绝对地址（多数自建源日记里都是反着的）
     static func resolveHref(_ href: String, against base: URL) -> URL? {
         guard !href.isEmpty else { return nil }
         if let u = URL(string: href), u.scheme != nil { return u }
-        return URL(string: href, relativeTo: base)
+        if let u = URL(string: href, relativeTo: base) { return u.absoluteURL }
+        // 含空格、中文等未编码字符的 href（Calibre-Web 常见）：补编码非法字符但不碰 ?/&/= 分隔符
+        if let encoded = href.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
+           let u = URL(string: encoded, relativeTo: base) {
+            return u.absoluteURL
+        }
+        return nil
     }
 
     private func absoluteURL(_ href: String) -> URL? {
@@ -256,11 +265,19 @@ final class OPDSService: @unchecked Sendable {
             case "summary", "content":
                 if entry != nil { textBuffer = ""; textTarget = .summary }
             case "link":
-                guard var e = entry else { break }
                 let rel = attrs["rel"] ?? ""
-                let type = attrs["type"] ?? ""
                 let href = attrs["href"] ?? ""
                 guard !href.isEmpty, let resolved = OPDSService.resolveHref(href, against: baseURL)?.absoluteString else { break }
+                // feed 级 link（entry 外，Atom 规范里出现在 entry 之前）：分页与目录内搜索
+                guard var e = entry else {
+                    if rel == "next" {
+                        feed.nextPageURL = resolved
+                    } else if rel == "search" {
+                        feed.searchURLTemplate = resolved
+                    }
+                    break
+                }
+                let type = attrs["type"] ?? ""
                 if rel.contains("acquisition") {
                     e.acquisitionLinks.append((type, resolved))
                 } else if rel.contains("image") {
@@ -272,10 +289,6 @@ final class OPDSService: @unchecked Sendable {
                     }
                 } else if rel.contains("subsection") || rel == "section" || rel == "catalog" {
                     if e.subsectionHref == nil { e.subsectionHref = resolved }
-                } else if rel == "next" {
-                    feed.nextPageURL = resolved
-                } else if rel == "search" {
-                    feed.searchURLTemplate = resolved
                 }
                 entry = e
             default:

@@ -18,6 +18,8 @@ struct EPUBWebView: NSViewRepresentable {
     let onPrevChapter: () -> Void
     var onSocraticAI: ((String) -> Void)? = nil
     var onSocraticThought: ((String) -> Void)? = nil
+    /// 键盘标注流（webview 聚焦时 JS keydown 桥接）：参数 true = 写想法，false = 直接高亮
+    var onKeyboardAnnotate: ((Bool) -> Void)? = nil
     var bilingualTranslations: [Int: String]? = nil
     var agentName: String = "AI 伴读"
     var onTranslateParagraph: ((Int, String) -> Void)? = nil
@@ -162,8 +164,9 @@ struct EPUBWebView: NSViewRepresentable {
                 return
             }
             // 仿真翻页：旧页快照盖在原地 → webview 无动画瞬时跳页 → 快照整幅滑出露出新页。
-            // 快照为完整矩形（非轮廓路径），不会闪出透明 webview 底色。
-            if parent.settings.isPageTurnAnimation, let webView = webView, isPageReady, !isPageTurnAnimating {
+            // 动画进行中直接忽略新按键（叠帧会让两层动画错位）。
+            if isPageTurnAnimating { return }
+            if parent.settings.isPageTurnAnimation, let webView = webView, isPageReady {
                 isPageTurnAnimating = true
                 let pageColor = parent.settings.theme.backgroundColorHex
                 webView.takeSnapshot(with: nil) { [weak self] image, _ in
@@ -232,17 +235,23 @@ struct EPUBWebView: NSViewRepresentable {
                 return
             }
 
+            // 裁剪容器：NSView 默认不裁剪子视图，不裁剪的话快照滑出时会溢出盖到侧边栏/顶栏
+            let clip = NSView(frame: bounds)
+            clip.wantsLayer = true
+            clip.layer?.masksToBounds = true
+            webView.addSubview(clip)
+
             // 1. 不透明纸面垫底（webview 背景透明，直接露底会闪）
             let paper = NSView(frame: bounds)
             paper.wantsLayer = true
             paper.layer?.backgroundColor = Color(hex: pageColor).cgColor
-            webView.addSubview(paper)
+            clip.addSubview(paper)
 
             // 2. 旧页快照：从起始位置滑向终点的方向平移一整页
             let snapshotView = NSImageView(frame: bounds)
             snapshotView.image = snapshot
             snapshotView.wantsLayer = true
-            webView.addSubview(snapshotView)
+            clip.addSubview(snapshotView)
 
             // 3. webview 内容瞬时跳到目标位置（被快照+纸面盖住，不可见）
             let js: String
@@ -270,9 +279,9 @@ struct EPUBWebView: NSViewRepresentable {
             }
             CATransaction.begin()
             CATransaction.setCompletionBlock { [weak self] in
-                snapshotView.layer?.removeFromSuperlayer()
                 snapshotView.removeFromSuperview()
                 paper.removeFromSuperview()
+                clip.removeFromSuperview()
                 self?.isPageTurnAnimating = false
             }
             let anim = CABasicAnimation(keyPath: "position")
@@ -750,6 +759,10 @@ struct EPUBWebView: NSViewRepresentable {
                         y: CGFloat(y),
                         bottomY: CGFloat(bottomY)
                     )
+                } else if type == "keyboardHighlight" {
+                    self.parent.onKeyboardAnnotate?(false)
+                } else if type == "keyboardThought" {
+                    self.parent.onKeyboardAnnotate?(true)
                 } else if type == "nextChapter" {
                     self.parent.onNextChapter()
                 } else if type == "prevChapter" {

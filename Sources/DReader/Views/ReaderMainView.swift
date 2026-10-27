@@ -191,28 +191,39 @@ struct ReaderMainView: View {
             }
             return .ignored
         }
-        // 键盘标注流：H = 高亮选区 / N = 高亮并写想法（与划线工具条动作同源）
+        // 键盘标注流：H = 高亮选区 / N = 高亮并写想法（webview 聚焦时走 JS 桥接，未聚焦走这里）
         .onKeyPress(characters: CharacterSet(charactersIn: "hn")) { keyPress in
             guard !vm.isViewingBookshelf && !vm.isSearchPresented && !vm.isAIPanelVisible else { return .ignored }
             guard keyPress.modifiers.isEmpty else { return .ignored }
             // 笔记卡片编辑中不接键，避免输入 h/n 误触
             guard vm.selectionManager.activeHighlightCard == nil else { return .ignored }
-            guard let selection = vm.selectionManager.activeSelection else { return .ignored }
-            if keyPress.characters == "h" {
-                vm.applyHighlight(colorHex: vm.lastChosenHighlightColor)
+            guard vm.selectionManager.activeSelection != nil else { return .ignored }
+            if keyPress.characters == "h" || keyPress.characters == "H" {
+                handleKeyboardAnnotate(wantThought: false)
                 return .handled
-            } else if keyPress.characters == "n" {
-                if let h = vm.applyHighlight(colorHex: vm.lastChosenHighlightColor) {
-                    vm.selectionManager.activeHighlightCard = HighlightCardInfo(
-                        highlightId: h.id,
-                        x: selection.x,
-                        y: selection.y,
-                        bottomY: selection.bottomY
-                    )
-                }
+            } else if keyPress.characters == "n" || keyPress.characters == "N" {
+                handleKeyboardAnnotate(wantThought: true)
                 return .handled
             }
             return .ignored
+        }
+    }
+
+    /// H/N 键盘标注：false = 直接高亮，true = 高亮并弹想法卡（SwiftUI onKeyPress 与 JS 桥接两条路径共用）。
+    /// applyHighlight 成功后清空选区，双路径命中也天然幂等。
+    private func handleKeyboardAnnotate(wantThought: Bool) {
+        guard let selection = vm.selectionManager.activeSelection else { return }
+        if wantThought {
+            if let h = vm.applyHighlight(colorHex: vm.lastChosenHighlightColor) {
+                vm.selectionManager.activeHighlightCard = HighlightCardInfo(
+                    highlightId: h.id,
+                    x: selection.x,
+                    y: selection.y,
+                    bottomY: selection.bottomY
+                )
+            }
+        } else {
+            vm.applyHighlight(colorHex: vm.lastChosenHighlightColor)
         }
     }
 
@@ -881,6 +892,10 @@ struct ReaderMainView: View {
                         },
                         onSocraticThought: { question in
                             vm.applyHighlight(colorHex: "#FFE066", note: "【针对苏格拉底之问的思考】：\n\(question)")
+                        },
+                        onKeyboardAnnotate: { wantThought in
+                            guard vm.selectionManager.activeHighlightCard == nil else { return }
+                            handleKeyboardAnnotate(wantThought: wantThought)
                         },
                         bilingualTranslations: vm.currentChapterBilingualTranslations(),
                         agentName: vm.agentService.currentPreset.name,
