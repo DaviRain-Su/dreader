@@ -482,7 +482,7 @@ struct WeChatReadingSyncModalView: View {
                     }
 
                     Button {
-                        WeReadLoginWindowController.present()
+                        WeReadQRLoginWindowController.present()
                     } label: {
                         HStack(spacing: 4) {
                             Image(systemName: "qrcode")
@@ -1045,7 +1045,7 @@ struct WeChatReadingSyncModalView: View {
         guard !bookId.isEmpty else { return }
         if !WeReadContentService.shared.hasCookie {
             errorMessage = "尚未登录：请先扫码登录微信读书"
-            WeReadLoginWindowController.present()
+            WeReadQRLoginWindowController.present()
             return
         }
 
