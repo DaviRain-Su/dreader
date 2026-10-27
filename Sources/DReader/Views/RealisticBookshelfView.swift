@@ -7,6 +7,7 @@ struct RealisticBookshelfView: View {
     var onOpenReadingInsights: (() -> Void)? = nil
     var onOpenOnlineHub: (() -> Void)? = nil
     var onOpenWeChatSync: (() -> Void)? = nil
+    var onOpenGlobalNotebooks: (() -> Void)? = nil
     var onDeleteBook: ((UUID) -> Void)? = nil
     var onResetProgress: ((UUID) -> Void)? = nil
     var onOpenXRay: ((EPUBBook) -> Void)? = nil
@@ -59,6 +60,7 @@ struct RealisticBookshelfView: View {
                             onImportEPUB: onImportEPUB,
                             onOpenOnlineHub: onOpenOnlineHub,
                             onOpenWeChatSync: onOpenWeChatSync,
+                            onOpenGlobalNotebooks: onOpenGlobalNotebooks,
                             recommendedClassics: recommendedClassics,
                             onAddClassic: { classic in
                                 onAddClassic?(classic)
@@ -266,6 +268,32 @@ struct RealisticBookshelfView: View {
             }
             .buttonStyle(.plain)
             .help("同步微信读书划线与想法 (⌘ + ⇧ + W)")
+
+            // Global Notebooks & Highlights Review Button
+            Button {
+                onOpenGlobalNotebooks?()
+            } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: "highlighter")
+                        .font(.system(size: 11))
+                    Text("划线笔记")
+                        .font(.system(size: 12, weight: .semibold, design: .serif))
+                }
+                .foregroundStyle(Color.white)
+                .padding(.horizontal, 11)
+                .padding(.vertical, 6)
+                .background(
+                    LinearGradient(
+                        colors: [Color(hex: "#D97706"), Color(hex: "#B45309")],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+                .shadow(color: Color.orange.opacity(0.35), radius: 3, y: 1.5)
+            }
+            .buttonStyle(.plain)
+            .help("查看全书库划线、想法与微信读书笔记 (⌘ + ⇧ + N)")
 
             // Import Button
             Button(action: onImportEPUB) {
@@ -742,6 +770,7 @@ private struct WarmEmptyStudyView: View {
     let onImportEPUB: () -> Void
     var onOpenOnlineHub: (() -> Void)? = nil
     var onOpenWeChatSync: (() -> Void)? = nil
+    var onOpenGlobalNotebooks: (() -> Void)? = nil
     let recommendedClassics: [ChineseClassicsRegistry.ClassicBook]
     let onAddClassic: (ChineseClassicsRegistry.ClassicBook) -> Void
 
@@ -829,6 +858,27 @@ private struct WarmEmptyStudyView: View {
                             .overlay(
                                 RoundedRectangle(cornerRadius: 6)
                                     .stroke(Color(hex: "#07C160").opacity(0.35), lineWidth: 0.8)
+                            )
+                            .clipShape(RoundedRectangle(cornerRadius: 6))
+                        }
+                        .buttonStyle(.plain)
+                    }
+
+                    if let onOpenGlobalNotebooks = onOpenGlobalNotebooks {
+                        Button(action: onOpenGlobalNotebooks) {
+                            HStack(spacing: 6) {
+                                Image(systemName: "highlighter")
+                                    .font(.system(size: 12))
+                                Text("全部划线与思考回顾...")
+                                    .font(.system(size: 12, weight: .medium, design: .serif))
+                            }
+                            .foregroundStyle(Color(hex: "#FDE68A"))
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 8)
+                            .background(Color.orange.opacity(0.18))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 6)
+                                    .stroke(Color.orange.opacity(0.35), lineWidth: 0.8)
                             )
                             .clipShape(RoundedRectangle(cornerRadius: 6))
                         }

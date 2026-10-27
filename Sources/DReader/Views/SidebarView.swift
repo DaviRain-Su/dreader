@@ -48,9 +48,16 @@ struct SidebarView: View {
         var id: String { rawValue }
     }
 
+    enum HighlightScope: String, CaseIterable, Identifiable {
+        case currentBook = "当前书"
+        case allBooks = "全库/微信"
+        var id: String { rawValue }
+    }
+
     @State private var tocSearchText: String = ""
     @State private var highlightSearchText: String = ""
     @State private var sourceFilter: HighlightSourceFilter = .all
+    @State private var highlightScope: HighlightScope = .currentBook
     @State private var hoveredChapterIndex: Int? = nil
     @State private var editingHighlightId: UUID? = nil
     @State private var editingThoughtText: String = ""
@@ -58,6 +65,15 @@ struct SidebarView: View {
 
     private var currentBookHighlights: [Highlight] {
         highlights.filter { $0.bookId == book?.id || $0.bookTitle == book?.title }
+    }
+
+    private var targetScopeHighlights: [Highlight] {
+        switch highlightScope {
+        case .currentBook:
+            return currentBookHighlights
+        case .allBooks:
+            return highlights
+        }
     }
 
     private var currentBookBookmarks: [Bookmark] {
@@ -76,7 +92,7 @@ struct SidebarView: View {
     }
 
     private var filteredHighlights: [Highlight] {
-        var list = currentBookHighlights
+        var list = targetScopeHighlights
         switch sourceFilter {
         case .all:
             break
@@ -91,7 +107,8 @@ struct SidebarView: View {
         return list.filter {
             $0.text.localizedCaseInsensitiveContains(query) ||
             ($0.note?.localizedCaseInsensitiveContains(query) ?? false) ||
-            $0.chapterTitle.localizedCaseInsensitiveContains(query)
+            $0.chapterTitle.localizedCaseInsensitiveContains(query) ||
+            $0.bookTitle.localizedCaseInsensitiveContains(query)
         }
     }
 
@@ -354,6 +371,50 @@ struct SidebarView: View {
     // MARK: - Highlights & Thoughts View (Apple Books & WeChat Read Style)
     private var highlightsListView: some View {
         VStack(spacing: 0) {
+            // Scope Picker: [当前书 (N)] | [全书库/微信读书 (M)]
+            HStack(spacing: 4) {
+                Button {
+                    highlightScope = .currentBook
+                } label: {
+                    Text("当前书 (\(currentBookHighlights.count))")
+                        .font(.system(size: 11, weight: highlightScope == .currentBook ? .bold : .medium))
+                        .foregroundStyle(highlightScope == .currentBook ? Color.purple : Color.secondary)
+                        .padding(.vertical, 4)
+                        .frame(maxWidth: .infinity)
+                        .background(
+                            RoundedRectangle(cornerRadius: 5)
+                                .fill(highlightScope == .currentBook ? Color.purple.opacity(0.12) : Color.clear)
+                        )
+                }
+                .buttonStyle(.plain)
+
+                Button {
+                    highlightScope = .allBooks
+                } label: {
+                    HStack(spacing: 3) {
+                        Text("全库/微信")
+                        if highlights.contains(where: { $0.isFromWeChatRead }) {
+                            Circle().fill(Color(hex: "#07C160")).frame(width: 5, height: 5)
+                        }
+                        Text("(\(highlights.count))")
+                    }
+                    .font(.system(size: 11, weight: highlightScope == .allBooks ? .bold : .medium))
+                    .foregroundStyle(highlightScope == .allBooks ? Color.purple : Color.secondary)
+                    .padding(.vertical, 4)
+                    .frame(maxWidth: .infinity)
+                    .background(
+                        RoundedRectangle(cornerRadius: 5)
+                            .fill(highlightScope == .allBooks ? Color.purple.opacity(0.12) : Color.clear)
+                    )
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(3)
+            .background(Color.primary.opacity(0.04))
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .padding(.horizontal, 10)
+            .padding(.top, 6)
+
             // Filter & WeChat Sync Trigger Bar
             HStack(spacing: 8) {
                 Picker("", selection: $sourceFilter) {
@@ -384,11 +445,11 @@ struct SidebarView: View {
                 }
             }
             .padding(.horizontal, 10)
-            .padding(.top, 6)
+            .padding(.top, 4)
             .padding(.bottom, 4)
 
             // Search & Stats Bar
-            if !currentBookHighlights.isEmpty {
+            if !targetScopeHighlights.isEmpty {
                 HStack(spacing: 6) {
                     Image(systemName: "magnifyingglass")
                         .font(.system(size: 11))
@@ -421,18 +482,43 @@ struct SidebarView: View {
             }
 
             if filteredHighlights.isEmpty {
-                VStack(spacing: 10) {
+                VStack(spacing: 12) {
                     Spacer()
                     Image(systemName: "highlighter")
                         .font(.system(size: 28))
                         .foregroundStyle(.secondary.opacity(0.8))
-                    Text(currentBookHighlights.isEmpty ? "暂无划线与想法" : "未找到匹配笔记")
+                    Text(targetScopeHighlights.isEmpty ? "暂无划线与想法" : "未找到匹配笔记")
                         .font(.system(size: 13, weight: .medium))
-                    Text(currentBookHighlights.isEmpty ? "在阅读页面选中文本，即可标记高亮并记录个人深度想法。" : "请尝试更改搜索关键词")
-                        .font(.system(size: 11.5))
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal, 24)
+
+                    if highlightScope == .currentBook && !highlights.isEmpty {
+                        Text("当前打开的书籍尚未划线。全书库共有 \(highlights.count) 条笔记（含微信读书）。")
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, 20)
+
+                        Button {
+                            highlightScope = .allBooks
+                        } label: {
+                            HStack(spacing: 4) {
+                                Text("查看全库/微信读书笔记 (\(highlights.count))")
+                                Image(systemName: "arrow.right")
+                            }
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(.purple)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 5)
+                            .background(Color.purple.opacity(0.1))
+                            .clipShape(RoundedRectangle(cornerRadius: 6))
+                        }
+                        .buttonStyle(.plain)
+                    } else {
+                        Text(targetScopeHighlights.isEmpty ? "在阅读页面选中文本即可高亮标记，或通过微信读书同步导入。" : "请尝试更改搜索关键词")
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, 24)
+                    }
                     Spacer()
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -453,13 +539,13 @@ struct SidebarView: View {
                 // Export Highlights Multi-Format Menu
                 Menu {
                     Button {
-                        exportHighlightsForObsidian(currentBookHighlights)
+                        exportHighlightsForObsidian(filteredHighlights)
                     } label: {
                         Label("导出为 Obsidian 双链笔记 (.md)", systemImage: "doc.text.fill")
                     }
 
                     Button {
-                        exportHighlightsForAnki(currentBookHighlights)
+                        exportHighlightsForAnki(filteredHighlights)
                     } label: {
                         Label("导出为 Anki 知识记忆闪卡 (.txt)", systemImage: "rectangle.stack.badge.play.fill")
                     }
@@ -467,13 +553,13 @@ struct SidebarView: View {
                     Divider()
 
                     Button {
-                        exportHighlightsAsMarkdown(currentBookHighlights)
+                        exportHighlightsAsMarkdown(filteredHighlights)
                     } label: {
                         Label("导出为标准通用 Markdown (.md)", systemImage: "square.and.arrow.up")
                     }
 
                     Button {
-                        copyAllHighlightsToClipboard(currentBookHighlights)
+                        copyAllHighlightsToClipboard(filteredHighlights)
                     } label: {
                         Label("复制全部笔记内容到剪贴板", systemImage: "doc.on.doc")
                     }
@@ -481,7 +567,7 @@ struct SidebarView: View {
                     HStack(spacing: 6) {
                         Image(systemName: "square.and.arrow.up")
                             .font(.system(size: 11))
-                        Text("导出知识库笔记 (Obsidian / Anki / MD)...")
+                        Text("导出知识库笔记 (共 \(filteredHighlights.count) 条)...")
                             .font(.system(size: 11.5, weight: .medium))
                     }
                     .frame(maxWidth: .infinity)
@@ -520,6 +606,13 @@ struct SidebarView: View {
                     .background(Color(hex: "#07C160").opacity(0.14))
                     .foregroundStyle(Color(hex: "#059648"))
                     .clipShape(Capsule())
+                }
+
+                if highlightScope == .allBooks || (book != nil && item.bookTitle != book?.title) {
+                    Text("《\(item.bookTitle)》")
+                        .font(.system(size: 10, weight: .bold, design: .serif))
+                        .foregroundStyle(Color.purple.opacity(0.85))
+                        .lineLimit(1)
                 }
 
                 Text(item.chapterTitle)

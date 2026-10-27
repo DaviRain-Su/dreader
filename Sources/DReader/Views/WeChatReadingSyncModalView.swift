@@ -47,6 +47,17 @@ struct WeChatReadingSyncModalView: View {
         }
     }
 
+    private var wechatNotesCount: Int {
+        viewModel.highlights.filter { $0.isFromWeChatRead }.count
+    }
+
+    private func syncedNotesCount(for nb: WeChatNotebookItem) -> Int {
+        viewModel.highlights.filter {
+            $0.bookTitle == nb.book.title ||
+            $0.wechatBookId == nb.bookId
+        }.count
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             // Header
@@ -91,6 +102,24 @@ struct WeChatReadingSyncModalView: View {
                         .font(.system(size: 11.5, weight: .medium))
                         .foregroundStyle(.primary)
                     Spacer()
+
+                    Button {
+                        onClose()
+                        viewModel.showGlobalNotebooksModal = true
+                    } label: {
+                        HStack(spacing: 4) {
+                            Text("立即查看笔记")
+                            Image(systemName: "arrow.right")
+                        }
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(Color(hex: "#059648"))
+                        .padding(.horizontal, 9)
+                        .padding(.vertical, 3.5)
+                        .background(Color.white.opacity(0.85))
+                        .clipShape(RoundedRectangle(cornerRadius: 4))
+                    }
+                    .buttonStyle(.plain)
+
                     Button {
                         successBannerMessage = nil
                     } label: {
@@ -320,6 +349,31 @@ struct WeChatReadingSyncModalView: View {
                 }
 
                 Spacer()
+
+                if wechatNotesCount > 0 {
+                    Button {
+                        onClose()
+                        viewModel.showGlobalNotebooksModal = true
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "highlighter")
+                                .font(.system(size: 10))
+                            Text("查看已同步笔记 (\(wechatNotesCount))")
+                                .font(.system(size: 11.5, weight: .medium))
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                        .background(Color.orange.opacity(0.14))
+                        .foregroundStyle(Color.orange)
+                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 6)
+                                .stroke(Color.orange.opacity(0.3), lineWidth: 0.5)
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    .help("打开笔记中心查看已同步的微信读书划线与想法")
+                }
 
                 // Batch Sync All Notes Button
                 Button {
@@ -612,6 +666,28 @@ struct WeChatReadingSyncModalView: View {
                 }
                 .buttonStyle(.plain)
                 .help("在微信读书网页版打开")
+
+                let count = syncedNotesCount(for: nb)
+                if count > 0 {
+                    Button {
+                        onClose()
+                        viewModel.showGlobalNotebooksModal = true
+                    } label: {
+                        HStack(spacing: 3) {
+                            Image(systemName: "text.book.closed.fill")
+                                .font(.system(size: 9.5))
+                            Text("查看笔记 (\(count))")
+                                .font(.system(size: 11, weight: .semibold))
+                        }
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4.5)
+                        .background(Color.purple.opacity(0.12))
+                        .foregroundStyle(Color.purple)
+                        .clipShape(RoundedRectangle(cornerRadius: 5))
+                    }
+                    .buttonStyle(.plain)
+                    .help("在笔记回顾中心查看本书的所有划线与想法")
+                }
 
                 // Sync Single Book
                 Button {

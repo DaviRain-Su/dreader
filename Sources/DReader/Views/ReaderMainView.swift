@@ -28,6 +28,9 @@ struct ReaderMainView: View {
                         onOpenWeChatSync: {
                             vm.showWeChatSyncModal = true
                         },
+                        onOpenGlobalNotebooks: {
+                            vm.showGlobalNotebooksModal = true
+                        },
                         onDeleteBook: { id in
                             vm.removeBook(id: id)
                         },
@@ -110,6 +113,11 @@ struct ReaderMainView: View {
         .sheet(isPresented: $vm.showWeChatSyncModal) {
             WeChatReadingSyncModalView(viewModel: vm) {
                 vm.showWeChatSyncModal = false
+            }
+        }
+        .sheet(isPresented: $vm.showGlobalNotebooksModal) {
+            GlobalNotebooksModalView(viewModel: vm) {
+                vm.showGlobalNotebooksModal = false
             }
         }
         .onKeyPress(.space) {
@@ -497,6 +505,16 @@ struct ReaderMainView: View {
                     vm.showWeChatSyncModal = true
                 },
                 helpText: "微信读书笔记与划线同步 (⌘+⇧+W)"
+            )
+
+            AppleToolbarButton(
+                icon: "highlighter",
+                isActive: vm.showGlobalNotebooksModal,
+                activeColor: .orange,
+                action: {
+                    vm.showGlobalNotebooksModal = true
+                },
+                helpText: "全书库划线与思考回顾中心 (⌘+⇧+N)"
             )
 
             Spacer()

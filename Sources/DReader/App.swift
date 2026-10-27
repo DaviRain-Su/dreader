@@ -31,6 +31,11 @@ struct DReaderApp: App {
                 }
                 .keyboardShortcut("w", modifiers: [.command, .shift])
 
+                Button("全书库划线与思考回顾中心...") {
+                    viewModel.showGlobalNotebooksModal = true
+                }
+                .keyboardShortcut("n", modifiers: [.command, .shift])
+
                 Button("返回书架大厅") {
                     viewModel.returnToBookshelf()
                 }

@@ -19,6 +19,7 @@ final class ReaderViewModel: @unchecked Sendable {
     var showReadingInsights: Bool = false
     var showOnlineBookHub: Bool = false
     var showWeChatSyncModal: Bool = false
+    var showGlobalNotebooksModal: Bool = false
     var isLoadingBook: Bool = false
     var errorMessage: String?
     var chapterRenderID: UUID = UUID()
