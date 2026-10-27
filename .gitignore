@@ -1,0 +1,7 @@
+.build/
+.swiftpm/
+DReader.app/
+*.DS_Store
+DerivedData/
+.idea/
+.vscode/
