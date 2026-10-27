@@ -275,26 +275,19 @@ final class ReaderSettings: @unchecked Sendable {
 
     // MARK: - 听书引擎（Read-Aloud）
 
-    /// 听书语音来源：系统内置语音（离线免费）或 OpenAI 兼容 TTS API（大模型拟人）
+    /// 听书语音来源：Piper 本地神经网络（默认，离线）或 OpenAI 兼容 TTS API（在线大模型）
     enum ReadAloudEngine: String, Codable, CaseIterable, Identifiable {
-        case system = "系统语音（离线）"
-        case ai = "AI 大模型语音（拟人）"
+        case piper = "Piper 本地语音（免费离线）"
+        case ai = "AI 大模型语音（在线拟人）"
         var id: String { rawValue }
     }
 
     var readAloudEngine: ReadAloudEngine = {
         if let raw = UserDefaults.standard.string(forKey: "dreader.readaloud.engine"),
            let e = ReadAloudEngine(rawValue: raw) { return e }
-        return .system
+        return .piper
     }() {
         didSet { UserDefaults.standard.set(readAloudEngine.rawValue, forKey: "dreader.readaloud.engine") }
-    }
-
-    /// 系统语音标识（nil = 自动挑最高质量的中文语音）
-    var systemVoiceIdentifier: String? = {
-        UserDefaults.standard.string(forKey: "dreader.readaloud.system_voice")
-    }() {
-        didSet { UserDefaults.standard.set(systemVoiceIdentifier, forKey: "dreader.readaloud.system_voice") }
     }
 
     /// OpenAI 兼容 /v1/audio/speech 端点（OpenAI、硅基流动等）

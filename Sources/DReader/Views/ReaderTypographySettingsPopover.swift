@@ -318,23 +318,8 @@ struct ReaderTypographySettingsPopover: View {
                     .frame(width: 190)
                 }
 
-                if settings.readAloudEngine == .system {
-                    // 系统语音：列出已安装中文语音（质量档标注）
-                    VStack(alignment: .leading, spacing: 4) {
-                        Picker("语音", selection: $settings.systemVoiceIdentifier) {
-                            Text("自动（选最高质量）").tag(String?.none)
-                            ForEach(systemChineseVoices, id: \.identifier) { voice in
-                                Text("\(voice.name) · \(qualityLabel(voice.quality)) (\(voice.language))")
-                                    .tag(String?.some(voice.identifier))
-                            }
-                        }
-                        .font(.system(size: 11))
-
-                        Text("提示：在系统设置 → 辅助功能 → 朗读内容 → 系统声音里可下载「增强/高级」档中文语音，接近真人")
-                            .font(.system(size: 9.5))
-                            .foregroundStyle(.secondary.opacity(0.8))
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
+                if settings.readAloudEngine == .piper {
+                    piperStatusArea
                 } else {
                     // AI 大模型语音：OpenAI 兼容 TTS 配置
                     VStack(alignment: .leading, spacing: 6) {
@@ -370,7 +355,7 @@ struct ReaderTypographySettingsPopover: View {
                                 .textFieldStyle(.roundedBorder)
                                 .font(.system(size: 10.5, design: .monospaced))
                         }
-                        Text("兼容 OpenAI /v1/audio/speech 接口（硅基流动 CosyVoice2 拟人效果佳，有免费额度）。朗读中请求失败会自动回退系统语音，不打断听书")
+                        Text("兼容 OpenAI /v1/audio/speech 接口（硅基流动 CosyVoice2 拟人效果佳，有免费额度）。朗读中请求失败会自动切到 Piper 本地引擎，不打断听书")
                             .font(.system(size: 9.5))
                             .foregroundStyle(.secondary.opacity(0.8))
                             .fixedSize(horizontal: false, vertical: true)
@@ -445,21 +430,64 @@ struct ReaderTypographySettingsPopover: View {
         .background(.ultraThinMaterial)
     }
 
-    // MARK: - 听书系统语音枚举
+    // MARK: - Piper 本地引擎状态区
 
-    /// 已安装的中文系统语音（质量降序，每次弹窗打开时重新拉取）
-    private var systemChineseVoices: [AVSpeechSynthesisVoice] {
-        AVSpeechSynthesisVoice.speechVoices()
-            .filter { $0.language.hasPrefix("zh") }
-            .sorted { $0.quality.rawValue > $1.quality.rawValue }
-    }
+    @ObservedObject private var piperInstaller = PiperInstaller.shared
 
-    private func qualityLabel(_ quality: AVSpeechSynthesisVoiceQuality) -> String {
-        switch quality {
-        case .default: return "默认"
-        case .enhanced: return "增强"
-        case .premium: return "高级"
-        @unknown default: return "未知"
+    @ViewBuilder
+    private var piperStatusArea: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if piperInstaller.isInstalled {
+                HStack(spacing: 5) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.green)
+                    Text("Piper 引擎已就绪（花言 · 中文女声，完全离线）")
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(.secondary)
+                }
+            } else if piperInstaller.isDownloading {
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 6) {
+                        ProgressView(value: piperInstaller.downloadProgress ?? 0)
+                            .progressViewStyle(.linear)
+                        Text("\(Int((piperInstaller.downloadProgress ?? 0) * 100))%")
+                            .font(.system(size: 9.5, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                    }
+                    Text(piperInstaller.statusText)
+                        .font(.system(size: 9.5))
+                        .foregroundStyle(.secondary)
+                }
+            } else {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("首次使用需联网下载一次（引擎 18MB + 中文语音模型 63MB），之后永久离线、免费、无风控")
+                        .font(.system(size: 9.5))
+                        .foregroundStyle(.secondary.opacity(0.85))
+                        .fixedSize(horizontal: false, vertical: true)
+                    Button {
+                        Task { await piperInstaller.install() }
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "arrow.down.circle.fill")
+                            Text("下载 Piper 本地语音引擎")
+                        }
+                        .font(.system(size: 10.5, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                        .background(Color.primary.opacity(0.75))
+                        .clipShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+
+            if let err = piperInstaller.lastError {
+                Text(err)
+                    .font(.system(size: 9.5))
+                    .foregroundStyle(.orange)
+            }
         }
     }
 }
