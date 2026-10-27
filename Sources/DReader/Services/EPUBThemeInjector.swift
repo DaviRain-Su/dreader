@@ -153,7 +153,7 @@ struct EPUBThemeInjector {
             guard !cleanText.isEmpty else { continue }
             let hasNote = (h.note?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false)
             let badgeHTML = hasNote ? "<span class=\"dreader-thought-dot\" title=\"查看想法\">💭</span>" : ""
-            let markStart = "<mark class=\"dreader-highlight\" data-id=\"\(h.id.uuidString)\" data-color=\"\(h.colorHex)\" style=\"background-color: \(h.colorHex)40 !important; border-bottom: 2.5px solid \(h.colorHex) !important;\" onclick=\"window.dreaderClickHighlight('\(h.id.uuidString)', event)\">"
+            let markStart = "<mark class=\"dreader-highlight\" data-id=\"\(h.id.uuidString)\" data-color=\"\(h.colorHex)\" style=\"background-color: \(h.colorHex)40 !important; border-block-end: 2.5px solid \(h.colorHex) !important;\" onclick=\"window.dreaderClickHighlight('\(h.id.uuidString)', event)\">"
             let markEnd = "\(badgeHTML)</mark>"
 
             let escapedTarget = NSRegularExpression.escapedPattern(for: cleanText)
@@ -514,11 +514,7 @@ struct EPUBThemeInjector {
                 letter-spacing: 0.18em !important;
             }
 
-            /* 划线与脚注标点在竖排下的方向适配 */
-            mark.dreader-highlight {
-                border-bottom: none !important;
-                border-left: 2.5px solid var(--dreader-hl-color, #FFE066) !important;
-            }
+            /* 划线边线由 border-block-end 逻辑属性自动换向（调色板已统一），此处无需覆盖 */
 
             blockquote {
                 border-left: none !important;
@@ -692,31 +688,32 @@ struct EPUBThemeInjector {
             color: inherit !important;
         }
 
-        /* 5 Distinctive Highlighting Palettes (WeChat Read style) */
+        /* 5 Distinctive Highlighting Palettes (WeChat Read style)
+           border-block-end 逻辑属性：横排=下边线，竖排(vertical-rl)=左侧竖线，一套代码两向适配 */
         mark.dreader-highlight[data-color="#FFE066"],
         mark.dreader-highlight:not([data-color]) {
             background-color: rgba(255, 224, 102, 0.35) !important;
-            border-bottom: 2.5px solid #FFE066 !important;
+            border-block-end: 2.5px solid #FFE066 !important;
         }
 
         mark.dreader-highlight[data-color="#99E9F2"] {
             background-color: rgba(153, 233, 242, 0.35) !important;
-            border-bottom: 2.5px solid #99E9F2 !important;
+            border-block-end: 2.5px solid #99E9F2 !important;
         }
 
         mark.dreader-highlight[data-color="#A5D8FF"] {
             background-color: rgba(165, 216, 255, 0.35) !important;
-            border-bottom: 2.5px solid #A5D8FF !important;
+            border-block-end: 2.5px solid #A5D8FF !important;
         }
 
         mark.dreader-highlight[data-color="#E599F7"] {
             background-color: rgba(229, 153, 247, 0.35) !important;
-            border-bottom: 2.5px solid #E599F7 !important;
+            border-block-end: 2.5px solid #E599F7 !important;
         }
 
         mark.dreader-highlight[data-color="#FFC078"] {
             background-color: rgba(255, 192, 120, 0.35) !important;
-            border-bottom: 2.5px solid #FFC078 !important;
+            border-block-end: 2.5px solid #FFC078 !important;
         }
 
         mark.dreader-highlight:hover {
@@ -728,9 +725,8 @@ struct EPUBThemeInjector {
             display: inline-block !important;
             font-size: 13px !important;
             line-height: 1 !important;
-            margin-left: 3px !important;
-            margin-right: 2px !important;
-            vertical-align: 1px !important;
+            margin-block-start: 3px !important;
+            margin-block-end: 2px !important;
             cursor: pointer !important;
             filter: drop-shadow(0 1px 2px rgba(0,0,0,0.3)) !important;
             transition: transform 0.15s ease !important;
@@ -1224,7 +1220,7 @@ struct EPUBThemeInjector {
                 mark.setAttribute('data-id', highlightId || '');
                 mark.setAttribute('data-color', colorHex || '#FFE066');
                 mark.style.setProperty('background-color', (colorHex || '#FFE066') + '40', 'important');
-                mark.style.setProperty('border-bottom', '2.5px solid ' + (colorHex || '#FFE066'), 'important');
+                mark.style.setProperty('border-block-end', '2.5px solid ' + (colorHex || '#FFE066'), 'important');
                 mark.onclick = function(e) {
                     window.dreaderClickHighlight(highlightId, e);
                 };
@@ -1255,7 +1251,7 @@ struct EPUBThemeInjector {
                 if (el) {
                     el.setAttribute('data-color', colorHex);
                     el.style.setProperty('background-color', colorHex + '40', 'important');
-                    el.style.setProperty('border-bottom', '2.5px solid ' + colorHex, 'important');
+                    el.style.setProperty('border-block-end', '2.5px solid ' + colorHex, 'important');
                 }
             };
 
@@ -1321,7 +1317,7 @@ struct EPUBThemeInjector {
                     mark.setAttribute('data-id', id);
                     mark.setAttribute('data-color', colorHex);
                     mark.style.setProperty('background-color', colorHex + '40', 'important');
-                    mark.style.setProperty('border-bottom', '2.5px solid ' + colorHex, 'important');
+                    mark.style.setProperty('border-block-end', '2.5px solid ' + colorHex, 'important');
                     mark.onclick = function(e) { window.dreaderClickHighlight(id, e); };
                     try {
                         mark.appendChild(range.extractContents());

@@ -571,6 +571,29 @@ final class ReaderViewModel: @unchecked Sendable {
         }
     }
 
+    // MARK: - AI 伴读笔记落库
+
+    /// 把一条 AI 解读存为书内笔记：挂在当前章，source 标记 ai_companion，
+    /// 进入 SQLite 划线库 → iCloud 备份 → MCP 全链路。
+    @MainActor
+    func saveAIMessageAsNote(_ content: String) {
+        guard let book = currentBook, let chapter = book.currentChapter else { return }
+        let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        let note = Highlight(
+            bookId: book.id,
+            bookTitle: book.title,
+            chapterIndex: book.currentChapterIndex,
+            chapterTitle: chapter.title,
+            text: "【AI 伴读解读】\(ChineseScriptConverter.convert(chapter.title, mode: settings.chineseScriptMode))",
+            colorHex: "#A5D8FF",
+            note: trimmed,
+            source: "ai_companion"
+        )
+        LibraryDatabase.shared.upsertHighlights([note])
+        highlights.append(note)
+    }
+
     // MARK: - Cross-Book Library Search (全书库搜索)
     var crossBookGroups: [CrossBookSearchGroup] = []
     var isCrossBookSearching = false

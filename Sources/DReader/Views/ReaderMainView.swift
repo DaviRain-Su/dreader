@@ -459,6 +459,9 @@ struct ReaderMainView: View {
                     },
                     onJumpToOriginalText: { text in
                         vm.scrollToSearchMatchAction?(text, 0)
+                    },
+                    onSaveMessageAsNote: { content in
+                        vm.saveAIMessageAsNote(content)
                     }
                 )
                 .transition(.move(edge: .trailing))

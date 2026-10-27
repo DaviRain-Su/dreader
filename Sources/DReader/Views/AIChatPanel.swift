@@ -30,6 +30,7 @@ struct AIChatPanel: View {
     var retrieveBookPassages: ((String) -> [BookIndexService.IndexedParagraph])? = nil
     /// Jump-to-text in the reader (clickable AI citations)
     var onJumpToOriginalText: ((String) -> Void)? = nil
+    var onSaveMessageAsNote: ((String) -> Void)? = nil
 
     @State private var messages: [ChatMessage] = []
     @State private var inputText: String = ""
@@ -74,9 +75,11 @@ struct AIChatPanel: View {
                         }
 
                         ForEach(messages) { msg in
-                            MessageRow(message: msg) { quoted in
+                            MessageRow(message: msg, onJumpToQuotation: { quoted in
                                 onJumpToOriginalText?(quoted)
-                            }
+                            }, onSaveAsNote: { content in
+                                onSaveMessageAsNote?(content)
+                            })
                             .id(msg.id)
                         }
 
@@ -642,6 +645,9 @@ struct AIChatPanel: View {
 private struct MessageRow: View {
     let message: ChatMessage
     var onJumpToQuotation: ((String) -> Void)? = nil
+    var onSaveAsNote: ((String) -> Void)? = nil
+
+    @State private var savedFeedback: Bool = false
 
     /// Extracts verbatim quotations from AI markdown answers so they become
     /// clickable "jump to text" chips (in both 「…」 and "…" styles).
@@ -708,6 +714,26 @@ private struct MessageRow: View {
                             .foregroundStyle(.secondary)
                         }
                         .buttonStyle(.plain)
+
+                        // 一键把 AI 解读存为书内笔记（进入划线库、iCloud 备份与 MCP）
+                        if let save = onSaveAsNote {
+                            Button {
+                                save(message.content)
+                                savedFeedback = true
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                                    savedFeedback = false
+                                }
+                            } label: {
+                                HStack(spacing: 2) {
+                                    Image(systemName: savedFeedback ? "checkmark.circle.fill" : "square.and.arrow.down")
+                                    Text(savedFeedback ? "已存入" : "存为笔记")
+                                }
+                                .font(.system(size: 10))
+                                .foregroundStyle(savedFeedback ? Color.green : Color.secondary)
+                            }
+                            .buttonStyle(.plain)
+                            .help("把这条 AI 解读保存到本书的划线与思考库")
+                        }
                     }
 
                     MarkdownContentView(markdown: message.content)
