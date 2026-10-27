@@ -183,7 +183,7 @@ struct SidebarView: View {
                                 Spacer()
                                 Image(systemName: tab.icon)
                                     .font(.system(size: 12, weight: isSelected ? .semibold : .regular))
-                                    .foregroundStyle(isSelected ? Color.purple : Color.secondary)
+                                    .foregroundStyle(isSelected ? Color.primary.opacity(0.85) : Color.secondary)
                                 Spacer()
                             }
                             .frame(height: 28)
@@ -192,14 +192,14 @@ struct SidebarView: View {
                                     .fill(isSelected ? Color.primary.opacity(0.08) : Color.clear)
                             )
 
-                            // Mini Notification Badges
+                            // Mini Notification Badges —— 中性墨角标
                             if tab == .highlights && !currentBookHighlights.isEmpty {
                                 Text("\(currentBookHighlights.count)")
                                     .font(.system(size: 8.5, weight: .bold, design: .monospaced))
                                     .foregroundStyle(.white)
                                     .padding(.horizontal, 4)
                                     .padding(.vertical, 1)
-                                    .background(Color.purple)
+                                    .background(Color.primary.opacity(0.55))
                                     .clipShape(Capsule())
                                     .offset(x: 2, y: -2)
                             } else if tab == .bookmarks && !currentBookBookmarks.isEmpty {
@@ -315,13 +315,13 @@ struct SidebarView: View {
                                         // Number indicator
                                         Text(String(format: "%02d", item.index + 1))
                                             .font(.system(size: 10.5, weight: isCurrent ? .bold : .medium, design: .monospaced))
-                                            .foregroundStyle(isCurrent ? Color.purple : Color.secondary.opacity(0.75))
+                                            .foregroundStyle(isCurrent ? Color.primary.opacity(0.85) : Color.secondary.opacity(0.75))
                                             .frame(width: 20, alignment: .leading)
 
                                         // Chapter Title
                                         Text(ChineseScriptConverter.convert(item.chapter.title, mode: chineseScriptMode))
                                             .font(.system(size: 12.5, weight: isCurrent ? .semibold : .regular))
-                                            .foregroundStyle(isCurrent ? Color.purple : Color.primary.opacity(0.88))
+                                            .foregroundStyle(isCurrent ? Color.primary.opacity(0.9) : Color.primary.opacity(0.88))
                                             .lineLimit(2)
                                             .multilineTextAlignment(.leading)
 
@@ -330,14 +330,14 @@ struct SidebarView: View {
                                         if isCurrent {
                                             Image(systemName: "bookmark.fill")
                                                 .font(.system(size: 10))
-                                                .foregroundStyle(.purple)
+                                                .foregroundStyle(.secondary)
                                         }
                                     }
                                     .padding(.horizontal, 10)
                                     .padding(.vertical, 6.5)
                                     .background(
                                         RoundedRectangle(cornerRadius: 6, style: .continuous)
-                                            .fill(isCurrent ? Color.purple.opacity(0.12) : (isHovered ? Color.primary.opacity(0.05) : Color.clear))
+                                            .fill(isCurrent ? Color.primary.opacity(0.09) : (isHovered ? Color.primary.opacity(0.05) : Color.clear))
                                     )
                                     .contentShape(Rectangle())
                                 }
@@ -378,12 +378,12 @@ struct SidebarView: View {
                 } label: {
                     Text("当前书 (\(currentBookHighlights.count))")
                         .font(.system(size: 11, weight: highlightScope == .currentBook ? .bold : .medium))
-                        .foregroundStyle(highlightScope == .currentBook ? Color.purple : Color.secondary)
+                        .foregroundStyle(highlightScope == .currentBook ? Color.primary.opacity(0.85) : Color.secondary)
                         .padding(.vertical, 4)
                         .frame(maxWidth: .infinity)
                         .background(
                             RoundedRectangle(cornerRadius: 5)
-                                .fill(highlightScope == .currentBook ? Color.purple.opacity(0.12) : Color.clear)
+                                .fill(highlightScope == .currentBook ? Color.primary.opacity(0.09) : Color.clear)
                         )
                 }
                 .buttonStyle(.plain)
@@ -399,12 +399,12 @@ struct SidebarView: View {
                         Text("(\(highlights.count))")
                     }
                     .font(.system(size: 11, weight: highlightScope == .allBooks ? .bold : .medium))
-                    .foregroundStyle(highlightScope == .allBooks ? Color.purple : Color.secondary)
+                    .foregroundStyle(highlightScope == .allBooks ? Color.primary.opacity(0.85) : Color.secondary)
                     .padding(.vertical, 4)
                     .frame(maxWidth: .infinity)
                     .background(
                         RoundedRectangle(cornerRadius: 5)
-                            .fill(highlightScope == .allBooks ? Color.purple.opacity(0.12) : Color.clear)
+                            .fill(highlightScope == .allBooks ? Color.primary.opacity(0.09) : Color.clear)
                     )
                 }
                 .buttonStyle(.plain)
@@ -698,7 +698,6 @@ struct SidebarView: View {
                         }
                         .font(.system(size: 10, weight: .semibold))
                         .buttonStyle(.borderedProminent)
-                        .tint(.purple)
                         .controlSize(.mini)
                     }
                 }
@@ -708,7 +707,7 @@ struct SidebarView: View {
                     HStack {
                         Text("💭 我的想法")
                             .font(.system(size: 9.5, weight: .bold))
-                            .foregroundStyle(Color.purple)
+                            .foregroundStyle(Color.primary.opacity(0.7))
 
                         Spacer()
 
@@ -718,7 +717,7 @@ struct SidebarView: View {
                         } label: {
                             Image(systemName: "pencil")
                                 .font(.system(size: 9))
-                                .foregroundStyle(Color.purple)
+                                .foregroundStyle(.secondary)
                         }
                         .buttonStyle(.plain)
                         .help("编辑想法")
@@ -731,11 +730,11 @@ struct SidebarView: View {
                 }
                 .padding(7)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Color.purple.opacity(0.06))
+                .background(Color.primary.opacity(0.04))
                 .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
                 .overlay(
                     RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .stroke(Color.purple.opacity(0.18), lineWidth: 0.5)
+                        .stroke(Color.primary.opacity(0.07), lineWidth: 0.5)
                 )
             } else {
                 Button {
@@ -988,7 +987,7 @@ struct SidebarView: View {
                                     } else {
                                         RoundedRectangle(cornerRadius: 5, style: .continuous)
                                             .fill(LinearGradient(
-                                                colors: [Color.purple.opacity(0.2), Color.purple.opacity(0.1)],
+                                                colors: [Color.primary.opacity(0.12), Color.primary.opacity(0.06)],
                                                 startPoint: .topLeading,
                                                 endPoint: .bottomTrailing
                                             ))
@@ -997,14 +996,14 @@ struct SidebarView: View {
 
                                         Image(systemName: "book.closed.fill")
                                             .font(.system(size: 15))
-                                            .foregroundStyle(isCurrent ? .purple : .secondary)
+                                            .foregroundStyle(isCurrent ? Color.primary.opacity(0.7) : .secondary)
                                     }
                                 }
 
                                 VStack(alignment: .leading, spacing: 2.5) {
                                     Text(b.title)
                                         .font(.system(size: 12.5, weight: isCurrent ? .semibold : .medium))
-                                        .foregroundStyle(isCurrent ? Color.purple : Color.primary)
+                                        .foregroundStyle(Color.primary.opacity(isCurrent ? 0.95 : 0.88))
                                         .lineLimit(1)
 
                                     Text(b.author)
@@ -1022,17 +1021,17 @@ struct SidebarView: View {
                                 if isCurrent {
                                     Text("当前在读")
                                         .font(.system(size: 9.5, weight: .bold))
-                                        .foregroundStyle(.purple)
+                                        .foregroundStyle(Color.primary.opacity(0.75))
                                         .padding(.horizontal, 6)
                                         .padding(.vertical, 2)
-                                        .background(Color.purple.opacity(0.12))
+                                        .background(Color.primary.opacity(0.08))
                                         .clipShape(Capsule())
                                 }
                             }
                             .padding(8)
                             .background(
                                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                    .fill(isCurrent ? Color.purple.opacity(0.08) : Color.primary.opacity(0.03))
+                                    .fill(isCurrent ? Color.primary.opacity(0.06) : Color.primary.opacity(0.03))
                             )
                             .contentShape(Rectangle())
                         }

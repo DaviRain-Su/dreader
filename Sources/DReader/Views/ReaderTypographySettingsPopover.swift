@@ -46,7 +46,7 @@ struct ReaderTypographySettingsPopover: View {
                                     )
                                     .overlay(
                                         RoundedRectangle(cornerRadius: 7, style: .continuous)
-                                            .stroke(settings.theme == theme ? Color.purple : Color.primary.opacity(0.12),
+                                            .stroke(settings.theme == theme ? Color.primary.opacity(0.7) : Color.primary.opacity(0.12),
                                                     lineWidth: settings.theme == theme ? 2 : 0.8)
                                     )
                                     .shadow(color: Color.black.opacity(settings.theme == theme ? 0.15 : 0.04), radius: 3, x: 0, y: 1.5)
@@ -74,7 +74,7 @@ struct ReaderTypographySettingsPopover: View {
                     Spacer()
                     Text(settings.fontFamily.shortName)
                         .font(settings.fontFamily.previewFont)
-                        .foregroundStyle(Color.purple)
+                        .foregroundStyle(Color.primary.opacity(0.75))
                 }
 
                 Menu {
@@ -213,7 +213,7 @@ struct ReaderTypographySettingsPopover: View {
             )) {
                 HStack(spacing: 4) {
                     Image(systemName: "text.alignright")
-                        .foregroundStyle(.purple)
+                        .foregroundStyle(Color.primary.opacity(0.75))
                     Text("竖排排版 (中文古籍传统版式)")
                         .font(.system(size: 11.5))
                 }
@@ -225,7 +225,7 @@ struct ReaderTypographySettingsPopover: View {
             Toggle(isOn: $settings.isZenMode) {
                 HStack(spacing: 4) {
                     Image(systemName: "sparkles.rectangle.stack")
-                        .foregroundStyle(.purple)
+                        .foregroundStyle(Color.primary.opacity(0.75))
                     Text("沉浸模式 (隐藏边栏与顶栏)")
                         .font(.system(size: 11.5))
                 }
@@ -239,14 +239,14 @@ struct ReaderTypographySettingsPopover: View {
                 HStack {
                     HStack(spacing: 4) {
                         Image(systemName: "character")
-                            .foregroundStyle(.purple)
+                            .foregroundStyle(Color.primary.opacity(0.75))
                         Text("中文简繁转换")
                             .font(.system(size: 11.5, weight: .semibold))
                     }
                     Spacer()
                     Text(settings.chineseScriptMode.rawValue)
                         .font(.system(size: 10))
-                        .foregroundStyle(settings.chineseScriptMode != .original ? Color.purple : Color.secondary)
+                        .foregroundStyle(settings.chineseScriptMode != .original ? Color.primary.opacity(0.8) : Color.secondary)
                 }
 
                 Picker("", selection: $settings.chineseScriptMode) {
@@ -265,7 +265,7 @@ struct ReaderTypographySettingsPopover: View {
                 HStack {
                     HStack(spacing: 4) {
                         Image(systemName: "character.book.closed.fill")
-                            .foregroundStyle(.purple)
+                            .foregroundStyle(Color.primary.opacity(0.75))
                         Text("双语对照模式")
                             .font(.system(size: 11.5, weight: .semibold))
                     }
@@ -284,7 +284,7 @@ struct ReaderTypographySettingsPopover: View {
                                 .foregroundStyle(.secondary)
                             Text(agentName)
                                 .font(.system(size: 10, weight: .bold))
-                                .foregroundStyle(.purple)
+                                .foregroundStyle(Color.primary.opacity(0.75))
                         }
 
                         if isTranslating {
@@ -306,8 +306,8 @@ struct ReaderTypographySettingsPopover: View {
                                 .font(.system(size: 11, weight: .medium))
                                 .frame(maxWidth: .infinity)
                                 .padding(.vertical, 4.5)
-                                .background(Color.purple.opacity(0.12))
-                                .foregroundStyle(.purple)
+                                .background(Color.primary.opacity(0.07))
+                                .foregroundStyle(Color.primary.opacity(0.75))
                                 .clipShape(RoundedRectangle(cornerRadius: 6))
                             }
                             .buttonStyle(.plain)

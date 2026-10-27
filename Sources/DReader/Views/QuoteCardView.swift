@@ -126,7 +126,7 @@ struct QuoteCardView: View {
             HStack(spacing: 8) {
                 Image(systemName: "photo.artframe")
                     .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(.purple)
+                    .foregroundStyle(.secondary)
                 Text("制作读书金句卡片")
                     .font(.system(size: 14, weight: .semibold))
             }
@@ -158,7 +158,7 @@ struct QuoteCardView: View {
                             Circle()
                                 .fill(theme.bgColors.first!)
                                 .frame(width: 14, height: 14)
-                                .overlay(Circle().stroke(selectedTheme == theme ? Color.purple : Color.primary.opacity(0.2), lineWidth: selectedTheme == theme ? 2 : 0.6))
+                                .overlay(Circle().stroke(selectedTheme == theme ? Color.primary.opacity(0.7) : Color.primary.opacity(0.2), lineWidth: selectedTheme == theme ? 2 : 0.6))
 
                             Text(theme.rawValue)
                                 .font(.system(size: 11, weight: selectedTheme == theme ? .semibold : .regular))
@@ -168,7 +168,7 @@ struct QuoteCardView: View {
                         .padding(.vertical, 5)
                         .background(
                             RoundedRectangle(cornerRadius: 6, style: .continuous)
-                                .fill(selectedTheme == theme ? Color.purple.opacity(0.12) : Color.primary.opacity(0.04))
+                                .fill(selectedTheme == theme ? Color.primary.opacity(0.08) : Color.primary.opacity(0.04))
                         )
                     }
                     .buttonStyle(.plain)
@@ -471,9 +471,9 @@ struct QuoteCardView: View {
                 .foregroundStyle(.white)
                 .padding(.horizontal, 16)
                 .padding(.vertical, 7)
-                .background(Color.purple)
+                .background(Color(nsColor: .controlAccentColor))
                 .clipShape(Capsule())
-                .shadow(color: Color.purple.opacity(0.3), radius: 4, y: 1.5)
+                .shadow(color: .black.opacity(0.2), radius: 4, y: 1.5)
             }
             .buttonStyle(.plain)
         }

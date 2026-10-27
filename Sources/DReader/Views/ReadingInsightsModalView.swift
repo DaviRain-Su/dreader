@@ -82,7 +82,7 @@ struct ReadingInsightsModalView: View {
                     knowledgeTile(title: "划线", value: "\(snap.highlightCount)", icon: "highlighter", color: .yellow)
                     knowledgeTile(title: "思考笔记", value: "\(snap.noteCount)", icon: "bubble.left.and.bubble.right.fill", color: .blue)
                     knowledgeTile(title: "书库", value: "\(snap.bookmarkCount)", icon: "books.vertical.fill", color: .brown)
-                    knowledgeTile(title: "记忆卡片", value: "\(snap.scheduledCards)", icon: "brain.head.profile.fill", color: .purple)
+                    knowledgeTile(title: "记忆卡片", value: "\(snap.scheduledCards)", icon: "brain.head.profile.fill", color: Color(hex: "#8E7CC3"))
                 }
             } else {
                 HStack(spacing: 8) {
@@ -262,7 +262,7 @@ struct ReadingInsightsModalView: View {
                 title: "今日已读字数",
                 value: "\(stats.todayWords) 字",
                 icon: "character.book.closed.fill",
-                color: .purple
+                color: Color(hex: "#8E7CC3")
             )
             statTile(
                 title: "累计专注时长",
@@ -343,7 +343,7 @@ struct ReadingInsightsModalView: View {
                                 .frame(width: 14, height: 60)
 
                             Capsule()
-                                .fill(isToday ? Color.orange : Color.purple.opacity(0.7))
+                                .fill(isToday ? Color.orange : Color(hex: "#8E7CC3").opacity(0.7))
                                 .frame(width: 14, height: max(6, 60 * heightRatio))
                         }
 
@@ -385,7 +385,7 @@ struct ReadingInsightsModalView: View {
                     let isToday = idx == todayIndex
                     let barColor: Color = mins == 0
                         ? Color.primary.opacity(0.07)
-                        : (isToday ? Color.orange : Color.purple.opacity(0.35 + 0.55 * ratio))
+                        : (isToday ? Color.orange : Color(hex: "#8E7CC3").opacity(0.35 + 0.55 * ratio))
 
                     RoundedRectangle(cornerRadius: 2.5, style: .continuous)
                         .fill(barColor)
@@ -434,12 +434,12 @@ struct ReadingInsightsModalView: View {
         VStack(spacing: 5) {
             ZStack {
                 Circle()
-                    .fill(isUnlocked ? Color.purple.opacity(0.18) : Color.primary.opacity(0.05))
+                    .fill(isUnlocked ? Color(hex: "#D4AF37").opacity(0.2) : Color.primary.opacity(0.05))
                     .frame(width: 38, height: 38)
 
                 Image(systemName: icon)
                     .font(.system(size: 16))
-                    .foregroundStyle(isUnlocked ? Color.purple : Color.secondary.opacity(0.5))
+                    .foregroundStyle(isUnlocked ? Color(hex: "#B8860B") : Color.secondary.opacity(0.5))
             }
 
             Text(name)

@@ -628,7 +628,6 @@ struct ReaderMainView: View {
                 icon: "character",
                 title: vm.settings.chineseScriptMode == .simplified ? "简体" : (vm.settings.chineseScriptMode == .traditional ? "繁体" : "简繁"),
                 isActive: vm.settings.chineseScriptMode != .original,
-                activeColor: .purple,
                 action: {
                     withAnimation {
                         if vm.settings.chineseScriptMode == .simplified {
@@ -656,7 +655,6 @@ struct ReaderMainView: View {
                 icon: vm.readAloud.state == .playing ? "speaker.wave.3.fill" : (vm.readAloud.state == .paused ? "speaker.slash" : "headphones"),
                 title: vm.readAloud.state == .playing ? "暂停" : (vm.readAloud.state == .paused ? "继续" : "听书"),
                 isActive: vm.readAloud.state != .idle,
-                activeColor: .orange,
                 action: {
                     vm.toggleChapterReadAloud()
                 },
@@ -982,7 +980,7 @@ struct ReaderMainView: View {
                 VStack(spacing: 16) {
                     Image(systemName: "book.pages")
                         .font(.system(size: 48))
-                        .foregroundStyle(.purple.gradient)
+                        .foregroundStyle(.secondary.opacity(0.5))
 
                     Text("欢迎使用 DReader 现代阅读器")
                         .font(.system(size: 18, weight: .semibold))
@@ -997,7 +995,6 @@ struct ReaderMainView: View {
                         vm.showImportOpenPanel()
                     }
                     .buttonStyle(.borderedProminent)
-                    .tint(.purple)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
@@ -1078,7 +1075,6 @@ struct ReaderMainView: View {
                             step: 1
                         )
                         .frame(width: 130)
-                        .tint(Color.purple)
                         .help("滑动快速跳转章节：当前为第 \(book.currentChapterIndex + 1) 章 · \(book.chapters[book.currentChapterIndex].title)")
                     }
 
@@ -1177,7 +1173,7 @@ struct AppleToolbarButton: View {
     let icon: String
     var title: String? = nil
     var isActive: Bool = false
-    var activeColor: Color = .purple
+    var activeColor: Color = Color(nsColor: .controlAccentColor)
     let action: () -> Void
     var helpText: String = ""
 

@@ -822,7 +822,7 @@ struct AIAgentSettingsSheet: View {
             HStack {
                 HStack(spacing: 6) {
                     Image(systemName: "point.3.connected.trianglepath.dotted")
-                        .foregroundStyle(.purple)
+                        .foregroundStyle(.secondary)
                     Text("配置 ACP (Agent Client Protocol) 客户端")
                         .font(.headline)
                 }
@@ -851,7 +851,7 @@ struct AIAgentSettingsSheet: View {
                         .font(.system(size: 11, weight: .medium))
                     Text(agentService.currentPreset.driverType.rawValue)
                         .font(.system(size: 11))
-                        .foregroundStyle(.purple)
+                        .foregroundStyle(.secondary)
                 }
 
                 Text(agentService.currentPreset.description)

@@ -96,7 +96,7 @@ struct OnlineBookHubModalView: View {
         HStack(spacing: 10) {
             ZStack {
                 Circle()
-                    .fill(LinearGradient(colors: [.blue, .purple], startPoint: .topLeading, endPoint: .bottomTrailing))
+                    .fill(LinearGradient(colors: [Color(hex: "#6B5B4A"), Color(hex: "#3E3428")], startPoint: .topLeading, endPoint: .bottomTrailing))
                     .frame(width: 30, height: 30)
 
                 Image(systemName: "globe.americas.fill")
@@ -198,7 +198,7 @@ struct OnlineBookHubModalView: View {
                         .font(.system(size: 11, weight: .medium))
                     Text("· 今日剩余下载配额: \(zlibAccount.remainingQuota) / \(zlibAccount.dailyLimit) 本")
                         .font(.system(size: 10.5, design: .monospaced))
-                        .foregroundStyle(.purple)
+                        .foregroundStyle(Color.primary.opacity(0.75))
                 }
 
                 Spacer()
@@ -232,7 +232,7 @@ struct OnlineBookHubModalView: View {
                     }
                     .padding(.horizontal, 10)
                     .padding(.vertical, 4)
-                    .background(Color.purple)
+                    .background(Color.primary.opacity(0.75))
                     .foregroundStyle(.white)
                     .clipShape(Capsule())
                 }
@@ -241,7 +241,7 @@ struct OnlineBookHubModalView: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 6)
-        .background(Color.purple.opacity(0.06))
+        .background(Color.primary.opacity(0.05))
     }
 
     // MARK: - Search & Filter Bar
@@ -361,10 +361,10 @@ struct OnlineBookHubModalView: View {
                 case .failure:
                     ZStack {
                         RoundedRectangle(cornerRadius: 6, style: .continuous)
-                            .fill(LinearGradient(colors: [Color.purple.opacity(0.2), Color.indigo.opacity(0.1)], startPoint: .top, endPoint: .bottom))
+                            .fill(LinearGradient(colors: [Color.primary.opacity(0.12), Color.primary.opacity(0.05)], startPoint: .top, endPoint: .bottom))
                         Image(systemName: "book.closed.fill")
                             .font(.system(size: 18))
-                            .foregroundStyle(.purple.opacity(0.8))
+                            .foregroundStyle(Color.primary.opacity(0.6))
                     }
                 @unknown default:
                     EmptyView()
@@ -452,7 +452,7 @@ struct OnlineBookHubModalView: View {
                     }
                     .padding(.horizontal, 12)
                     .padding(.vertical, 6)
-                    .background(Color.purple.opacity(0.1))
+                    .background(Color.primary.opacity(0.06))
                     .clipShape(Capsule())
                 } else if !book.hasDownloadableContent {
                     VStack(spacing: 3) {
@@ -532,7 +532,7 @@ struct OnlineBookHubModalView: View {
         VStack(spacing: 16) {
             HStack {
                 Image(systemName: "key.fill")
-                    .foregroundStyle(.purple)
+                    .foregroundStyle(Color.primary.opacity(0.75))
                 Text("绑定 Z-Library 账号")
                     .font(.system(size: 14, weight: .bold))
                 Spacer()
@@ -593,7 +593,7 @@ struct OnlineBookHubModalView: View {
                     }
                 }
                 .buttonStyle(.borderedProminent)
-                .tint(.purple)
+                
                 .font(.system(size: 12, weight: .semibold))
             }
             .padding(.top, 6)

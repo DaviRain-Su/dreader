@@ -20,7 +20,7 @@ struct InBookSearchPanel: View {
                 // Search Icon
                 Image(systemName: "magnifyingglass")
                     .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(.purple)
+                    .foregroundStyle(Color.primary.opacity(0.75))
 
                 // Locator Switch: 本书 / 全书库
                 HStack(spacing: 2) {
@@ -64,7 +64,7 @@ struct InBookSearchPanel: View {
                             let hits = vm.crossBookGroups.reduce(0) { $0 + $1.totalCount }
                             Text("\(vm.crossBookGroups.count) 本 · \(hits) 处")
                                 .font(.system(size: 10.5, weight: .medium))
-                                .foregroundStyle(Color.purple)
+                                .foregroundStyle(Color.primary.opacity(0.75))
                                 .lineLimit(1)
                         }
                     }
@@ -80,7 +80,7 @@ struct InBookSearchPanel: View {
                         } else {
                             Text("\(vm.currentSearchIndex + 1)/\(vm.searchResults.count)")
                                 .font(.system(size: 11, weight: .medium, design: .monospaced))
-                                .foregroundStyle(Color.purple)
+                                .foregroundStyle(Color.primary.opacity(0.75))
                         }
                     }
                 }
@@ -124,7 +124,7 @@ struct InBookSearchPanel: View {
                     } label: {
                         Image(systemName: isResultsDrawerExpanded ? "list.bullet.circle.fill" : "list.bullet")
                             .font(.system(size: 11))
-                            .foregroundStyle(isResultsDrawerExpanded ? Color.purple : Color.secondary)
+                            .foregroundStyle(isResultsDrawerExpanded ? Color.primary.opacity(0.8) : Color.secondary)
                             .frame(width: 20, height: 20)
                     }
                     .buttonStyle(.plain)
@@ -200,7 +200,7 @@ struct InBookSearchPanel: View {
                 .foregroundStyle(scope == target ? Color.white : Color.secondary)
                 .padding(.horizontal, 8)
                 .padding(.vertical, 3)
-                .background(scope == target ? Color.purple : Color.primary.opacity(0.02), in: Capsule())
+                .background(scope == target ? Color.primary.opacity(0.75) : Color.primary.opacity(0.02), in: Capsule())
         }
         .buttonStyle(.plain)
     }
@@ -232,13 +232,13 @@ struct InBookSearchPanel: View {
                                 HStack {
                                     Text(item.chapterTitle)
                                         .font(.system(size: 10.5, weight: .semibold))
-                                        .foregroundStyle(index == vm.currentSearchIndex ? Color.purple : Color.secondary)
+                                        .foregroundStyle(index == vm.currentSearchIndex ? Color.primary.opacity(0.85) : Color.secondary)
                                         .lineLimit(1)
                                     Spacer()
                                     if index == vm.currentSearchIndex {
                                         Image(systemName: "checkmark")
                                             .font(.system(size: 9, weight: .bold))
-                                            .foregroundStyle(Color.purple)
+                                            .foregroundStyle(Color.primary.opacity(0.75))
                                     }
                                 }
 
@@ -261,7 +261,7 @@ struct InBookSearchPanel: View {
                             .padding(.vertical, 6)
                             .background(
                                 RoundedRectangle(cornerRadius: 6, style: .continuous)
-                                    .fill(index == vm.currentSearchIndex ? Color.purple.opacity(0.1) : Color.primary.opacity(0.02))
+                                    .fill(index == vm.currentSearchIndex ? Color.primary.opacity(0.08) : Color.primary.opacity(0.02))
                             )
                         }
                         .buttonStyle(.plain)
@@ -321,7 +321,7 @@ struct InBookSearchPanel: View {
                         HStack(spacing: 6) {
                             Image(systemName: "book.closed")
                                 .font(.system(size: 9.5, weight: .medium))
-                                .foregroundStyle(Color.purple)
+                                .foregroundStyle(Color.primary.opacity(0.75))
                             Text(group.bookTitle)
                                 .font(.system(size: 11.5, weight: .semibold))
                                 .foregroundStyle(Color.primary.opacity(0.85))

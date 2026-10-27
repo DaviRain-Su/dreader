@@ -596,8 +596,8 @@ struct WeChatReadingSyncModalView: View {
                             .font(.system(size: 9.5, weight: .medium))
                             .padding(.horizontal, 5)
                             .padding(.vertical, 1.5)
-                            .background(Color.purple.opacity(0.12))
-                            .foregroundStyle(.purple)
+                            .background(Color.primary.opacity(0.06))
+                            .foregroundStyle(Color.primary.opacity(0.75))
                             .clipShape(Capsule())
                     }
                 }
@@ -630,8 +630,8 @@ struct WeChatReadingSyncModalView: View {
                         }
                         .padding(.horizontal, 6)
                         .padding(.vertical, 2)
-                        .background(Color.purple.opacity(0.12))
-                        .foregroundStyle(.purple)
+                        .background(Color.primary.opacity(0.06))
+                        .foregroundStyle(Color.primary.opacity(0.75))
                         .clipShape(RoundedRectangle(cornerRadius: 4))
                     }
 
@@ -681,8 +681,8 @@ struct WeChatReadingSyncModalView: View {
                         }
                         .padding(.horizontal, 8)
                         .padding(.vertical, 4.5)
-                        .background(Color.purple.opacity(0.12))
-                        .foregroundStyle(Color.purple)
+                        .background(Color.primary.opacity(0.06))
+                        .foregroundStyle(Color.primary.opacity(0.75))
                         .clipShape(RoundedRectangle(cornerRadius: 5))
                     }
                     .buttonStyle(.plain)

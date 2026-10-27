@@ -157,7 +157,7 @@ struct MarkdownContentView: View {
         case .h2(let text):
             HStack(spacing: 6) {
                 RoundedRectangle(cornerRadius: 2)
-                    .fill(Color.purple)
+                    .fill(Color.primary.opacity(0.7))
                     .frame(width: 3, height: 15)
                 Text(LocalizedStringKey(text))
                     .font(.system(size: 14, weight: .bold))
@@ -168,13 +168,13 @@ struct MarkdownContentView: View {
         case .h3(let text):
             Text(LocalizedStringKey(text))
                 .font(.system(size: 13, weight: .bold))
-                .foregroundStyle(.purple)
+                .foregroundStyle(Color.primary.opacity(0.75))
                 .padding(.top, 2)
 
         case .blockquote(let text):
             HStack(alignment: .top, spacing: 8) {
                 RoundedRectangle(cornerRadius: 2)
-                    .fill(Color.purple.opacity(0.8))
+                    .fill(Color.primary.opacity(0.55))
                     .frame(width: 3)
 
                 Text(LocalizedStringKey(text))
@@ -186,7 +186,7 @@ struct MarkdownContentView: View {
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
-            .background(Color.purple.opacity(0.06))
+            .background(Color.primary.opacity(0.05))
             .clipShape(RoundedRectangle(cornerRadius: 6))
 
         case .codeBlock(let code, let lang):
@@ -234,11 +234,11 @@ struct MarkdownContentView: View {
                 if let num = number {
                     Text("\(num).")
                         .font(.system(size: 12, weight: .semibold, design: .monospaced))
-                        .foregroundStyle(.purple)
+                        .foregroundStyle(Color.primary.opacity(0.75))
                         .frame(minWidth: 16, alignment: .trailing)
                 } else {
                     Circle()
-                        .fill(Color.purple)
+                        .fill(Color.primary.opacity(0.7))
                         .frame(width: 5, height: 5)
                         .padding(.top, 6)
                 }

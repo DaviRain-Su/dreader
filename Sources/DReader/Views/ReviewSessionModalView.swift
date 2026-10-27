@@ -54,7 +54,7 @@ struct ReviewSessionModalView: View {
         HStack(spacing: 10) {
             Image(systemName: "brain.filled.head.profile")
                 .font(.system(size: 15))
-                .foregroundStyle(.purple)
+                .foregroundStyle(Color.primary.opacity(0.75))
             VStack(alignment: .leading, spacing: 1) {
                 Text("今日划线 Mastery 复习")
                     .font(.system(size: 14, weight: .bold))
@@ -124,7 +124,7 @@ struct ReviewSessionModalView: View {
                     .foregroundStyle(.secondary)
                     .padding(.horizontal, 7)
                     .padding(.vertical, 3)
-                    .background(Color.purple.opacity(0.08))
+                    .background(Color.primary.opacity(0.05))
                     .clipShape(Capsule())
                 }
 
@@ -132,7 +132,7 @@ struct ReviewSessionModalView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     Label("回忆挑战", systemImage: "questionmark.diamond.fill")
                         .font(.system(size: 11, weight: .bold))
-                        .foregroundStyle(.purple)
+                        .foregroundStyle(Color.primary.opacity(0.75))
                     Text(recallPrompt(for: highlight))
                         .font(.system(size: 13.5, design: .serif))
                         .lineSpacing(3)
@@ -146,7 +146,7 @@ struct ReviewSessionModalView: View {
                         }
                         .foregroundStyle(.secondary)
                         .padding(8)
-                        .background(Color.purple.opacity(0.05))
+                        .background(Color.primary.opacity(0.04))
                         .clipShape(RoundedRectangle(cornerRadius: 7))
                     }
                 }
@@ -179,10 +179,10 @@ struct ReviewSessionModalView: View {
                             Text(aiAsking ? "正在生成追问..." : "让 AI 深度追问这段划线")
                         }
                         .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(.purple)
+                        .foregroundStyle(Color.primary.opacity(0.75))
                         .padding(.horizontal, 11)
                         .padding(.vertical, 6)
-                        .background(Color.purple.opacity(0.1))
+                        .background(Color.primary.opacity(0.06))
                         .clipShape(Capsule())
                     }
                     .buttonStyle(.plain)
@@ -201,7 +201,7 @@ struct ReviewSessionModalView: View {
                                 .foregroundStyle(.white)
                                 .padding(.horizontal, 20)
                                 .padding(.vertical, 9)
-                                .background(Color.purple)
+                                .background(Color.primary.opacity(0.8))
                                 .clipShape(Capsule())
                         }
                         .buttonStyle(.plain)
@@ -247,7 +247,7 @@ struct ReviewSessionModalView: View {
             if highlight.isFromWeChatRead {
                 return ("quote.bubble.fill", "微信读书", Color(hex: "#07C160"))
             } else if highlight.source == "ai_companion" {
-                return ("sparkles", "AI 伴读", .purple)
+                return ("sparkles", "AI 伴读", Color(hex: "#8E7CC3"))
             } else {
                 return ("hand.draw", "本地划线", .orange)
             }
@@ -320,7 +320,7 @@ struct ReviewSessionModalView: View {
             VStack(alignment: .leading, spacing: 10) {
                 HStack {
                     Image(systemName: "sparkles")
-                        .foregroundStyle(.purple)
+                        .foregroundStyle(Color.primary.opacity(0.75))
                     Text("AI 导师追问")
                         .font(.system(size: 12, weight: .bold))
                     Spacer()
@@ -372,7 +372,7 @@ struct ReviewSessionModalView: View {
                 .frame(maxWidth: 420)
             Text("今日已复习 \(reviewedCount) 张卡")
                 .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(.purple)
+                .foregroundStyle(Color.primary.opacity(0.75))
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(30)
@@ -384,7 +384,7 @@ struct ReviewSessionModalView: View {
         VStack(spacing: 14) {
             Image(systemName: "brain.filled.head.profile")
                 .font(.system(size: 34))
-                .foregroundStyle(.purple)
+                .foregroundStyle(Color.primary.opacity(0.75))
             Text("本轮 Mastery 复习完成 ✓")
                 .font(.system(size: 15, weight: .bold))
             Text("今天共完成 \(reviewedCount) 张卡。记得的卡片将进入更长半衰期通道，忘记的会更快重现。")
@@ -400,7 +400,7 @@ struct ReviewSessionModalView: View {
                     .foregroundStyle(.white)
                     .padding(.horizontal, 24)
                     .padding(.vertical, 8)
-                    .background(Color.purple)
+                    .background(Color.primary.opacity(0.8))
                     .clipShape(Capsule())
             }
             .buttonStyle(.plain)

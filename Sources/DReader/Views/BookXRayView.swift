@@ -93,7 +93,7 @@ struct BookXRayView: View {
                                 title: "主要人物谱系与角色档案",
                                 icon: "person.2.fill",
                                 count: filteredCharacters.count,
-                                color: .purple
+                                color: Color.primary.opacity(0.75)
                             )
                             LazyVStack(spacing: 10) {
                                 ForEach(filteredCharacters) { char in
@@ -195,9 +195,9 @@ struct BookXRayView: View {
                     .padding(.vertical, 4.5)
                     .background(
                         RoundedRectangle(cornerRadius: 5, style: .continuous)
-                            .fill(isSelected ? Color.purple.opacity(0.12) : Color.clear)
+                            .fill(isSelected ? Color.primary.opacity(0.09) : Color.clear)
                     )
-                    .foregroundStyle(isSelected ? Color.purple : Color.secondary)
+                    .foregroundStyle(isSelected ? Color.primary.opacity(0.85) : Color.secondary)
                 }
                 .buttonStyle(.plain)
             }
@@ -212,7 +212,7 @@ struct BookXRayView: View {
         HStack(spacing: 10) {
             ZStack {
                 Circle()
-                    .fill(LinearGradient(colors: [.purple, .indigo], startPoint: .topLeading, endPoint: .bottomTrailing))
+                    .fill(LinearGradient(colors: [Color.primary.opacity(0.5), Color.primary.opacity(0.3)], startPoint: .topLeading, endPoint: .bottomTrailing))
                     .frame(width: 34, height: 34)
                 Image(systemName: "atom")
                     .font(.system(size: 17, weight: .bold))
@@ -226,10 +226,10 @@ struct BookXRayView: View {
                         .foregroundStyle(Color.primary)
                     Text("AI 透视")
                         .font(.system(size: 9, weight: .bold))
-                        .foregroundStyle(.purple)
+                        .foregroundStyle(Color.primary.opacity(0.75))
                         .padding(.horizontal, 4)
                         .padding(.vertical, 1)
-                        .background(Color.purple.opacity(0.1))
+                        .background(Color.primary.opacity(0.06))
                         .clipShape(Capsule())
                 }
 
@@ -282,11 +282,11 @@ struct BookXRayView: View {
                 // Initial Badge
                 ZStack {
                     Circle()
-                        .fill(Color.purple.opacity(0.15))
+                        .fill(Color.primary.opacity(0.1))
                         .frame(width: 26, height: 26)
                     Text(String(char.name.prefix(1)))
                         .font(.system(size: 12, weight: .bold, design: .serif))
-                        .foregroundStyle(.purple)
+                        .foregroundStyle(Color.primary.opacity(0.75))
                 }
 
                 VStack(alignment: .leading, spacing: 1.5) {
@@ -297,10 +297,10 @@ struct BookXRayView: View {
 
                         Text(char.role)
                             .font(.system(size: 9, weight: .semibold))
-                            .foregroundStyle(.purple)
+                            .foregroundStyle(Color.primary.opacity(0.75))
                             .padding(.horizontal, 5)
                             .padding(.vertical, 1)
-                            .background(Color.purple.opacity(0.09))
+                            .background(Color.primary.opacity(0.06))
                             .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
                     }
 
@@ -347,7 +347,7 @@ struct BookXRayView: View {
                         Text("初登场：\(char.firstAppearanceChapter)")
                     }
                     .font(.system(size: 9.5))
-                    .foregroundStyle(.purple)
+                    .foregroundStyle(Color.primary.opacity(0.75))
                 }
                 .buttonStyle(.plain)
                 .help("点击跳转到该人物首次登场章节")
@@ -404,7 +404,7 @@ struct BookXRayView: View {
                         Text("问AI")
                     }
                     .font(.system(size: 9.5, weight: .medium))
-                    .foregroundStyle(.purple)
+                    .foregroundStyle(Color.primary.opacity(0.75))
                 }
                 .buttonStyle(.plain)
                 .help("向 AI 伴读探讨此概念的深层含义")

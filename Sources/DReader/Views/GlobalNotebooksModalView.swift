@@ -178,7 +178,7 @@ struct GlobalNotebooksModalView: View {
                 Circle()
                     .fill(
                         LinearGradient(
-                            colors: [Color.purple, Color(hex: "#7C3AED")],
+                            colors: [Color(hex: "#6B5B4A"), Color(hex: "#4A3E32")],
                             startPoint: .topLeading,
                             endPoint: .bottomTrailing
                         )
@@ -208,8 +208,8 @@ struct GlobalNotebooksModalView: View {
                     }
                     .padding(.horizontal, 7)
                     .padding(.vertical, 2.5)
-                    .background(Color.purple.opacity(0.1))
-                    .foregroundStyle(.purple)
+                    .background(Color.primary.opacity(0.06))
+                    .foregroundStyle(Color.primary.opacity(0.75))
                     .clipShape(Capsule())
                 }
 
@@ -257,19 +257,19 @@ struct GlobalNotebooksModalView: View {
                             .padding(.horizontal, 5)
                             .padding(.vertical, 1)
                             .background(Color.white.opacity(0.85))
-                            .foregroundStyle(Color.purple)
+                            .foregroundStyle(Color.primary.opacity(0.75))
                             .clipShape(Capsule())
                     }
                 }
                 .font(.system(size: 11.5, weight: .medium))
-                .foregroundStyle(.purple)
+                .foregroundStyle(Color.primary.opacity(0.75))
                 .padding(.horizontal, 10)
                 .padding(.vertical, 5)
-                .background(Color.purple.opacity(0.12))
+                .background(Color.primary.opacity(0.06))
                 .clipShape(RoundedRectangle(cornerRadius: 6))
                 .overlay(
                     RoundedRectangle(cornerRadius: 6)
-                        .stroke(Color.purple.opacity(0.25), lineWidth: 0.5)
+                        .stroke(Color.primary.opacity(0.12), lineWidth: 0.5)
                 )
             }
             .buttonStyle(.plain)
@@ -364,8 +364,8 @@ struct GlobalNotebooksModalView: View {
                 }
                 .padding(.horizontal, 10)
                 .padding(.vertical, 5)
-                .background(Color.purple.opacity(0.1))
-                .foregroundStyle(.purple)
+                .background(Color.primary.opacity(0.06))
+                .foregroundStyle(Color.primary.opacity(0.75))
                 .clipShape(RoundedRectangle(cornerRadius: 6))
             }
             .menuStyle(.borderlessButton)
@@ -439,23 +439,23 @@ struct GlobalNotebooksModalView: View {
                 HStack(spacing: 8) {
                     Image(systemName: "books.vertical.fill")
                         .font(.system(size: 13))
-                        .foregroundStyle(selectedBookTitle == nil ? Color.purple : Color.secondary)
+                        .foregroundStyle(selectedBookTitle == nil ? Color.primary.opacity(0.75) : Color.secondary)
 
                     Text("全部图书划线")
                         .font(.system(size: 12.5, weight: selectedBookTitle == nil ? .bold : .medium))
-                        .foregroundStyle(selectedBookTitle == nil ? Color.purple : Color.primary)
+                        .foregroundStyle(selectedBookTitle == nil ? Color.primary.opacity(0.85) : Color.primary)
 
                     Spacer()
 
                     Text("\(viewModel.highlights.count)")
                         .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                        .foregroundStyle(selectedBookTitle == nil ? Color.purple : Color.secondary)
+                        .foregroundStyle(selectedBookTitle == nil ? Color.primary.opacity(0.75) : Color.secondary)
                 }
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
                 .background(
                     RoundedRectangle(cornerRadius: 6)
-                        .fill(selectedBookTitle == nil ? Color.purple.opacity(0.12) : Color.clear)
+                        .fill(selectedBookTitle == nil ? Color.primary.opacity(0.05) : Color.clear)
                 )
             }
             .buttonStyle(.plain)
@@ -479,7 +479,7 @@ struct GlobalNotebooksModalView: View {
                                 ZStack(alignment: .bottomTrailing) {
                                     Image(systemName: "book.closed.fill")
                                         .font(.system(size: 13))
-                                        .foregroundStyle(isSelected ? Color.purple : Color.secondary.opacity(0.75))
+                                        .foregroundStyle(isSelected ? Color.primary.opacity(0.85) : Color.secondary.opacity(0.75))
 
                                     if group.isWeChat {
                                         Circle()
@@ -492,7 +492,7 @@ struct GlobalNotebooksModalView: View {
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(ChineseScriptConverter.convert(group.title, mode: viewModel.settings.chineseScriptMode))
                                         .font(.system(size: 12, weight: isSelected ? .bold : .regular))
-                                        .foregroundStyle(isSelected ? Color.purple : Color.primary.opacity(0.9))
+                                        .foregroundStyle(isSelected ? Color.primary : Color.primary.opacity(0.9))
                                         .lineLimit(1)
 
                                     if !group.author.isEmpty {
@@ -507,13 +507,13 @@ struct GlobalNotebooksModalView: View {
 
                                 Text("\(group.highlightCount)")
                                     .font(.system(size: 10.5, weight: .medium, design: .monospaced))
-                                    .foregroundStyle(isSelected ? Color.purple : Color.secondary.opacity(0.7))
+                                    .foregroundStyle(isSelected ? Color.primary.opacity(0.8) : Color.secondary.opacity(0.7))
                             }
                             .padding(.horizontal, 10)
                             .padding(.vertical, 6)
                             .background(
                                 RoundedRectangle(cornerRadius: 6)
-                                    .fill(isSelected ? Color.purple.opacity(0.12) : Color.clear)
+                                    .fill(isSelected ? Color.primary.opacity(0.07) : Color.clear)
                             )
                         }
                         .buttonStyle(.plain)
@@ -552,12 +552,12 @@ struct GlobalNotebooksModalView: View {
             Spacer()
             ZStack {
                 Circle()
-                    .fill(Color.purple.opacity(0.1))
+                    .fill(Color.primary.opacity(0.06))
                     .frame(width: 68, height: 68)
 
                 Image(systemName: "highlighter")
                     .font(.system(size: 30))
-                    .foregroundStyle(Color.purple)
+                    .foregroundStyle(Color.primary.opacity(0.75))
             }
 
             Text(viewModel.highlights.isEmpty ? "知识库尚无划线或阅读思考" : "未找到匹配的划线内容")
@@ -643,8 +643,8 @@ struct GlobalNotebooksModalView: View {
                         .font(.system(size: 8.5, weight: .semibold))
                         .padding(.horizontal, 5)
                         .padding(.vertical, 1.5)
-                        .background(Color.purple.opacity(0.12))
-                        .foregroundStyle(.purple)
+                        .background(Color.primary.opacity(0.06))
+                        .foregroundStyle(Color.primary.opacity(0.75))
                         .clipShape(Capsule())
                 }
 
@@ -660,7 +660,7 @@ struct GlobalNotebooksModalView: View {
                 } label: {
                     Image(systemName: "photo.artframe")
                         .font(.system(size: 11))
-                        .foregroundStyle(.purple)
+                        .foregroundStyle(Color.primary.opacity(0.75))
                 }
                 .buttonStyle(.plain)
                 .help("制作精美金句书摘卡片")
@@ -715,7 +715,7 @@ struct GlobalNotebooksModalView: View {
                         }
                         .font(.system(size: 10.5, weight: .semibold))
                         .buttonStyle(.borderedProminent)
-                        .tint(.purple)
+                        
                         .controlSize(.mini)
                     }
                 }
@@ -726,7 +726,7 @@ struct GlobalNotebooksModalView: View {
                         HStack(spacing: 4) {
                             Text(item.isFromWeChatRead ? "💬 微信读书想法/点评" : "💭 我的个人想法")
                                 .font(.system(size: 10, weight: .bold))
-                                .foregroundStyle(item.isFromWeChatRead ? Color(hex: "#059648") : Color.purple)
+                                .foregroundStyle(item.isFromWeChatRead ? Color(hex: "#059648") : Color.primary.opacity(0.7))
                         }
 
                         Spacer()
@@ -749,7 +749,7 @@ struct GlobalNotebooksModalView: View {
                         .lineSpacing(3)
                 }
                 .padding(9)
-                .background(item.isFromWeChatRead ? Color(hex: "#07C160").opacity(0.06) : Color.purple.opacity(0.06))
+                .background(item.isFromWeChatRead ? Color(hex: "#07C160").opacity(0.06) : Color.primary.opacity(0.04))
                 .clipShape(RoundedRectangle(cornerRadius: 6))
             } else {
                 Button {
@@ -785,7 +785,7 @@ struct GlobalNotebooksModalView: View {
                             Text("在 DReader 中打开此书并定位高亮 ➔")
                                 .font(.system(size: 10.5, weight: .medium))
                         }
-                        .foregroundStyle(Color.purple)
+                        .foregroundStyle(Color.primary.opacity(0.75))
                     }
                     .buttonStyle(.plain)
                 }
