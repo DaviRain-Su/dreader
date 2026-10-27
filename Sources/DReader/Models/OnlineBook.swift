@@ -5,6 +5,7 @@ enum OnlineBookSource: String, CaseIterable, Identifiable, Codable, Sendable {
     case openLibrary = "Open Library 公开馆藏"
     case gutenberg = "古腾堡计划 (Gutenberg)"
     case zlibrary = "Z-Library 专属云书库"
+    case opds = "OPDS 自建书馆"
 
     var id: String { rawValue }
 
@@ -13,6 +14,7 @@ enum OnlineBookSource: String, CaseIterable, Identifiable, Codable, Sendable {
         case .openLibrary: return "building.columns.fill"
         case .gutenberg: return "book.closed.fill"
         case .zlibrary: return "books.vertical.fill"
+        case .opds: return "server.rack"
         }
     }
 
@@ -21,12 +23,13 @@ enum OnlineBookSource: String, CaseIterable, Identifiable, Codable, Sendable {
         case .openLibrary: return "#2563EB"
         case .gutenberg: return "#059669"
         case .zlibrary: return "#7C3AED"
+        case .opds: return "#0E7490"
         }
     }
 
     var requiresLogin: Bool {
         switch self {
-        case .openLibrary, .gutenberg: return false
+        case .openLibrary, .gutenberg, .opds: return false
         case .zlibrary: return true
         }
     }

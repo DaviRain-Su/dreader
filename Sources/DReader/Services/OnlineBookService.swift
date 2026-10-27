@@ -36,6 +36,9 @@ final class OnlineBookService: Sendable {
             return await searchGutenberg(query: trimmed)
         case .zlibrary:
             return await searchZLibrary(query: trimmed, account: zlibraryAccount)
+        case .opds:
+            // OPDS 走专属浏览面板（OPDSBrowsePanel），不走关键词搜索管线
+            return []
         }
     }
 

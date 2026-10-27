@@ -41,7 +41,9 @@ struct OnlineBookHubModalView: View {
                     zlibraryStatusBar
                 }
 
-                searchAndFilterBar
+                if selectedSource != .opds {
+                    searchAndFilterBar
+                }
 
                 if let err = errorMessage {
                     HStack(spacing: 8) {
@@ -69,16 +71,21 @@ struct OnlineBookHubModalView: View {
                 .opacity(0.15)
 
             // Content Area: Search Results or States
-            ZStack {
-                if isSearching {
-                    searchingStateView
-                } else if searchResults.isEmpty {
-                    emptyResultsView
-                } else {
-                    resultsListView
+            if selectedSource == .opds {
+                OPDSBrowsePanel(onImport: onBookDownloadedAndImport)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                ZStack {
+                    if isSearching {
+                        searchingStateView
+                    } else if searchResults.isEmpty {
+                        emptyResultsView
+                    } else {
+                        resultsListView
+                    }
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .frame(minWidth: 640, idealWidth: 720, maxWidth: 840, minHeight: 520, idealHeight: 620, maxHeight: 720)
         .background(.ultraThinMaterial)
@@ -87,7 +94,9 @@ struct OnlineBookHubModalView: View {
         }
         .onAppear {
             loadPersistedZLibAccount()
-            performSearch()
+            if selectedSource != .opds {
+                performSearch()
+            }
         }
     }
 
@@ -114,7 +123,7 @@ struct OnlineBookHubModalView: View {
                         .foregroundStyle(.secondary)
                 }
 
-                Text("集成 Open Library 公开馆藏、古腾堡计划与 Z-Library 账号直连拉取")
+                Text("集成 Open Library、古腾堡、Z-Library，以及 OPDS 自建书馆（BookOrbit / Calibre-Web / Kavita）")
                     .font(.system(size: 10.5))
                     .foregroundStyle(.secondary)
             }
@@ -305,6 +314,7 @@ struct OnlineBookHubModalView: View {
                     case .openLibrary: return quickChipsOpenLibrary
                     case .gutenberg: return quickChipsGutenberg
                     case .zlibrary: return quickChipsZLibrary
+                    case .opds: return []
                     }
                 }()
                 ForEach(chips, id: \.self) { chip in
@@ -605,6 +615,7 @@ struct OnlineBookHubModalView: View {
     // MARK: - Search & Download Execution
 
     private func performSearch() {
+        if selectedSource == .opds { return }
         isSearching = true
         searchResults = []
 
