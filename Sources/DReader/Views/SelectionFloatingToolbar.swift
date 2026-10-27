@@ -1,7 +1,8 @@
 import SwiftUI
 import AppKit
 
-/// WeChat Read & Apple Books Style Ultra-Compact Floating Selection Toolbar
+/// Apple Books & 微信读书范式：选区悬浮工具条是一条无彩玻璃胶囊，
+/// 唯一的彩色是五个划线色点本身——工具不与内容争色。
 struct SelectionFloatingToolbar: View {
     let selection: SelectionInfo
     let onAskAI: (String) -> Void
@@ -23,8 +24,8 @@ struct SelectionFloatingToolbar: View {
     ]
 
     var body: some View {
-        HStack(spacing: 5) {
-            // 1. Color Palette Dots (Click to instant highlight)
+        HStack(spacing: 2) {
+            // 1. Color Palette Dots (Click to instant highlight) —— 全条唯一的彩色
             HStack(spacing: 4) {
                 ForEach(highlightColors, id: \.hex) { item in
                     Circle()
@@ -39,75 +40,59 @@ struct SelectionFloatingToolbar: View {
                         .help("划线 (\(item.name))")
                 }
             }
-            .padding(.horizontal, 2)
+            .padding(.horizontal, 4)
 
             Divider()
-                .frame(height: 12)
-                .opacity(0.3)
+                .frame(height: 14)
+                .opacity(0.25)
 
-            // 2. Write Thought Button
+            // 2. Write Thought
             Button {
                 onWriteThought()
             } label: {
-                HStack(spacing: 3) {
-                    Image(systemName: "square.and.pencil")
-                        .font(.system(size: 11))
-                    Text("想法")
-                        .font(.system(size: 11.5, weight: .medium))
-                }
-                .foregroundStyle(.indigo)
+                Image(systemName: "square.and.pencil")
+                    .font(.system(size: 11.5))
+                    .frame(width: 26, height: 26)
             }
-            .buttonStyle(ToolbarCompactButtonStyle())
+            .buttonStyle(ChromeToolButtonStyle())
             .help("划线并记录读书思考与笔记")
 
-            // 3. Quote Card Button
+            // 3. Quote Card
             Button {
                 onMakeQuoteCard()
             } label: {
-                HStack(spacing: 3) {
-                    Image(systemName: "photo.artframe")
-                        .font(.system(size: 11))
-                    Text("卡片")
-                        .font(.system(size: 11.5, weight: .medium))
-                }
-                .foregroundStyle(.purple)
+                Image(systemName: "photo.artframe")
+                    .font(.system(size: 11.5))
+                    .frame(width: 26, height: 26)
             }
-            .buttonStyle(ToolbarCompactButtonStyle())
+            .buttonStyle(ChromeToolButtonStyle())
             .help("制作精美金句书摘卡片")
 
-            // 4. Dictionary Look Up Button
+            // 4. Dictionary Look Up
             Button {
                 onLookUp?(selection.text)
             } label: {
-                HStack(spacing: 3) {
-                    Image(systemName: "character.book.closed")
-                        .font(.system(size: 11))
-                    Text("查词")
-                        .font(.system(size: 11.5, weight: .medium))
-                }
-                .foregroundStyle(.teal)
+                Image(systemName: "character.book.closed")
+                    .font(.system(size: 11.5))
+                    .frame(width: 26, height: 26)
             }
-            .buttonStyle(ToolbarCompactButtonStyle())
+            .buttonStyle(ChromeToolButtonStyle())
             .help("发音朗读并调用 AI 展开权威词典深度释义")
 
-            // 5. Ask AI Button
+            // 5. Ask AI
             Button {
                 onAskAI(selection.text)
             } label: {
-                HStack(spacing: 3) {
-                    Image(systemName: "sparkles")
-                        .font(.system(size: 11, weight: .bold))
-                    Text("问AI")
-                        .font(.system(size: 11.5, weight: .semibold))
-                }
-                .foregroundStyle(.purple)
+                Image(systemName: "sparkles")
+                    .font(.system(size: 11.5, weight: .semibold))
+                    .frame(width: 26, height: 26)
             }
-            .buttonStyle(ToolbarCompactButtonStyle())
+            .buttonStyle(ChromeToolButtonStyle())
             .help("将选中文本发送给伴读 Agent 深度讨论")
 
             Divider()
-                .frame(height: 12)
-                .opacity(0.3)
+                .frame(height: 14)
+                .opacity(0.25)
 
             // 6. More Actions Menu (Copy, Explain, Summarize, Translate)
             Menu {
@@ -127,7 +112,7 @@ struct SelectionFloatingToolbar: View {
                 Button {
                     onQuickPrompt("explain", selection.text)
                 } label: {
-                    Label("AI 深度解释", systemImage: "lightbulb.fill")
+                    Label("AI 深度解释", systemImage: "lightbulb")
                 }
 
                 Button {
@@ -143,40 +128,24 @@ struct SelectionFloatingToolbar: View {
                 }
             } label: {
                 Image(systemName: copyFeedback ? "checkmark" : "ellipsis")
-                    .font(.system(size: 11, weight: .bold))
-                    .foregroundStyle(copyFeedback ? .green : .secondary)
-                    .frame(width: 20, height: 20)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(copyFeedback ? .green : Color.primary.opacity(0.62))
+                    .frame(width: 24, height: 26)
                     .contentShape(Rectangle())
             }
             .menuStyle(.borderlessButton)
             .help("更多操作 (复制 / AI解释 / 总结 / 翻译)")
         }
-        .padding(.horizontal, 9)
-        .padding(.vertical, 5)
+        .padding(.horizontal, 7)
+        .padding(.vertical, 4)
         .background(
             Capsule()
                 .fill(.ultraThinMaterial)
-                .shadow(color: .black.opacity(0.2), radius: 12, x: 0, y: 4)
+                .shadow(color: .black.opacity(0.16), radius: 10, x: 0, y: 4)
                 .overlay(
                     Capsule()
-                        .stroke(Color.white.opacity(0.28), lineWidth: 0.6)
+                        .stroke(Color.white.opacity(0.22), lineWidth: 0.5)
                 )
         )
-    }
-}
-
-private struct ToolbarCompactButtonStyle: ButtonStyle {
-    @State private var isHovering = false
-
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .padding(.horizontal, 5)
-            .padding(.vertical, 3.5)
-            .background(
-                RoundedRectangle(cornerRadius: 5, style: .continuous)
-                    .fill(isHovering ? Color.primary.opacity(0.08) : Color.clear)
-            )
-            .scaleEffect(configuration.isPressed ? 0.96 : 1.0)
-            .onHover { isHovering = $0 }
     }
 }

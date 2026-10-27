@@ -188,179 +188,56 @@ struct RealisticBookshelfView: View {
                     .stroke(Color(hex: "#E5C07B").opacity(0.25), lineWidth: 0.5)
             )
 
-            // Reading Insights & Streak Button (Apple Fitness Ring style)
-            Button {
+            // 右侧功能组：统一的暗玻璃「雕花铜牌」风格——无彩 chrome，
+            // 唯一的彩色留给「今日复习」的到期角标（唯一需要用户行动的信号）
+            ShelfTopBarButton(icon: "flame.fill", label: streakLabel, ring: streakRing) {
                 onOpenReadingInsights?()
-            } label: {
-                HStack(spacing: 7) {
-                    ZStack {
-                        Circle()
-                            .stroke(Color.orange.opacity(0.3), lineWidth: 2.2)
-                            .frame(width: 15, height: 15)
-                        Circle()
-                            .trim(from: 0, to: CGFloat(ReadingStatsManager.shared.stats.todayProgressRatio))
-                            .stroke(Color.orange, style: StrokeStyle(lineWidth: 2.2, lineCap: .round))
-                            .frame(width: 15, height: 15)
-                            .rotationEffect(.degrees(-90))
-                    }
-
-                    HStack(spacing: 3) {
-                        Image(systemName: "flame.fill")
-                            .font(.system(size: 9.5))
-                            .foregroundStyle(.orange)
-                        Text("连续 \(ReadingStatsManager.shared.stats.currentStreakDays) 天")
-                            .font(.system(size: 11, weight: .semibold, design: .serif))
-                            .foregroundStyle(Color(hex: "#F5E6C8"))
-                    }
-
-                    Text("· 今日 \(ReadingStatsManager.shared.stats.todayMinutes)/\(ReadingStatsManager.shared.stats.dailyGoalMinutes)m")
-                        .font(.system(size: 10, design: .monospaced))
-                        .foregroundStyle(Color(hex: "#CBB393").opacity(0.85))
-                }
-                .padding(.horizontal, 9)
-                .padding(.vertical, 5)
-                .background(Color.black.opacity(0.35))
-                .clipShape(Capsule())
-                .overlay(
-                    Capsule().stroke(Color.orange.opacity(0.35), lineWidth: 0.6)
-                )
             }
-            .buttonStyle(.plain)
             .help("查看阅读统计与成就殿堂")
 
-            // Mastery Daily Review Button (今日到期卡片数角标)
-            Button {
+            ShelfTopBarButton(icon: "brain.head.profile.fill", label: "今日复习", badgeCount: dueReviewCount > 0 ? dueReviewCount : nil) {
                 onStartReview?()
-            } label: {
-                HStack(spacing: 5) {
-                    Image(systemName: "brain.head.profile.fill")
-                        .font(.system(size: 11))
-                    Text("今日复习")
-                        .font(.system(size: 12, weight: .semibold, design: .serif))
-
-                    if dueReviewCount > 0 {
-                        Text("\(dueReviewCount)")
-                            .font(.system(size: 9, weight: .bold, design: .monospaced))
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 4.5)
-                            .padding(.vertical, 1)
-                            .background(Color(hex: "#E06C4A"))
-                            .clipShape(Capsule())
-                    }
-                }
-                .foregroundStyle(Color.white)
-                .padding(.horizontal, 11)
-                .padding(.vertical, 6)
-                .background(
-                    LinearGradient(
-                        colors: [Color(hex: "#B45309"), Color(hex: "#D97706")],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                )
-                .clipShape(RoundedRectangle(cornerRadius: 6))
-                .shadow(color: Color(hex: "#D97706").opacity(0.3), radius: 3, y: 1.5)
             }
-            .buttonStyle(.plain)
             .help("开始今日划线 Mastery 记忆复习 (⌘+⇧+R)")
 
-            // Online Book Hub Button (Z-Lib & Open Library)
-            Button {
+            ShelfTopBarButton(icon: "globe.americas.fill", label: "在线书库") {
                 onOpenOnlineHub?()
-            } label: {
-                HStack(spacing: 5) {
-                    Image(systemName: "globe.americas.fill")
-                        .font(.system(size: 11))
-                    Text("在线书库")
-                        .font(.system(size: 12, weight: .semibold, design: .serif))
-                }
-                .foregroundStyle(Color.white)
-                .padding(.horizontal, 11)
-                .padding(.vertical, 6)
-                .background(
-                    LinearGradient(
-                        colors: [Color(hex: "#4F46E5"), Color(hex: "#7C3AED")],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                )
-                .clipShape(RoundedRectangle(cornerRadius: 6))
-                .shadow(color: Color.purple.opacity(0.3), radius: 3, y: 1.5)
             }
-            .buttonStyle(.plain)
             .help("探索 Open Library、古腾堡与 Z-Library 在线书库 (⌘ + L)")
 
-            // WeChat Reading Note Sync Button
-            Button {
+            ShelfTopBarButton(icon: "quote.bubble.fill", label: "微信读书") {
                 onOpenWeChatSync?()
-            } label: {
-                HStack(spacing: 5) {
-                    Image(systemName: "quote.bubble.fill")
-                        .font(.system(size: 11))
-                    Text("微信读书")
-                        .font(.system(size: 12, weight: .semibold, design: .serif))
-                }
-                .foregroundStyle(Color.white)
-                .padding(.horizontal, 11)
-                .padding(.vertical, 6)
-                .background(
-                    LinearGradient(
-                        colors: [Color(hex: "#07C160"), Color(hex: "#059648")],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                )
-                .clipShape(RoundedRectangle(cornerRadius: 6))
-                .shadow(color: Color(hex: "#07C160").opacity(0.35), radius: 3, y: 1.5)
             }
-            .buttonStyle(.plain)
             .help("同步微信读书划线与想法 (⌘ + ⇧ + W)")
 
-            // Global Notebooks & Highlights Review Button
-            Button {
+            ShelfTopBarButton(icon: "highlighter", label: "划线笔记") {
                 onOpenGlobalNotebooks?()
-            } label: {
-                HStack(spacing: 5) {
-                    Image(systemName: "highlighter")
-                        .font(.system(size: 11))
-                    Text("划线笔记")
-                        .font(.system(size: 12, weight: .semibold, design: .serif))
-                }
-                .foregroundStyle(Color.white)
-                .padding(.horizontal, 11)
-                .padding(.vertical, 6)
-                .background(
-                    LinearGradient(
-                        colors: [Color(hex: "#D97706"), Color(hex: "#B45309")],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                )
-                .clipShape(RoundedRectangle(cornerRadius: 6))
-                .shadow(color: Color.orange.opacity(0.35), radius: 3, y: 1.5)
             }
-            .buttonStyle(.plain)
             .help("查看全书库划线、想法与微信读书笔记 (⌘ + ⇧ + N)")
 
-            // Import Button
+            // 导入是书架上唯一的「实心黄铜」主行动——其余全为暗玻璃
             Button(action: onImportEPUB) {
-                HStack(spacing: 6) {
+                HStack(spacing: 5) {
                     Image(systemName: "plus.circle.fill")
-                        .font(.system(size: 12))
-                    Text("导入 EPUB 电子书")
-                        .font(.system(size: 12, weight: .medium, design: .serif))
+                        .font(.system(size: 11))
+                    Text("导入书籍")
+                        .font(.system(size: 12, weight: .semibold, design: .serif))
                 }
-                .foregroundStyle(Color(hex: "#1E120A"))
+                .foregroundStyle(Color(hex: "#241708"))
                 .padding(.horizontal, 12)
                 .padding(.vertical, 6)
                 .background(
                     LinearGradient(
-                        colors: [Color(hex: "#F3D084"), Color(hex: "#D4AF37")],
+                        colors: [Color(hex: "#E8C883"), Color(hex: "#C9A24B")],
                         startPoint: .top,
                         endPoint: .bottom
                     )
                 )
                 .clipShape(RoundedRectangle(cornerRadius: 6))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6)
+                        .stroke(Color.white.opacity(0.25), lineWidth: 0.5)
+                )
                 .shadow(color: .black.opacity(0.3), radius: 4, y: 2)
             }
             .buttonStyle(.plain)
@@ -369,6 +246,17 @@ struct RealisticBookshelfView: View {
         .padding(.horizontal, 24)
         .padding(.vertical, 14)
         .background(Color.black.opacity(0.25))
+    }
+
+    private var streakLabel: String {
+        "连续 \(ReadingStatsManager.shared.stats.currentStreakDays) 天 · 今日 \(ReadingStatsManager.shared.stats.todayMinutes)m"
+    }
+
+    private var streakRing: Color {
+        let ratio = ReadingStatsManager.shared.stats.todayProgressRatio
+        if ratio >= 1.0 { return Color(hex: "#7FB069") }
+        if ratio >= 0.7 { return Color(hex: "#D08770") }
+        return Color(hex: "#E5C07B")
     }
 
     // MARK: - Warm Empty Study View
@@ -988,5 +876,68 @@ private struct AddBookSlotView: View {
         .buttonStyle(.plain)
         .onHover { isHovered = $0 }
         .help("导入本地 EPUB 电子书到书架")
+    }
+}
+
+// MARK: - 书架顶栏统一功能按钮（暗玻璃雕花铜牌风格）
+// 设计原则：无彩 chrome——所有功能按钮共用同一套暗玻璃材质与黄铜细描边，
+// 唯一允许的彩色是「今日复习」的到期角标（唯一需要用户行动的信号）。
+private struct ShelfTopBarButton: View {
+    let icon: String
+    let label: String
+    var badgeCount: Int? = nil
+    var ring: Color? = nil
+    let action: () -> Void
+
+    @State private var isHovered = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 5) {
+                if let ring {
+                    ZStack {
+                        Circle()
+                            .stroke(ring.opacity(0.3), lineWidth: 2)
+                            .frame(width: 13, height: 13)
+                        Circle()
+                            .trim(from: 0, to: ReadingStatsManager.shared.stats.todayProgressRatio)
+                            .stroke(ring, style: StrokeStyle(lineWidth: 2, lineCap: .round))
+                            .frame(width: 13, height: 13)
+                            .rotationEffect(.degrees(-90))
+                    }
+                }
+
+                Image(systemName: icon)
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(Color(hex: "#CBB393").opacity(0.9))
+
+                Text(label)
+                    .font(.system(size: 12, weight: .medium, design: .serif))
+                    .foregroundStyle(Color(hex: "#E8DCC5"))
+
+                if let badgeCount {
+                    Text("\(badgeCount)")
+                        .font(.system(size: 9, weight: .bold, design: .monospaced))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 4.5)
+                        .padding(.vertical, 1)
+                        .background(Color(hex: "#C25E3A"))
+                        .clipShape(Capsule())
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(Color.black.opacity(isHovered ? 0.5 : 0.35))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .stroke(Color(hex: "#B08D57").opacity(isHovered ? 0.55 : 0.3), lineWidth: 0.6)
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovered = $0 }
     }
 }

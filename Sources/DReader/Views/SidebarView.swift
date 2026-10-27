@@ -505,10 +505,10 @@ struct SidebarView: View {
                                 Image(systemName: "arrow.right")
                             }
                             .font(.system(size: 11, weight: .semibold))
-                            .foregroundStyle(.purple)
+                            .foregroundStyle(Color(nsColor: .controlAccentColor))
                             .padding(.horizontal, 10)
                             .padding(.vertical, 5)
-                            .background(Color.purple.opacity(0.1))
+                            .background(Color.primary.opacity(0.06))
                             .clipShape(RoundedRectangle(cornerRadius: 6))
                         }
                         .buttonStyle(.plain)
@@ -572,12 +572,12 @@ struct SidebarView: View {
                     }
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 6.5)
-                    .background(Color.purple.opacity(0.1))
-                    .foregroundStyle(.purple)
+                    .background(Color.primary.opacity(0.05))
+                    .foregroundStyle(Color.primary.opacity(0.7))
                     .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
                     .overlay(
                         RoundedRectangle(cornerRadius: 6, style: .continuous)
-                            .stroke(Color.purple.opacity(0.2), lineWidth: 0.5)
+                            .stroke(Color.primary.opacity(0.1), lineWidth: 0.5)
                     )
                 }
                 .menuStyle(.borderlessButton)
@@ -588,7 +588,7 @@ struct SidebarView: View {
 
     private func highlightCard(_ item: Highlight) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            // Chapter & Date Header
+            // Chapter & Date Header —— 无彩元信息层：出处用灰阶，不与划线色争抢
             HStack(spacing: 5) {
                 Circle()
                     .fill(Color(hex: item.colorHex))
@@ -599,39 +599,43 @@ struct SidebarView: View {
                         Image(systemName: "quote.bubble.fill")
                             .font(.system(size: 7.5))
                         Text("微信读书")
-                            .font(.system(size: 8.5, weight: .semibold))
+                            .font(.system(size: 8.5, weight: .medium))
                     }
-                    .padding(.horizontal, 4.5)
-                    .padding(.vertical, 1.5)
-                    .background(Color(hex: "#07C160").opacity(0.14))
-                    .foregroundStyle(Color(hex: "#059648"))
-                    .clipShape(Capsule())
+                    .foregroundStyle(.secondary.opacity(0.75))
+                } else if item.source == "ai_companion" {
+                    HStack(spacing: 2.5) {
+                        Image(systemName: "sparkles")
+                            .font(.system(size: 7.5))
+                        Text("AI 伴读")
+                            .font(.system(size: 8.5, weight: .medium))
+                    }
+                    .foregroundStyle(.secondary.opacity(0.75))
                 }
 
                 if highlightScope == .allBooks || (book != nil && item.bookTitle != book?.title) {
                     Text("《\(ChineseScriptConverter.convert(item.bookTitle, mode: chineseScriptMode))》")
-                        .font(.system(size: 10, weight: .bold, design: .serif))
-                        .foregroundStyle(Color.purple.opacity(0.85))
+                        .font(.system(size: 10, weight: .semibold, design: .serif))
+                        .foregroundStyle(Color.primary.opacity(0.75))
                         .lineLimit(1)
                 }
 
                 Text(ChineseScriptConverter.convert(item.chapterTitle, mode: chineseScriptMode))
-                    .font(.system(size: 10.5, weight: .medium))
-                    .foregroundStyle(.secondary)
+                    .font(.system(size: 10.5, weight: .regular))
+                    .foregroundStyle(.secondary.opacity(0.85))
                     .lineLimit(1)
 
                 Spacer()
 
-                Text(item.createdAt.formatted(date: .numeric, time: .shortened))
+                Text(item.createdAt.formatted(date: .numeric, time: .omitted))
                     .font(.system(size: 9))
-                    .foregroundStyle(.secondary.opacity(0.8))
+                    .foregroundStyle(.secondary.opacity(0.7))
 
                 Button {
                     onMakeQuoteCard?(item)
                 } label: {
                     Image(systemName: "photo.artframe")
                         .font(.system(size: 9.5))
-                        .foregroundStyle(.purple)
+                        .foregroundStyle(.secondary.opacity(0.75))
                 }
                 .buttonStyle(.plain)
                 .help("制作精美金句书摘卡片")
@@ -641,7 +645,7 @@ struct SidebarView: View {
                 } label: {
                     Image(systemName: "trash")
                         .font(.system(size: 9.5))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(.secondary.opacity(0.6))
                 }
                 .buttonStyle(.plain)
                 .help("删除此划线及想法")

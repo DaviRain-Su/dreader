@@ -4,6 +4,7 @@ import AppKit
 /// 微信读书范式：点已有划线弹出的是一条紧凑工具条（单行，~44pt），
 /// 而非内容卡片。划线原文就在背后页面上抬头可见，无需重复引用；
 /// 「写想法」按需临时展开一个小输入框，完事收回。
+/// 色彩纪律：全条无彩单色，唯一的彩色是五个划线色点本身。
 struct HighlightDetailCard: View {
     let highlight: Highlight
     let onUpdateColor: (String) -> Void
@@ -31,9 +32,9 @@ struct HighlightDetailCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            // 主行：色板 + 操作按钮（单行工具条）
-            HStack(spacing: 6) {
-                // Color dots (tap to switch highlight color)
+            // 主行：色板 + 操作按钮（单行工具条，无彩单色）
+            HStack(spacing: 2) {
+                // Color dots (tap to switch highlight color) —— 全条唯一的彩色
                 HStack(spacing: 4) {
                     ForEach(colors, id: \.hex) { item in
                         Circle()
@@ -57,8 +58,11 @@ struct HighlightDetailCard: View {
                             .help("更换为\(item.name)划线")
                     }
                 }
+                .padding(.horizontal, 2)
 
-                Spacer(minLength: 4)
+                Divider()
+                    .frame(height: 12)
+                    .opacity(0.25)
 
                 // 写想法 / 编辑想法
                 Button {
@@ -67,38 +71,22 @@ struct HighlightDetailCard: View {
                         isEditingThought = true
                     }
                 } label: {
-                    HStack(spacing: 3) {
-                        Image(systemName: hasThought ? "text.bubble" : "square.and.pencil")
-                            .font(.system(size: 9.5))
-                        Text(hasThought ? "想法" : "写想法")
-                            .font(.system(size: 10.5, weight: .semibold))
-                    }
-                    .foregroundStyle(.purple)
-                    .padding(.horizontal, 7)
-                    .padding(.vertical, 3.5)
-                    .background(Color.purple.opacity(0.12))
-                    .clipShape(Capsule())
+                    Image(systemName: hasThought ? "text.bubble" : "square.and.pencil")
+                        .font(.system(size: 11))
+                        .frame(width: 24, height: 24)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(ChromeToolButtonStyle())
                 .help(hasThought ? "查看 / 编辑想法" : "写下此处的想法")
 
                 // Ask AI
                 Button {
                     onAskAI(highlight.text)
                 } label: {
-                    HStack(spacing: 2) {
-                        Image(systemName: "sparkles")
-                            .font(.system(size: 9, weight: .bold))
-                        Text("问AI")
-                            .font(.system(size: 10.5, weight: .semibold))
-                    }
-                    .foregroundStyle(.purple)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 3.5)
-                    .background(Color.purple.opacity(0.1))
-                    .clipShape(Capsule())
+                    Image(systemName: "sparkles")
+                        .font(.system(size: 11))
+                        .frame(width: 24, height: 24)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(ChromeToolButtonStyle())
                 .help("结合划线向 AI 深度请教")
 
                 // Quote Card
@@ -106,13 +94,10 @@ struct HighlightDetailCard: View {
                     onMakeQuoteCard()
                 } label: {
                     Image(systemName: "photo.artframe")
-                        .font(.system(size: 10.5))
-                        .foregroundStyle(.indigo)
-                        .frame(width: 22, height: 22)
-                        .background(Color.indigo.opacity(0.08))
-                        .clipShape(Circle())
+                        .font(.system(size: 11))
+                        .frame(width: 24, height: 24)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(ChromeToolButtonStyle())
                 .help("制作精美金句书摘卡片")
 
                 // Delete
@@ -120,27 +105,25 @@ struct HighlightDetailCard: View {
                     onDelete()
                 } label: {
                     Image(systemName: "trash")
-                        .font(.system(size: 10))
-                        .foregroundStyle(Color.red.opacity(0.8))
-                        .frame(width: 22, height: 22)
-                        .background(Color.red.opacity(0.08))
-                        .clipShape(Circle())
+                        .font(.system(size: 10.5))
+                        .frame(width: 24, height: 24)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(ChromeToolButtonStyle(destructive: true))
                 .help("删除划线")
+
+                Divider()
+                    .frame(height: 12)
+                    .opacity(0.25)
 
                 // Close
                 Button {
                     onDismiss()
                 } label: {
                     Image(systemName: "xmark")
-                        .font(.system(size: 9, weight: .bold))
-                        .foregroundStyle(.secondary)
-                        .frame(width: 20, height: 20)
-                        .background(Color.primary.opacity(0.05))
-                        .clipShape(Circle())
+                        .font(.system(size: 9, weight: .semibold))
+                        .frame(width: 24, height: 24)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(ChromeToolButtonStyle())
                 .help("关闭 (Esc)")
             }
 
@@ -156,7 +139,7 @@ struct HighlightDetailCard: View {
                         .clipShape(RoundedRectangle(cornerRadius: 6))
                         .overlay(
                             RoundedRectangle(cornerRadius: 6)
-                                .stroke(Color.purple.opacity(0.4), lineWidth: 1)
+                                .stroke(Color.primary.opacity(0.15), lineWidth: 1)
                         )
 
                     HStack {
@@ -179,10 +162,10 @@ struct HighlightDetailCard: View {
                         } label: {
                             Text("保存想法")
                                 .font(.system(size: 10.5, weight: .semibold))
-                                .foregroundStyle(.white)
+                                .foregroundStyle(Color(nsColor: .controlAccentColor))
                                 .padding(.horizontal, 9)
                                 .padding(.vertical, 3.5)
-                                .background(Color.purple)
+                                .background(Color.primary.opacity(0.07))
                                 .clipShape(Capsule())
                         }
                         .buttonStyle(.plain)
@@ -190,8 +173,8 @@ struct HighlightDetailCard: View {
                 }
             }
         }
-        .padding(10)
-        .frame(width: 300)
+        .padding(8)
+        .frame(width: 268)
         .fixedSize(horizontal: true, vertical: false)
         .cardPopoverChrome()
         .onAppear {
@@ -214,16 +197,38 @@ struct HighlightDetailCard: View {
     }
 }
 
+/// 弹窗工具条统一按键风格：无彩单色，悬停淡灰底，破坏性操作悬停转红
+struct ChromeToolButtonStyle: ButtonStyle {
+    var destructive: Bool = false
+
+    @State private var isHovering = false
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .foregroundStyle(
+                configuration.isPressed
+                    ? Color.primary.opacity(0.55)
+                    : (isHovering && destructive ? Color.red.opacity(0.9) : Color.primary.opacity(0.62))
+            )
+            .background(
+                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    .fill(isHovering ? Color.primary.opacity(0.08) : Color.clear)
+            )
+            .scaleEffect(configuration.isPressed ? 0.94 : 1.0)
+            .onHover { isHovering = $0 }
+    }
+}
+
 /// 弹卡毛玻璃底板与投影（拆出独立扩展，缓解主 body 类型检查压力）
 private extension View {
     func cardPopoverChrome() -> some View {
         background(
-            RoundedRectangle(cornerRadius: 11, style: .continuous)
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .fill(.ultraThinMaterial)
-                .shadow(color: .black.opacity(0.22), radius: 14, x: 0, y: 6)
+                .shadow(color: .black.opacity(0.18), radius: 12, x: 0, y: 5)
                 .overlay(
-                    RoundedRectangle(cornerRadius: 11, style: .continuous)
-                        .stroke(Color.white.opacity(0.28), lineWidth: 0.6)
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .stroke(Color.white.opacity(0.22), lineWidth: 0.5)
                 )
         )
     }

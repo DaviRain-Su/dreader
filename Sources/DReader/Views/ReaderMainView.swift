@@ -565,7 +565,6 @@ struct ReaderMainView: View {
             AppleToolbarButton(
                 icon: "quote.bubble.fill",
                 isActive: vm.showWeChatSyncModal,
-                activeColor: Color(hex: "#07C160"),
                 action: {
                     vm.showWeChatSyncModal = true
                 },
@@ -575,7 +574,6 @@ struct ReaderMainView: View {
             AppleToolbarButton(
                 icon: "highlighter",
                 isActive: vm.showGlobalNotebooksModal,
-                activeColor: .orange,
                 action: {
                     vm.showGlobalNotebooksModal = true
                 },
