@@ -20,6 +20,12 @@ struct WeChatReadingSyncModalView: View {
     @State private var filterStatus: NotebookFilterStatus = .all
     @State private var successBannerMessage: String? = nil
     @State private var errorMessage: String? = nil
+    // 正文导入（非官方 Web 接口）
+    @State private var importBookId: String = ""
+    @State private var isImporting: Bool = false
+    @State private var importStatus: String = ""
+    @State private var importProgress: Double = 0
+    @State private var importTask: Task<Void, Never>? = nil
 
     enum NotebookFilterStatus: String, CaseIterable, Identifiable {
         case all = "全部"
@@ -68,6 +74,12 @@ struct WeChatReadingSyncModalView: View {
 
             // Configuration Bar
             apiKeyConfigBar
+
+            Divider()
+                .opacity(0.15)
+
+            // 书籍正文导入（Web 接口）
+            bookImportBar
 
             Divider()
                 .opacity(0.15)
@@ -405,6 +417,176 @@ struct WeChatReadingSyncModalView: View {
         .padding(.horizontal, 18)
         .padding(.vertical, 10)
         .background(Color.primary.opacity(0.025))
+    }
+
+    // MARK: - 书籍正文导入（非官方 Web 接口，个人互操作）
+
+    private var bookImportBar: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 10) {
+                Image(systemName: "books.vertical.fill")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+
+                Text("导入书籍正文:")
+                    .font(.system(size: 12, weight: .semibold))
+
+                TextField("微信读书 bookId（书籍页网址 weread.qq.com/web/reader/ 后那段）", text: $importBookId)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(size: 12, design: .monospaced))
+
+                Button {
+                    startImport()
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "square.and.arrow.down")
+                            .font(.system(size: 10, weight: .bold))
+                        Text("抓取并加入书架")
+                            .font(.system(size: 11.5, weight: .medium))
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 4.5)
+                    .background(Color.primary.opacity(0.82))
+                    .foregroundStyle(.white)
+                    .clipShape(RoundedRectangle(cornerRadius: 5))
+                }
+                .buttonStyle(.plain)
+                .disabled(importBookId.trimmingCharacters(in: .whitespaces).isEmpty || isImporting)
+
+                if isImporting {
+                    Button {
+                        importTask?.cancel()
+                    } label: {
+                        Text("停止")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.red)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+
+            Text("需要网页版登录 Cookie：登录 weread.qq.com 后从浏览器 DevTools 复制整段 Cookie。抓取为个人互操作用途，逐章限速，只抓你有权限阅读的章节。")
+                .font(.system(size: 10.5))
+                .foregroundStyle(.secondary.opacity(0.85))
+                .fixedSize(horizontal: false, vertical: true)
+
+            HStack(spacing: 10) {
+                if let ck = cookieHint {
+                    HStack(spacing: 5) {
+                        Image(systemName: ck.hasKey ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
+                            .font(.system(size: 11))
+                            .foregroundStyle(ck.hasKey ? Color.green : Color.orange)
+                        Text(ck.label)
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                    }
+                    Button {
+                        importCookieInput = ck.current
+                        showCookieEditor = true
+                    } label: {
+                        Text("配置 Cookie")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(Color.primary.opacity(0.75))
+                    }
+                    .buttonStyle(.plain)
+                }
+
+                Spacer()
+            }
+
+            if isImporting {
+                VStack(spacing: 6) {
+                    HStack {
+                        ProgressView()
+                            .scaleEffect(0.65)
+                        Text(importStatus)
+                            .font(.system(size: 11.5, weight: .medium))
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Text("\(Int(importProgress * 100))%")
+                            .font(.system(size: 11.5, weight: .semibold, design: .monospaced))
+                            .foregroundStyle(.primary.opacity(0.75))
+                    }
+                    ProgressView(value: importProgress)
+                        .tint(Color.primary.opacity(0.65))
+                }
+            }
+        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 10)
+        .sheet(isPresented: $showCookieEditor) {
+            cookieEditorSheet
+        }
+    }
+
+    @State private var showCookieEditor: Bool = false
+    @State private var importCookieInput: String = ""
+
+    private var cookieHint: (hasKey: Bool, label: String, current: String)? {
+        let ck = WeReadContentService.shared.cookie
+        let hasKey = !ck.isEmpty
+        let label = hasKey
+            ? "Cookie 已配置 (\(ck.count) 字符)"
+            : "Cookie 未配置 — 导入正文需要网页版登录态"
+        return (hasKey, label, ck)
+    }
+
+    private var cookieEditorSheet: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("微信读书网页版 Cookie")
+                    .font(.system(size: 13, weight: .bold))
+                Spacer()
+                Button {
+                    showCookieEditor = false
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 15))
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+            }
+            Text("登录 weread.qq.com → 浏览器 DevTools → Application/存储 → Cookies → 复制整段（须含 wr_vid 与 wr_skey）")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            TextEditor(text: $importCookieInput)
+                .font(.system(size: 11, design: .monospaced))
+                .frame(minHeight: 110)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6)
+                        .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
+                )
+            HStack {
+                Button {
+                    WeReadContentService.shared.cookie = importCookieInput
+                    showCookieEditor = false
+                } label: {
+                    Text("保存")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 6)
+                        .background(Color.primary.opacity(0.8))
+                        .clipShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                Spacer()
+                if !WeReadContentService.shared.cookie.isEmpty {
+                    Button {
+                        WeReadContentService.shared.cookie = ""
+                        importCookieInput = ""
+                    } label: {
+                        Text("清除")
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(.red)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+        .padding(18)
+        .frame(width: 480)
     }
 
     // MARK: - Search and Filter Bar
@@ -829,5 +1011,78 @@ struct WeChatReadingSyncModalView: View {
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM-dd HH:mm"
         return formatter.string(from: date)
+    }
+
+    // MARK: - 正文导入执行
+
+    private func startImport() {
+        let rawId = importBookId.trimmingCharacters(in: .whitespacesAndNewlines)
+        // 支持粘贴完整 reader URL（…/web/reader/xxxx）自动提取最后一段
+        let bookId: String
+        if rawId.contains("/") {
+            bookId = rawId.components(separatedBy: "/").last ?? rawId
+        } else {
+            bookId = rawId
+        }
+        guard !bookId.isEmpty else { return }
+        if !WeReadContentService.shared.hasCookie {
+            errorMessage = "请先配置网页版 Cookie（含 wr_vid 与 wr_skey）"
+            showCookieEditor = true
+            return
+        }
+
+        isImporting = true
+        importProgress = 0
+        importStatus = "正在验证书籍与目录..."
+        errorMessage = nil
+        successBannerMessage = nil
+
+        importTask = Task { @MainActor in
+            do {
+                let service = WeReadContentService.shared
+                let catalog = try await service.previewCatalog(bookId: bookId)
+                guard !catalog.chapters.isEmpty else {
+                    throw WeReadContentService.WeReadContentError.noChapters
+                }
+                importStatus = "《\(catalog.title)》共 \(catalog.chapters.count) 章，开始逐章抓取..."
+
+                let fetched = try await WeReadEPUBAssembler.fetchWholeBook(
+                    bookId: bookId,
+                    chapters: catalog.chapters,
+                    onProgress: { done, total, chapterTitle in
+                        importProgress = Double(done) / Double(max(1, total))
+                        importStatus = "抓取中 (\(done + 1)/\(total))：\(chapterTitle)"
+                    }
+                )
+
+                importStatus = "组装 EPUB..."
+                let fm = FileManager.default
+                let shelfDir = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+                    .appendingPathComponent("DReader/DownloadedBooks", isDirectory: true)
+                try fm.createDirectory(at: shelfDir, withIntermediateDirectories: true)
+                let safeTitle = catalog.title.replacingOccurrences(of: "/", with: "_")
+                let outputURL = shelfDir.appendingPathComponent("《\(safeTitle)》(微信读书).epub")
+                try WeReadEPUBAssembler.packageEPUB(
+                    bookId: bookId,
+                    title: catalog.title,
+                    author: "WeRead",
+                    chapters: fetched,
+                    css: nil,
+                    outputURL: outputURL
+                )
+
+                isImporting = false
+                importProgress = 1
+                successBannerMessage = "《\(catalog.title)》已抓取 \(fetched.count) 章并加入书架！"
+                importBookId = ""
+            } catch is CancellationError {
+                isImporting = false
+                importStatus = ""
+                errorMessage = "导入已停止"
+            } catch {
+                isImporting = false
+                errorMessage = "导入失败: \(error.localizedDescription)"
+            }
+        }
     }
 }
