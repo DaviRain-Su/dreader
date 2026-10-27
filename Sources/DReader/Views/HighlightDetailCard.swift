@@ -14,6 +14,7 @@ struct HighlightDetailCard: View {
     @State private var isEditingThought: Bool = false
     @State private var thoughtDraft: String = ""
     @State private var copyFeedback: Bool = false
+    @State private var dragOffset: CGSize = .zero
 
     private let colors: [(name: String, hex: String, color: Color)] = [
         ("黄色", "#FFE066", Color(hex: "#FFE066")),
@@ -186,6 +187,7 @@ struct HighlightDetailCard: View {
                         .font(.system(size: 11.5))
                         .foregroundStyle(Color.primary.opacity(0.9))
                         .lineSpacing(2)
+                        .lineLimit(5)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(6)
                         .background(Color.primary.opacity(0.04))
@@ -224,13 +226,37 @@ struct HighlightDetailCard: View {
                 Text(highlight.text)
                     .font(.system(size: 11, design: .serif))
                     .foregroundStyle(.secondary)
-                    .lineLimit(2)
+                    .lineLimit(3)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
         .padding(11)
         .frame(width: 280)
-        .background(
+        .cardPopoverChrome()
+        .onAppear {
+            if let note = highlight.note, !note.isEmpty {
+                thoughtDraft = note
+            }
+        }
+        // 整卡可拖动（编辑态禁用，避免与 TextEditor 手势冲突）
+        .offset(dragOffset)
+        .simultaneousGesture(dragGesture)
+    }
+
+    /// 整卡拖动手势；编辑想法时禁用，避免与 TextEditor 手势冲突
+    private var dragGesture: some Gesture {
+        DragGesture()
+            .onChanged { value in
+                guard !isEditingThought else { return }
+                dragOffset = value.translation
+            }
+    }
+}
+
+/// 弹卡毛玻璃底板与投影（拆出独立扩展，缓解主 body 类型检查压力）
+private extension View {
+    func cardPopoverChrome() -> some View {
+        background(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .fill(.ultraThinMaterial)
                 .shadow(color: .black.opacity(0.22), radius: 14, x: 0, y: 6)
@@ -239,10 +265,5 @@ struct HighlightDetailCard: View {
                         .stroke(Color.white.opacity(0.28), lineWidth: 0.6)
                 )
         )
-        .onAppear {
-            if let note = highlight.note, !note.isEmpty {
-                thoughtDraft = note
-            }
-        }
     }
 }
