@@ -21,7 +21,8 @@ struct OnlineBookHubModalView: View {
     @State private var loginEmailInput: String = ""
     @State private var loginKeyInput: String = ""
 
-    private let quickChipsOpenLibrary = ["Pride and Prejudice", "Walden", "War and Peace", "Shakespeare", "鲁迅"]
+    private let quickChipsOpenLibrary = ["红楼梦", "道德经", "Pride and Prejudice", "Walden", "鲁迅"]
+    private let quickChipsGutenberg = ["红楼梦", "道德经", "三国演义", "西游记", "水浒传", "论语", "孙子兵法", "唐诗三百首"]
     private let quickChipsZLibrary = ["纳瓦尔宝典", "原则", "置身事内", "思考，快与慢", "计算机系统"]
 
     var body: some View {
@@ -299,7 +300,13 @@ struct OnlineBookHubModalView: View {
                     .font(.system(size: 10))
                     .foregroundStyle(.secondary)
 
-                let chips = (selectedSource == .zlibrary) ? quickChipsZLibrary : quickChipsOpenLibrary
+                let chips: [String] = {
+                    switch selectedSource {
+                    case .openLibrary: return quickChipsOpenLibrary
+                    case .gutenberg: return quickChipsGutenberg
+                    case .zlibrary: return quickChipsZLibrary
+                    }
+                }()
                 ForEach(chips, id: \.self) { chip in
                     Button {
                         searchQuery = chip
@@ -447,6 +454,24 @@ struct OnlineBookHubModalView: View {
                     .padding(.vertical, 6)
                     .background(Color.purple.opacity(0.1))
                     .clipShape(Capsule())
+                } else if !book.hasDownloadableContent {
+                    VStack(spacing: 3) {
+                        HStack(spacing: 4) {
+                            Image(systemName: "books.vertical")
+                                .font(.system(size: 10))
+                            Text("仅馆藏目录")
+                                .font(.system(size: 11, weight: .medium))
+                        }
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 9)
+                        .padding(.vertical, 5)
+                        .background(Color.primary.opacity(0.06))
+                        .clipShape(Capsule())
+
+                        Text("无公开电子全本")
+                            .font(.system(size: 9))
+                            .foregroundStyle(.secondary.opacity(0.7))
+                    }
                 } else {
                     Button {
                         startDownload(book)

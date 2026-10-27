@@ -411,11 +411,27 @@ final class EPUBParser: Sendable {
 
     // MARK: - HTML Title Extractor
     private func extractTitleFromHTML(_ html: String) -> String? {
-        // Simple regex to extract <title> or <h1> text
+        // 1. First priority: Check for Chinese classic chapter headings (e.g. "第一回 甄士隐梦幻识通灵", "第十二章 检欲")
+        let chineseHeadingPattern = "<(?:p|h1|h2|h3)[^>]*>(第[0-9一二三四五六七八九十百千]+[回章节卷部集篇][^<]{0,50})<\\/(?:p|h1|h2|h3)>"
+        if let regex = try? NSRegularExpression(pattern: chineseHeadingPattern, options: [.caseInsensitive]),
+           let match = regex.firstMatch(in: html, range: NSRange(html.startIndex..., in: html)),
+           let titleRange = Range(match.range(at: 1), in: html) {
+            let raw = String(html[titleRange])
+            let clean = raw.replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
+                .replacingOccurrences(of: "\n", with: " ")
+                .replacingOccurrences(of: "\r", with: " ")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if !clean.isEmpty && clean.count < 65 {
+                return clean
+            }
+        }
+
+        // 2. Standard headings and title tag
         let patterns = [
             "<h1[^>]*>(.*?)<\\/h1>",
-            "<title[^>]*>(.*?)<\\/title>",
-            "<h2[^>]*>(.*?)<\\/h2>"
+            "<h2[^>]*>(.*?)<\\/h2>",
+            "<h3[^>]*>(.*?)<\\/h3>",
+            "<title[^>]*>(.*?)<\\/title>"
         ]
 
         for pattern in patterns {
@@ -425,7 +441,15 @@ final class EPUBParser: Sendable {
                 let raw = String(html[titleRange])
                 // Strip inner tags
                 let clean = raw.replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
+                    .replacingOccurrences(of: "\n", with: " ")
+                    .replacingOccurrences(of: "\r", with: " ")
                     .trimmingCharacters(in: .whitespacesAndNewlines)
+
+                // Skip Gutenberg and generic boilerplate titles
+                if clean.lowercased().contains("project gutenberg") || clean.lowercased().contains("ebook of") || clean.lowercased().contains("full project") {
+                    continue
+                }
+
                 if !clean.isEmpty && clean.count < 60 {
                     return clean
                 }

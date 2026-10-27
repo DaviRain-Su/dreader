@@ -42,21 +42,32 @@ final class OnlineBookService: Sendable {
     // MARK: - 1. Open Library API Search
 
     private func searchOpenLibrary(query: String) async -> [OnlineBookItem] {
+        var items: [OnlineBookItem] = []
+        var seenIDs: Set<String> = []
+
+        // If the query matches a Chinese classic, inject the verified public domain fulltext item at the top
+        let matchedClassics = ChineseClassicsRegistry.shared.search(query: query)
+        for c in matchedClassics {
+            if !seenIDs.contains(c.gutenbergID) {
+                seenIDs.insert(c.gutenbergID)
+                items.append(c.toOnlineBookItem(source: .openLibrary))
+            }
+        }
+
         guard let encoded = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
               let url = URL(string: "https://openlibrary.org/search.json?q=\(encoded)&limit=15") else {
-            return []
+            return items
         }
 
         do {
             let (data, response) = try await urlSession.data(from: url)
-            guard (response as? HTTPURLResponse)?.statusCode == 200 else { return [] }
+            guard (response as? HTTPURLResponse)?.statusCode == 200 else { return items }
 
             guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let docs = json["docs"] as? [[String: Any]] else {
-                return []
+                return items
             }
 
-            var items: [OnlineBookItem] = []
             for doc in docs {
                 let title = (doc["title"] as? String) ?? "未知书名"
                 let authors = (doc["author_name"] as? [String])?.joined(separator: ", ") ?? "佚名"
@@ -72,6 +83,11 @@ final class OnlineBookService: Sendable {
                 var gutenbergID: String?
                 if let gids = doc["id_project_gutenberg"] as? [String], let firstG = gids.first {
                     gutenbergID = firstG
+                }
+
+                // If not directly present in doc, check ChineseClassicsRegistry to enrich with real fulltext
+                if gutenbergID == nil, let classic = ChineseClassicsRegistry.shared.findClassic(title: title) {
+                    gutenbergID = classic.gutenbergID
                 }
 
                 // Extract Internet Archive ID (filtering out unwanted audiobooks/restricted datasets)
@@ -98,10 +114,22 @@ final class OnlineBookService: Sendable {
                 }
 
                 let primaryURL = candidateURLs.first
+                let id = (doc["key"] as? String) ?? UUID().uuidString
+                if seenIDs.contains(id) { continue }
+                seenIDs.insert(id)
+
+                let sizeLabel: String
+                if gutenbergID != nil {
+                    sizeLabel = "官方公版全本 EPUB"
+                } else if internetArchiveID != nil {
+                    sizeLabel = "互联网档案馆数字版"
+                } else {
+                    sizeLabel = "实体馆藏目录"
+                }
 
                 items.append(
                     OnlineBookItem(
-                        id: (doc["key"] as? String) ?? UUID().uuidString,
+                        id: id,
                         title: title,
                         author: authors,
                         source: .openLibrary,
@@ -111,23 +139,72 @@ final class OnlineBookService: Sendable {
                         gutenbergID: gutenbergID,
                         internetArchiveID: internetArchiveID,
                         fileExtension: "epub",
-                        fileSizeFormatted: gutenbergID != nil ? "官方公版 EPUB" : "公版馆藏",
+                        fileSizeFormatted: sizeLabel,
                         publishYear: publishYear,
                         language: languages,
-                        isPublicDomain: (doc["public_scan_b"] as? Bool) ?? true,
-                        description: "来自 Open Library 与互联网档案馆 (Internet Archive) 公开藏书馆。"
+                        isPublicDomain: (doc["public_scan_b"] as? Bool) ?? (gutenbergID != nil),
+                        description: candidateURLs.isEmpty ? "Open Library 实体借阅卡片目录，暂未收录公开数字化电子全本。" : "来自 Open Library 与公版数字图书馆，可一键拉取下载并入库。"
                     )
                 )
             }
             return items
         } catch {
-            return []
+            return items
         }
     }
 
-    // MARK: - 2. Project Gutenberg (Gutendex) Search
+    // MARK: - 2. Project Gutenberg (Gutendex) Search with Simplified/Traditional Bridge
 
     private func searchGutenberg(query: String) async -> [OnlineBookItem] {
+        var allItems: [OnlineBookItem] = []
+        var seenIDs: Set<String> = []
+
+        // 1. Enrich with curated Chinese Classics Registry (highest accuracy for classical literature)
+        let classics = ChineseClassicsRegistry.shared.search(query: query)
+        for c in classics {
+            if !seenIDs.contains(c.gutenbergID) {
+                seenIDs.insert(c.gutenbergID)
+                allItems.append(c.toOnlineBookItem(source: .gutenberg))
+            }
+        }
+
+        // 2. Direct Gutendex query with user input
+        let q1 = await queryGutendex(query: query)
+        for it in q1 {
+            if !seenIDs.contains(it.id) {
+                seenIDs.insert(it.id)
+                allItems.append(it)
+            }
+        }
+
+        // 3. Simplified -> Traditional Chinese bridge (Gutendex indexes Chinese literature in Traditional script)
+        let trad = query.applyingTransform(StringTransform("Simplified-Traditional"), reverse: false) ?? query
+        if trad != query {
+            let q2 = await queryGutendex(query: trad)
+            for it in q2 {
+                if !seenIDs.contains(it.id) {
+                    seenIDs.insert(it.id)
+                    allItems.append(it)
+                }
+            }
+        }
+
+        // 4. Traditional -> Simplified Chinese bridge
+        let simp = query.applyingTransform(StringTransform("Traditional-Simplified"), reverse: false) ?? query
+        if simp != query && simp != trad {
+            let q3 = await queryGutendex(query: simp)
+            for it in q3 {
+                if !seenIDs.contains(it.id) {
+                    seenIDs.insert(it.id)
+                    allItems.append(it)
+                }
+            }
+        }
+
+        return allItems
+    }
+
+    private func queryGutendex(query: String) async -> [OnlineBookItem] {
         guard let encoded = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
               let url = URL(string: "https://gutendex.com/books/?search=\(encoded)") else {
             return []
@@ -145,7 +222,17 @@ final class OnlineBookService: Sendable {
             var items: [OnlineBookItem] = []
             for item in results.prefix(15) {
                 let gid = "\(item["id"] as? Int ?? 0)"
-                let title = (item["title"] as? String) ?? "未知书名"
+                let rawTitle = (item["title"] as? String) ?? "未知书名"
+
+                // Format title to show both Simplified and Traditional if different
+                let simpTitle = rawTitle.applyingTransform(StringTransform("Traditional-Simplified"), reverse: false) ?? rawTitle
+                let displayTitle: String
+                if simpTitle != rawTitle {
+                    displayTitle = "\(simpTitle) (\(rawTitle))"
+                } else {
+                    displayTitle = rawTitle
+                }
+
                 var authorStr = "佚名"
                 if let authors = item["authors"] as? [[String: Any]], let firstAuthor = authors.first {
                     authorStr = (firstAuthor["name"] as? String) ?? "佚名"
@@ -165,15 +252,21 @@ final class OnlineBookService: Sendable {
 
                 // Add direct cache mirrors
                 if gid != "0" {
-                    if let u = URL(string: "https://www.gutenberg.org/cache/epub/\(gid)/pg\(gid).epub") { candidateURLs.append(u) }
-                    if let u = URL(string: "https://www.gutenberg.org/ebooks/\(gid).epub.noimages") { candidateURLs.append(u) }
-                    if let u = URL(string: "https://www.gutenberg.org/ebooks/\(gid).epub3.images") { candidateURLs.append(u) }
+                    if let u = URL(string: "https://www.gutenberg.org/cache/epub/\(gid)/pg\(gid).epub") {
+                        if !candidateURLs.contains(u) { candidateURLs.insert(u, at: 0) }
+                    }
+                    if let u = URL(string: "https://www.gutenberg.org/ebooks/\(gid).epub.noimages") {
+                        if !candidateURLs.contains(u) { candidateURLs.append(u) }
+                    }
+                    if let u = URL(string: "https://www.gutenberg.org/ebooks/\(gid).epub3.images") {
+                        if !candidateURLs.contains(u) { candidateURLs.append(u) }
+                    }
                 }
 
                 items.append(
                     OnlineBookItem(
                         id: gid,
-                        title: title,
+                        title: displayTitle,
                         author: authorStr,
                         source: .gutenberg,
                         coverURL: coverURL,
@@ -181,7 +274,7 @@ final class OnlineBookService: Sendable {
                         candidateURLs: candidateURLs,
                         gutenbergID: gid,
                         fileExtension: "epub",
-                        fileSizeFormatted: "Gutenberg 原生 EPUB",
+                        fileSizeFormatted: "Gutenberg 原生全本 EPUB",
                         publishYear: "公版名著",
                         language: "原著原版",
                         isPublicDomain: true,
@@ -373,6 +466,8 @@ final class OnlineBookService: Sendable {
             .replacingOccurrences(of: "/", with: "_")
             .replacingOccurrences(of: ":", with: "_")
             .replacingOccurrences(of: "\"", with: "")
+            .replacingOccurrences(of: "(", with: "")
+            .replacingOccurrences(of: ")", with: "")
             .trimmingCharacters(in: .whitespaces)
 
         let destinationURL = downloadsDir.appendingPathComponent("\(safeName).epub")
@@ -384,24 +479,59 @@ final class OnlineBookService: Sendable {
             }
         }
 
-        // 2. Build prioritized candidate download URLs
+        // 2. Check if it's 《道德经》: build authentic, pristine 81-chapter complete classic EPUB
+        if item.title.contains("道德经") || item.title.contains("道德經") || item.id == "classic-daodejing" || item.gutenbergID == "7337" {
+            if let authenticURL = await ChineseClassicsRegistry.shared.buildAuthenticDaoDeJingEPUB(targetURL: destinationURL) {
+                return authenticURL
+            }
+        }
+
+        // 3. Build prioritized candidate download URLs
         var candidates: [URL] = []
         if let u = item.downloadURL { candidates.append(u) }
         for c in item.candidateURLs where !candidates.contains(c) {
             candidates.append(c)
         }
 
-        // If it's an Archive.org item and we have internetArchiveID, resolve exact .epub filename dynamically
-        if let ia = item.internetArchiveID {
-            if let resolved = await resolveArchiveOrgEPUB(ia: ia), !candidates.contains(resolved) {
-                candidates.insert(resolved, at: 0) // Highest priority
+        // Match against ChineseClassicsRegistry and inject verified Gutenberg full-text endpoints
+        if let classic = ChineseClassicsRegistry.shared.findClassic(title: item.title) {
+            for c in classic.candidateURLs where !candidates.contains(c) {
+                candidates.insert(c, at: 0) // Priority: verified full-text Gutenberg cache
             }
         }
 
-        // 3. Try each remote candidate download URL with browser headers and validation
+        // If gutenbergID is present, ensure all mirror variants are populated
+        if let gid = item.gutenbergID, gid != "0", !gid.isEmpty {
+            if let u = URL(string: "https://www.gutenberg.org/cache/epub/\(gid)/pg\(gid).epub"), !candidates.contains(u) {
+                candidates.insert(u, at: 0)
+            }
+            if let u = URL(string: "https://www.gutenberg.org/ebooks/\(gid).epub.noimages"), !candidates.contains(u) {
+                candidates.append(u)
+            }
+            if let u = URL(string: "https://www.gutenberg.org/ebooks/\(gid).epub3.images"), !candidates.contains(u) {
+                candidates.append(u)
+            }
+        }
+
+        // If it's an Archive.org item and we have internetArchiveID, resolve exact .epub filename dynamically
+        if let ia = item.internetArchiveID {
+            if let resolved = await resolveArchiveOrgEPUB(ia: ia), !candidates.contains(resolved) {
+                candidates.insert(resolved, at: 0)
+            }
+        }
+
+        guard !candidates.isEmpty else {
+            throw NSError(
+                domain: "DReader.OnlineBookService",
+                code: 404,
+                userInfo: [NSLocalizedDescriptionKey: "无法下载《\(item.title)》：该图书在当前书库仅为图书馆借阅卡片索引，未收录公开数字化电子全本。建议在顶部切换至【古腾堡计划】公版书库直接下载，或使用 Z-Library 账号拉取。"]
+            )
+        }
+
+        // 4. Try each remote candidate download URL with browser headers and validation
         for targetURL in candidates {
             var request = URLRequest(url: targetURL)
-            request.timeoutInterval = 25
+            request.timeoutInterval = 30
             request.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36", forHTTPHeaderField: "User-Agent")
             request.setValue("application/epub+zip, application/octet-stream, */*", forHTTPHeaderField: "Accept")
 
@@ -426,15 +556,17 @@ final class OnlineBookService: Sendable {
             }
         }
 
-        // 4. Resilience Fallback: If network / mirrors fail completely, synthesize a compliant EPUB
-        if let fallbackURL = await generateFallbackEPUB(for: item, targetURL: destinationURL) {
-            return fallbackURL
+        // 5. If remote download failed but it's a classic with authentic offline corpus
+        if let classic = ChineseClassicsRegistry.shared.findClassic(title: item.title), classic.hasOfflineCorpus {
+            if let authenticURL = await ChineseClassicsRegistry.shared.buildAuthenticDaoDeJingEPUB(targetURL: destinationURL) {
+                return authenticURL
+            }
         }
 
         throw NSError(
             domain: "DReader.OnlineBookService",
             code: 500,
-            userInfo: [NSLocalizedDescriptionKey: "无法从目标书库拉取该图书，请检查网络连接或尝试其他书源。"]
+            userInfo: [NSLocalizedDescriptionKey: "网络拉取《\(item.title)》超时或未成功。海外公共书库镜像暂未响应，请检查网络连接后重试。"]
         )
     }
 
@@ -609,48 +741,6 @@ final class OnlineBookService: Sendable {
             title: item.title,
             author: item.author,
             description: item.description ?? "DReader 典藏电子书",
-            coverImageData: coverData,
-            chapters: chapters
-        )
-    }
-
-    // MARK: - Resilient Fallback EPUB Generator
-
-    private func generateFallbackEPUB(for item: OnlineBookItem, targetURL: URL) async -> URL? {
-        let coverData = SampleBookGenerator.renderCoverImage(
-            mainTitle: item.title,
-            subTitle: "世界文学与思想文库",
-            author: item.author,
-            badge: "公共领域名著 · 数字典藏版",
-            colorHex1: "#2A1810",
-            colorHex2: "#120804",
-            goldHex: "#E5C07B"
-        )
-
-        let introDesc = item.description ?? "本书为经典文学与思想专著，文字深邃，历久弥新。"
-
-        let chapters: [(String, String)] = [
-            ("第一章：作品导读与历史背景速览", """
-            <h1>第一章：作品导读与历史背景速览</h1>
-            <p>《\(item.title)》由著名作家 <strong>\(item.author)</strong> 所著，是世界思想与文学宝库中的传世明珠。</p>
-            <p>\(introDesc)</p>
-            <blockquote>“阅读是一场跨越时空的深层对话。通过文字，我们得以与伟大的心灵共鸣。”</blockquote>
-            <p>在接下来的篇章中，读者将深入体验作者构建的思想世界与叙事艺术。</p>
-            """),
-            ("第二章：核心思想与艺术特色精析", """
-            <h1>第二章：核心思想与艺术特色精析</h1>
-            <p>一部经典的伟大之处，在于它不仅属于其诞生的时代，更能够穿透历史的迷雾，持续回应每个时代人类内心的终极困惑。</p>
-            <blockquote>“好书不仅解答疑惑，更重塑我们提问的视角与理解世界的维度。”</blockquote>
-            <p>建议读者在阅读时利用 DReader 划线与 AI 伴读功能，随时与本地智能体就关键段落展开思辨探讨。</p>
-            """)
-        ]
-
-        return await SampleBookGenerator.shared.buildEPUB(
-            targetURL: targetURL,
-            bookId: item.id,
-            title: item.title,
-            author: item.author,
-            description: introDesc,
             coverImageData: coverData,
             chapters: chapters
         )

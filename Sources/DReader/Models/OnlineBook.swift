@@ -83,6 +83,10 @@ struct OnlineBookItem: Identifiable, Sendable {
         self.isPublicDomain = isPublicDomain
         self.description = description
     }
+
+    var hasDownloadableContent: Bool {
+        downloadURL != nil || !candidateURLs.isEmpty || (gutenbergID != nil && gutenbergID != "0") || ChineseClassicsRegistry.shared.hasClassic(title: title)
+    }
 }
 
 /// Z-Library User Account & Quota State
