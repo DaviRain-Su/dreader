@@ -8,6 +8,8 @@ struct EPUBThemeInjector {
         opfDir: URL,
         settings: ReaderSettings,
         highlights: [Highlight] = [],
+        bilingualTranslations: [Int: String]? = nil,
+        agentName: String = "AI 伴读",
         hasNextChapter: Bool = false,
         nextChapterTitle: String? = nil,
         bookTitle: String = "",
@@ -21,6 +23,14 @@ struct EPUBThemeInjector {
         var bodyContent = extractBodyContent(from: resolvedHTML)
         if !highlights.isEmpty {
             bodyContent = injectHighlights(in: bodyContent, highlights: highlights)
+        }
+        if settings.isBilingualEnabled {
+            bodyContent = injectBilingualBlocks(
+                in: bodyContent,
+                translations: bilingualTranslations,
+                agentName: agentName,
+                theme: settings.theme
+            )
         }
         let headElements = extractHeadElements(from: resolvedHTML)
         let endCard = generateEndCardHTML(
@@ -145,6 +155,90 @@ struct EPUBThemeInjector {
             }
         }
         return result
+    }
+
+    /// Injects dual-language interlinear translation cards or AI translation slots under each paragraph
+    static func injectBilingualBlocks(
+        in html: String,
+        translations: [Int: String]?,
+        agentName: String,
+        theme: ReaderTheme
+    ) -> String {
+        let pPattern = "(?i)(<p\\b[^>]*>)([\\s\\S]*?)(</p>)"
+        guard let regex = try? NSRegularExpression(pattern: pPattern, options: []) else { return html }
+
+        var result = html
+        let ns = result as NSString
+        let matches = regex.matches(in: result, options: [], range: NSRange(location: 0, length: ns.length))
+
+        // Process in reverse to preserve string indices
+        for (idx, match) in matches.enumerated().reversed() {
+            guard match.numberOfRanges >= 4 else { continue }
+            let openTag = ns.substring(with: match.range(at: 1))
+            let innerContent = ns.substring(with: match.range(at: 2))
+            let closeTag = ns.substring(with: match.range(at: 3))
+
+            let plainText = innerContent
+                .replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+
+            if plainText.count < 2 {
+                continue
+            }
+
+            var newOpen = openTag
+            if !newOpen.contains("data-dreader-para") {
+                newOpen = newOpen.replacingOccurrences(of: ">", with: " data-dreader-para=\"\(idx)\">")
+            }
+
+            var bilingualBlock = ""
+            if let trans = translations?[idx], !trans.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                bilingualBlock = """
+                <div class="dreader-bilingual-trans" data-para-index="\(idx)">
+                    <div class="dreader-bilingual-header">
+                        <span class="dreader-bilingual-tag">译</span>
+                        <span class="dreader-bilingual-agent">\(agentName) 译文</span>
+                    </div>
+                    <div class="dreader-bilingual-body">\(trans)</div>
+                </div>
+                """
+            } else {
+                bilingualBlock = """
+                <div class="dreader-bilingual-slot" id="dreader-trans-slot-\(idx)" data-para-index="\(idx)">
+                    <button class="dreader-bilingual-translate-btn" onclick="window.dreaderTranslateParagraph(\(idx), this)">
+                        <span class="dreader-bilingual-icon">🌐</span>
+                        <span>AI 伴读翻译</span>
+                    </button>
+                </div>
+                """
+            }
+
+            let newSnippet = "\(newOpen)\(innerContent)\(closeTag)\(bilingualBlock)"
+            result = (result as NSString).replacingCharacters(in: match.range, with: newSnippet)
+        }
+
+        return result
+    }
+
+    /// Extracts clean text of all paragraphs in the HTML for batch chapter translation
+    static func extractParagraphsFromHTML(_ rawHTML: String) -> [(index: Int, text: String)] {
+        let pPattern = "(?i)<p\\b[^>]*>([\\s\\S]*?)</p>"
+        guard let regex = try? NSRegularExpression(pattern: pPattern, options: []) else { return [] }
+        let ns = rawHTML as NSString
+        let matches = regex.matches(in: rawHTML, options: [], range: NSRange(location: 0, length: ns.length))
+
+        var results: [(index: Int, text: String)] = []
+        for (idx, m) in matches.enumerated() {
+            if m.numberOfRanges >= 2 {
+                let inner = ns.substring(with: m.range(at: 1))
+                let plain = inner.replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                if plain.count >= 2 {
+                    results.append((index: idx, text: plain))
+                }
+            }
+        }
+        return results
     }
 
     static func extractBodyContent(from rawHTML: String) -> String {
@@ -578,6 +672,93 @@ struct EPUBThemeInjector {
 
         .dreader-end-btn:active {
             transform: translateY(0) scale(0.98) !important;
+        }
+
+        /* Bilingual Interlinear Typography (Apple Books Style) */
+        .dreader-bilingual-trans {
+            display: block !important;
+            margin: 8px 0 20px 0 !important;
+            padding: 10px 14px !important;
+            background-color: \(theme.isDark ? "rgba(255, 255, 255, 0.05)" : "rgba(0, 0, 0, 0.028)") !important;
+            border-left: 3px solid \(theme.accentColorHex) !important;
+            border-radius: 6px !important;
+            font-size: 0.9em !important;
+            line-height: 1.68 !important;
+            color: \(theme.secondaryTextColorHex) !important;
+            transition: all 0.2s ease-in-out !important;
+            animation: dreader-bilingual-appear 0.25s ease-out !important;
+        }
+
+        @keyframes dreader-bilingual-appear {
+            0% { opacity: 0; transform: translateY(-4px); }
+            100% { opacity: 1; transform: translateY(0); }
+        }
+
+        .dreader-bilingual-header {
+            display: flex !important;
+            align-items: center !important;
+            gap: 6px !important;
+            margin-bottom: 5px !important;
+            user-select: none !important;
+        }
+
+        .dreader-bilingual-tag {
+            display: inline-flex !important;
+            align-items: center !important;
+            justify-content: center !important;
+            width: 15px !important;
+            height: 15px !important;
+            font-size: 9.5px !important;
+            font-weight: 700 !important;
+            color: #ffffff !important;
+            background: linear-gradient(135deg, #4F46E5, #7C3AED) !important;
+            border-radius: 3px !important;
+        }
+
+        .dreader-bilingual-agent {
+            font-size: 10.5px !important;
+            font-weight: 500 !important;
+            color: \(theme.accentColorHex) !important;
+            opacity: 0.9 !important;
+        }
+
+        .dreader-bilingual-body {
+            font-size: inherit !important;
+            color: inherit !important;
+            line-height: inherit !important;
+            text-indent: 0 !important;
+        }
+
+        .dreader-bilingual-slot {
+            display: flex !important;
+            align-items: center !important;
+            margin: 4px 0 16px 0 !important;
+        }
+
+        .dreader-bilingual-translate-btn {
+            display: inline-flex !important;
+            align-items: center !important;
+            gap: 5px !important;
+            padding: 3.5px 11px !important;
+            font-size: 11px !important;
+            font-weight: 500 !important;
+            color: \(theme.accentColorHex) !important;
+            background-color: \(theme.isDark ? "rgba(255, 255, 255, 0.06)" : "rgba(0, 0, 0, 0.035)") !important;
+            border: 1px solid \(theme.accentColorHex)40 !important;
+            border-radius: 12px !important;
+            cursor: pointer !important;
+            transition: all 0.18s ease !important;
+        }
+
+        .dreader-bilingual-translate-btn:hover {
+            background-color: \(theme.accentColorHex)20 !important;
+            border-color: \(theme.accentColorHex)90 !important;
+            transform: translateY(-1px) !important;
+        }
+
+        .dreader-bilingual-translate-btn:disabled {
+            opacity: 0.65 !important;
+            cursor: default !important;
         }
 
         /* Apple Books Style Search Match Glowing Halo */
@@ -1093,6 +1274,34 @@ struct EPUBThemeInjector {
                     }
                 }
                 return false;
+            };
+
+            // Bilingual Paragraph Translation Trigger
+            window.dreaderTranslateParagraph = function(index, btn) {
+                if (btn) {
+                    btn.disabled = true;
+                    btn.innerHTML = '<span style="display:inline-block;animation:dreader-spin 1s infinite linear;">⏳</span> <span>正在调用 AI 伴读翻译...</span>';
+                }
+                const paraElem = document.querySelector('[data-dreader-para="' + index + '"]');
+                const text = paraElem ? paraElem.innerText.trim() : '';
+                if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.selectionBridge) {
+                    window.webkit.messageHandlers.selectionBridge.postMessage({
+                        type: 'translateParagraph',
+                        index: index,
+                        text: text
+                    });
+                }
+            };
+
+            // In-place Real-Time DOM Translation Replacement
+            window.dreaderUpdateTranslation = function(index, transText, agentName) {
+                const slot = document.getElementById('dreader-trans-slot-' + index);
+                if (!slot) return;
+                const div = document.createElement('div');
+                div.className = 'dreader-bilingual-trans';
+                div.setAttribute('data-para-index', index);
+                div.innerHTML = '<div class="dreader-bilingual-header"><span class="dreader-bilingual-tag">译</span><span class="dreader-bilingual-agent">' + (agentName || 'AI 伴读') + ' 译文</span></div><div class="dreader-bilingual-body">' + transText + '</div>';
+                slot.parentNode.replaceChild(div, slot);
             };
         })();
         """

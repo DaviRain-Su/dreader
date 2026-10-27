@@ -544,4 +544,78 @@ final class ReaderViewModel: @unchecked Sendable {
             try? FileManager.default.removeItem(at: removedBook.unzippedDirectory)
         }
     }
+
+    // MARK: - Bilingual Interlinear Reading Management
+    var updateTranslationAction: ((Int, String, String) -> Void)?
+    var isTranslatingChapter: Bool {
+        BilingualTranslationService.shared.isTranslatingChapter
+    }
+    var chapterTranslationProgress: Double {
+        BilingualTranslationService.shared.currentProgressRatio
+    }
+
+    func currentChapterBilingualTranslations() -> [Int: String]? {
+        guard let book = currentBook else { return nil }
+        return BilingualTranslationService.shared.getCachedTranslations(
+            bookTitle: book.title,
+            chapterIndex: book.currentChapterIndex
+        )
+    }
+
+    func toggleBilingualMode() {
+        withAnimation(.easeInOut(duration: 0.2)) {
+            settings.isBilingualEnabled.toggle()
+        }
+    }
+
+    func translateParagraphAt(index: Int, text: String) {
+        guard let book = currentBook, let chapter = book.currentChapter else { return }
+        let bookTitle = book.title
+        let chapterTitle = chapter.title
+        let chapterIndex = book.currentChapterIndex
+        let agentName = agentService.currentPreset.name
+
+        Task {
+            let translation = await BilingualTranslationService.shared.translateParagraph(
+                text: text,
+                bookTitle: bookTitle,
+                chapterTitle: chapterTitle,
+                chapterIndex: chapterIndex,
+                paragraphIndex: index,
+                agentService: agentService
+            )
+
+            await MainActor.run {
+                self.updateTranslationAction?(index, translation, agentName)
+            }
+        }
+    }
+
+    func translateCurrentChapterWithAgent() {
+        guard let book = currentBook, let chapter = book.currentChapter else { return }
+        let bookTitle = book.title
+        let chapterTitle = chapter.title
+        let chapterIndex = book.currentChapterIndex
+        let agentName = agentService.currentPreset.name
+
+        let rawHTML = getCachedHTML(for: chapter.fileURL) ?? (try? String(contentsOf: chapter.fileURL, encoding: .utf8)) ?? ""
+        let paragraphs = EPUBThemeInjector.extractParagraphsFromHTML(rawHTML)
+        guard !paragraphs.isEmpty else { return }
+
+        let cached = BilingualTranslationService.shared.getCachedTranslations(bookTitle: bookTitle, chapterIndex: chapterIndex) ?? [:]
+        let toTranslate = paragraphs.filter { cached[$0.index] == nil }
+
+        Task {
+            await BilingualTranslationService.shared.translateEntireChapter(
+                paragraphs: toTranslate,
+                bookTitle: bookTitle,
+                chapterTitle: chapterTitle,
+                chapterIndex: chapterIndex,
+                agentService: agentService,
+                onParagraphTranslated: { idx, trans in
+                    self.updateTranslationAction?(idx, trans, agentName)
+                }
+            )
+        }
+    }
 }

@@ -246,6 +246,96 @@ final class AIAgentService: @unchecked Sendable {
         isGenerating = false
     }
 
+    // MARK: - Direct Literary Translation with Active Agent
+    func translate(
+        text: String,
+        bookTitle: String,
+        chapterTitle: String
+    ) async throws -> String {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "" }
+
+        if currentPreset.driverType == .embedded {
+            return EmbeddedTranslationEngine.shared.translate(text: trimmed, bookTitle: bookTitle)
+        }
+
+        let systemContext = """
+        你是一位兼备信达雅的文学翻译名家。
+        【任务要求】
+        请将书籍段落翻译为地道、典雅、符合原著语境的中文。
+        要求原汁原味，措辞优美，符合现代文学名著名译标准。
+        严禁输出任何多余的引言、解释、前后缀或 Markdown 标题，直接输出纯中文译文即可。
+
+        【书本信息】
+        书籍：《\(bookTitle)》
+        章节：\(chapterTitle)
+        """
+
+        var collectedResult = ""
+        do {
+            switch currentPreset.driverType {
+            case .acpStdio:
+                try await runACPStdio(
+                    command: customCommand,
+                    systemPrompt: systemContext,
+                    userPrompt: trimmed,
+                    activeQuote: nil,
+                    onToken: { token in
+                        collectedResult += token
+                    }
+                )
+
+            case .cliStreaming:
+                try await runCLIStreaming(
+                    command: customCommand,
+                    systemPrompt: systemContext,
+                    userPrompt: trimmed,
+                    activeQuote: nil,
+                    onToken: { token in
+                        collectedResult += token
+                    }
+                )
+
+            case .httpAdapter:
+                if currentPreset.id == "ollama" {
+                    try await runOllamaAdapter(
+                        endpoint: customCommand,
+                        model: selectedModel,
+                        systemPrompt: systemContext,
+                        history: [],
+                        userPrompt: trimmed,
+                        onToken: { token in
+                            collectedResult += token
+                        }
+                    )
+                } else {
+                    try await runOpenAIAdapter(
+                        endpoint: customCommand,
+                        model: selectedModel,
+                        systemPrompt: systemContext,
+                        history: [],
+                        userPrompt: trimmed,
+                        onToken: { token in
+                            collectedResult += token
+                        }
+                    )
+                }
+
+            case .embedded:
+                return EmbeddedTranslationEngine.shared.translate(text: trimmed, bookTitle: bookTitle)
+            }
+
+            let finalStr = collectedResult.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !finalStr.isEmpty {
+                return finalStr
+            }
+        } catch {
+            return EmbeddedTranslationEngine.shared.translate(text: trimmed, bookTitle: bookTitle)
+        }
+
+        return EmbeddedTranslationEngine.shared.translate(text: trimmed, bookTitle: bookTitle)
+    }
+
     // MARK: - Driver 1: ACP Stdio Process Runner (Grok, Kimi, Devin)
     private func runACPStdio(
         command: String,

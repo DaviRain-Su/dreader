@@ -2,6 +2,10 @@ import SwiftUI
 
 struct ReaderTypographySettingsPopover: View {
     @Bindable var settings: ReaderSettings
+    var agentName: String = "AI 伴读"
+    var isTranslating: Bool = false
+    var translationProgress: Double = 0.0
+    var onTranslateChapter: (() -> Void)? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -208,6 +212,68 @@ struct ReaderTypographySettingsPopover: View {
                         .foregroundStyle(.purple)
                     Text("沉浸模式 (隐藏边栏与顶栏)")
                         .font(.system(size: 11.5))
+                }
+            }
+
+            Divider()
+                .opacity(0.3)
+
+            // Bilingual Interlinear Reading Section
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    HStack(spacing: 4) {
+                        Image(systemName: "character.book.closed.fill")
+                            .foregroundStyle(.purple)
+                        Text("双语对照模式")
+                            .font(.system(size: 11.5, weight: .semibold))
+                    }
+                    Spacer()
+                    Toggle("", isOn: $settings.isBilingualEnabled)
+                        .labelsHidden()
+                        .toggleStyle(.switch)
+                        .controlSize(.mini)
+                }
+
+                if settings.isBilingualEnabled {
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack(spacing: 4) {
+                            Text("翻译驱动:")
+                                .font(.system(size: 10))
+                                .foregroundStyle(.secondary)
+                            Text(agentName)
+                                .font(.system(size: 10, weight: .bold))
+                                .foregroundStyle(.purple)
+                        }
+
+                        if isTranslating {
+                            HStack(spacing: 6) {
+                                ProgressView(value: translationProgress)
+                                    .progressViewStyle(.linear)
+                                Text("\(Int(translationProgress * 100))%")
+                                    .font(.system(size: 9.5, design: .monospaced))
+                                    .foregroundStyle(.secondary)
+                            }
+                        } else if let onTranslate = onTranslateChapter {
+                            Button {
+                                onTranslate()
+                            } label: {
+                                HStack(spacing: 4) {
+                                    Image(systemName: "sparkles")
+                                    Text("一键全章 AI 双语翻译")
+                                }
+                                .font(.system(size: 11, weight: .medium))
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 4.5)
+                                .background(Color.purple.opacity(0.12))
+                                .foregroundStyle(.purple)
+                                .clipShape(RoundedRectangle(cornerRadius: 6))
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    .padding(8)
+                    .background(Color.primary.opacity(0.03))
+                    .clipShape(RoundedRectangle(cornerRadius: 7))
                 }
             }
         }

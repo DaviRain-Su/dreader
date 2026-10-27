@@ -91,6 +91,18 @@ struct DReaderApp: App {
 
                 Divider()
 
+                Button(viewModel.settings.isBilingualEnabled ? "关闭双语段落对照" : "开启双语段落对照") {
+                    viewModel.toggleBilingualMode()
+                }
+                .keyboardShortcut("t", modifiers: .command)
+
+                Button("AI 智能全章双语翻译") {
+                    viewModel.translateCurrentChapterWithAgent()
+                }
+                .keyboardShortcut("t", modifiers: [.command, .shift])
+
+                Divider()
+
                 Button("切换 AI 伴读面板") {
                     withAnimation {
                         viewModel.isAIPanelVisible.toggle()

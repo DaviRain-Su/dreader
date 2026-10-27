@@ -501,6 +501,34 @@ struct ReaderMainView: View {
             .keyboardShortcut("d", modifiers: .command)
             .help(vm.isCurrentChapterBookmarked() ? "移除当前书签 (⌘ + D)" : "添加折角书签 (⌘ + D)")
 
+            // Bilingual Interlinear Reading Toggle Button (⌘ + T)
+            Button {
+                vm.toggleBilingualMode()
+            } label: {
+                HStack(spacing: 3.5) {
+                    Image(systemName: "character.book.closed.fill")
+                        .font(.system(size: 11))
+                    Text("双语")
+                        .font(.system(size: 11, weight: .bold))
+                }
+                .foregroundStyle(vm.settings.isBilingualEnabled ? Color.white : Color.primary.opacity(0.85))
+                .padding(.horizontal, 9)
+                .frame(height: 28)
+                .background(
+                    vm.settings.isBilingualEnabled
+                        ? AnyShapeStyle(LinearGradient(colors: [Color.blue, Color.purple], startPoint: .topLeading, endPoint: .bottomTrailing))
+                        : AnyShapeStyle(.ultraThinMaterial)
+                )
+                .clipShape(Capsule())
+                .overlay(
+                    Capsule().stroke(vm.settings.isBilingualEnabled ? Color.purple.opacity(0.6) : Color.white.opacity(0.2), lineWidth: 0.5)
+                )
+                .shadow(color: vm.settings.isBilingualEnabled ? Color.purple.opacity(0.35) : Color.clear, radius: 4, y: 1.5)
+            }
+            .buttonStyle(.plain)
+            .keyboardShortcut("t", modifiers: .command)
+            .help(vm.settings.isBilingualEnabled ? "关闭双语对照 (⌘ + T)" : "开启段落双语对照 (⌘ + T)")
+
             // Typography Setting Popover Button (Apple Books "Aa" Icon)
             Button {
                 showTypographyPopover.toggle()
@@ -518,7 +546,15 @@ struct ReaderMainView: View {
             }
             .buttonStyle(.plain)
             .popover(isPresented: $showTypographyPopover, arrowEdge: .bottom) {
-                ReaderTypographySettingsPopover(settings: vm.settings)
+                ReaderTypographySettingsPopover(
+                    settings: vm.settings,
+                    agentName: vm.agentService.currentPreset.name,
+                    isTranslating: vm.isTranslatingChapter,
+                    translationProgress: vm.chapterTranslationProgress,
+                    onTranslateChapter: {
+                        vm.translateCurrentChapterWithAgent()
+                    }
+                )
             }
             .help("排版设置与主题风格")
 
@@ -643,6 +679,14 @@ struct ReaderMainView: View {
                         },
                         onSocraticThought: { question in
                             vm.applyHighlight(colorHex: "#FFE066", note: "【针对苏格拉底之问的思考】：\n\(question)")
+                        },
+                        bilingualTranslations: vm.currentChapterBilingualTranslations(),
+                        agentName: vm.agentService.currentPreset.name,
+                        onTranslateParagraph: { idx, text in
+                            vm.translateParagraphAt(index: idx, text: text)
+                        },
+                        registerUpdateTranslationAction: { action in
+                            vm.updateTranslationAction = action
                         },
                         onScrollProgress: { pct in vm.chapterScrollProgress = pct },
                         registerScrollAction: { action in vm.scrollPageAction = action },

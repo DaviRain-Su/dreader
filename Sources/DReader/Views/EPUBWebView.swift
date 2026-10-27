@@ -18,6 +18,10 @@ struct EPUBWebView: NSViewRepresentable {
     let onPrevChapter: () -> Void
     var onSocraticAI: ((String) -> Void)? = nil
     var onSocraticThought: ((String) -> Void)? = nil
+    var bilingualTranslations: [Int: String]? = nil
+    var agentName: String = "AI 伴读"
+    var onTranslateParagraph: ((Int, String) -> Void)? = nil
+    var registerUpdateTranslationAction: ((@escaping (Int, String, String) -> Void) -> Void)? = nil
     let onScrollProgress: (Double) -> Void
     let registerScrollAction: (@escaping (Int) -> Void) -> Void
     let registerHighlightAction: (@escaping (String, String, String?) -> Void) -> Void
@@ -73,6 +77,9 @@ struct EPUBWebView: NSViewRepresentable {
         registerScrollToSearchMatchAction? { [weak coordinator = context.coordinator] keyword, matchIdx in
             coordinator?.scrollToSearchMatch(keyword: keyword, matchIndex: matchIdx)
         }
+        registerUpdateTranslationAction? { [weak coordinator = context.coordinator] index, text, agentName in
+            coordinator?.updateTranslationInDOM(index: index, translation: text, agentName: agentName)
+        }
 
         context.coordinator.loadChapter(
             url: chapterURL,
@@ -87,8 +94,11 @@ struct EPUBWebView: NSViewRepresentable {
     }
 
     func updateNSView(_ nsView: WKWebView, context: Context) {
+        let prevBilingual = context.coordinator.lastBilingualEnabled
         context.coordinator.parent = self
-        if context.coordinator.currentURL != chapterURL {
+        context.coordinator.lastBilingualEnabled = settings.isBilingualEnabled
+
+        if context.coordinator.currentURL != chapterURL || prevBilingual != settings.isBilingualEnabled {
             context.coordinator.loadChapter(
                 url: chapterURL,
                 opfDir: opfDirectory,
@@ -108,7 +118,7 @@ struct EPUBWebView: NSViewRepresentable {
     }
 
     private var settingsSummary: String {
-        "\(settings.theme.rawValue)-\(settings.fontFamily.rawValue)-\(settings.fontSize)-\(settings.lineHeight)-\(settings.maxWidth)-\(settings.paragraphSpacing)-\(settings.isJustified)-\(settings.pageLayout.rawValue)-\(highlightsSummary)"
+        "\(settings.theme.rawValue)-\(settings.fontFamily.rawValue)-\(settings.fontSize)-\(settings.lineHeight)-\(settings.maxWidth)-\(settings.paragraphSpacing)-\(settings.isJustified)-\(settings.pageLayout.rawValue)-\(settings.isBilingualEnabled)-\(highlightsSummary)"
     }
 
     // MARK: - Coordinator
@@ -119,6 +129,7 @@ struct EPUBWebView: NSViewRepresentable {
         var currentOpfDir: URL?
         var isPageReady: Bool = false
         var lastSettingsSummary: String = ""
+        var lastBilingualEnabled: Bool = false
 
         init(_ parent: EPUBWebView) {
             self.parent = parent
@@ -225,6 +236,8 @@ struct EPUBWebView: NSViewRepresentable {
                     opfDir: opfDir,
                     settings: settings,
                     highlights: parent.highlights,
+                    bilingualTranslations: parent.bilingualTranslations,
+                    agentName: parent.agentName,
                     hasNextChapter: hasNextChapter,
                     nextChapterTitle: nextChapterTitle,
                     bookTitle: parent.bookTitle,
@@ -262,6 +275,14 @@ struct EPUBWebView: NSViewRepresentable {
             var bodyContent = EPUBThemeInjector.extractBodyContent(from: resolvedHTML)
             if !highlights.isEmpty {
                 bodyContent = EPUBThemeInjector.injectHighlights(in: bodyContent, highlights: highlights)
+            }
+            if settings.isBilingualEnabled {
+                bodyContent = EPUBThemeInjector.injectBilingualBlocks(
+                    in: bodyContent,
+                    translations: parent.bilingualTranslations,
+                    agentName: parent.agentName,
+                    theme: settings.theme
+                )
             }
             let headElements = EPUBThemeInjector.extractHeadElements(from: resolvedHTML)
             let endCard = EPUBThemeInjector.generateEndCardHTML(
@@ -407,8 +428,23 @@ struct EPUBWebView: NSViewRepresentable {
                     self.parent.onSocraticAI?(q)
                 } else if type == "socraticThought", let q = body["question"] as? String {
                     self.parent.onSocraticThought?(q)
+                } else if type == "translateParagraph",
+                          let idx = body["index"] as? Int,
+                          let text = body["text"] as? String {
+                    self.parent.onTranslateParagraph?(idx, text)
                 }
             }
+        }
+
+        func updateTranslationInDOM(index: Int, translation: String, agentName: String) {
+            guard let webView = webView else { return }
+            guard let jsonTextData = try? JSONSerialization.data(withJSONObject: [translation]),
+                  let jsonText = String(data: jsonTextData, encoding: .utf8),
+                  let jsonAgentData = try? JSONSerialization.data(withJSONObject: [agentName]),
+                  let jsonAgent = String(data: jsonAgentData, encoding: .utf8) else { return }
+
+            let js = "window.dreaderUpdateTranslation(\(index), \(jsonText)[0], \(jsonAgent)[0]);"
+            webView.evaluateJavaScript(js, completionHandler: nil)
         }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {

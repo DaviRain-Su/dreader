@@ -162,6 +162,14 @@ enum ReaderPageLayout: String, CaseIterable, Identifiable, Codable {
     }
 }
 
+/// Bilingual reading layout mode
+enum BilingualDisplayMode: String, CaseIterable, Identifiable, Codable {
+    case interlinear = "段落下对照"
+    case sideBySide = "左右分栏对照"
+
+    var id: String { rawValue }
+}
+
 /// User's reading preferences
 @Observable
 final class ReaderSettings: @unchecked Sendable {
@@ -174,6 +182,10 @@ final class ReaderSettings: @unchecked Sendable {
     var isJustified: Bool = true
     var pageLayout: ReaderPageLayout = .single
     var isZenMode: Bool = false
+
+    // Bilingual Reading
+    var isBilingualEnabled: Bool = false
+    var bilingualMode: BilingualDisplayMode = .interlinear
 
     init() {}
 }
