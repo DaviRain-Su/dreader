@@ -368,6 +368,7 @@ final class LibraryDatabase: @unchecked Sendable {
             _ = sqlite3_step(stmt)
         }
         sqlite3_exec(db, "COMMIT", nil, nil, nil)
+        ICloudBackupService.shared.scheduleBackup()
     }
 
     func deleteHighlight(id: UUID) {
@@ -378,6 +379,7 @@ final class LibraryDatabase: @unchecked Sendable {
             defer { sqlite3_finalize(stmt) }
             bindText(stmt, 1, id.uuidString)
             _ = sqlite3_step(stmt)
+            ICloudBackupService.shared.scheduleBackup()
         }
     }
 
@@ -447,6 +449,7 @@ final class LibraryDatabase: @unchecked Sendable {
             _ = sqlite3_step(stmt)
         }
         sqlite3_exec(db, "COMMIT", nil, nil, nil)
+        ICloudBackupService.shared.scheduleBackup()
     }
 
     func deleteBookmark(id: UUID) {
@@ -457,6 +460,7 @@ final class LibraryDatabase: @unchecked Sendable {
             defer { sqlite3_finalize(stmt) }
             bindText(stmt, 1, id.uuidString)
             _ = sqlite3_step(stmt)
+            ICloudBackupService.shared.scheduleBackup()
         }
     }
 

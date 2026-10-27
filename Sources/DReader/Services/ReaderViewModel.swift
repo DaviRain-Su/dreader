@@ -41,8 +41,18 @@ final class ReaderViewModel: @unchecked Sendable {
     @MainActor
     func initializeLibrary() async {
         isLoadingBook = true
-        let sampleURLs = await SampleBookGenerator.shared.generateAllSampleBooksIfNeeded()
 
+        // 1. Restore persisted shelf EPUBs (manually imported books are copied here so
+        //    they survive app restarts and Caches purges)
+        for url in Self.persistedLibraryEPUBs() {
+            if let book = try? await EPUBParser.shared.parse(fileURL: url) {
+                if books.contains(where: { $0.title == book.title }) { continue }
+                books.append(book)
+            }
+        }
+
+        // 2. Sample books
+        let sampleURLs = await SampleBookGenerator.shared.generateAllSampleBooksIfNeeded()
         for url in sampleURLs {
             if let book = try? await EPUBParser.shared.parse(fileURL: url) {
                 if let idx = books.firstIndex(where: { $0.title == book.title }) {
@@ -56,6 +66,38 @@ final class ReaderViewModel: @unchecked Sendable {
 
         isLoadingBook = false
         // Keep isViewingBookshelf = true so the user starts at the bookshelf!
+    }
+
+    /// Canonical shelf directory: Application Support/DReader (legacy samples) + DownloadedBooks/
+    static func persistedLibraryEPUBs() -> [URL] {
+        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        let base = appSupport.appendingPathComponent("DReader", isDirectory: true)
+        var urls: [URL] = []
+        let fm = FileManager.default
+        for dir in [base, base.appendingPathComponent("DownloadedBooks")] {
+            if let items = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) {
+                urls.append(contentsOf: items.filter { $0.pathExtension.lowercased() == "epub" })
+            }
+        }
+        // Order: file modification (newest first) to keep the shelf fresh-feeling on restore
+        return urls.sorted { a, b in
+            let da = (try? fm.attributesOfItem(atPath: a.path)[.modificationDate] as? Date) ?? .distantPast
+            let db = (try? fm.attributesOfItem(atPath: b.path)[.modificationDate] as? Date) ?? .distantPast
+            return da > db
+        }
+    }
+
+    /// Copies a newly imported EPUB into the persistent shelf dir (idempotent: overwrites by name).
+    private func persistShelfCopy(for fileURL: URL) {
+        guard fileURL.pathExtension.lowercased() == "epub" else { return }
+        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        let shelfDir = appSupport.appendingPathComponent("DReader/DownloadedBooks", isDirectory: true)
+        try? FileManager.default.createDirectory(at: shelfDir, withIntermediateDirectories: true)
+        let destination = shelfDir.appendingPathComponent(fileURL.lastPathComponent)
+        // Same name + already present: skip (parser's bookId is filename-derived, so highlights stay bound)
+        if FileManager.default.fileExists(atPath: destination.path) { return }
+        try? FileManager.default.removeItem(at: destination)
+        try? FileManager.default.copyItem(at: fileURL, to: destination)
     }
 
     func returnToBookshelf() {
@@ -87,6 +129,7 @@ final class ReaderViewModel: @unchecked Sendable {
 
         do {
             let book = try await EPUBParser.shared.parse(fileURL: url)
+            persistShelfCopy(for: url)
             if let existingIndex = books.firstIndex(where: { $0.title == book.title }) {
                 books[existingIndex] = book
                 selectBookForReading(book)
@@ -509,6 +552,49 @@ final class ReaderViewModel: @unchecked Sendable {
             }
         } else {
             scrollToSearchMatchAction?(item.keyword, item.matchIndexInChapter)
+        }
+    }
+
+    // MARK: - Cross-Book Library Search (全书库搜索)
+    var crossBookGroups: [CrossBookSearchGroup] = []
+    var isCrossBookSearching = false
+    private var crossBookTask: Task<Void, Never>?
+
+    func performCrossBookSearch(query rawQuery: String) {
+        crossBookTask?.cancel()
+        let trimmed = rawQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            crossBookGroups = []
+            isCrossBookSearching = false
+            return
+        }
+        isCrossBookSearching = true
+
+        crossBookTask = Task {
+            try? await Task.sleep(nanoseconds: 200_000_000) // 200ms debounce
+            if Task.isCancelled { return }
+            let library = await MainActor.run { self.books }
+            let groups = await Task.detached(priority: .userInitiated) {
+                CrossBookSearchService.shared.searchOnce(query: trimmed, across: library)
+            }.value
+            guard !Task.isCancelled else { return }
+            self.crossBookGroups = groups
+            self.isCrossBookSearching = false
+        }
+    }
+
+    /// 从跨书搜索结果打开对应书籍并跳转到该章
+    @MainActor
+    func openCrossBookResult(_ item: CrossBookSearchItem) {
+        if let current = currentBook, current.id == item.bookId {
+            jumpToChapter(item.chapterIndex)
+            return
+        }
+        guard let target = books.first(where: { $0.id == item.bookId }) else { return }
+        isSearchPresented = false
+        Task {
+            await openEPUB(url: target.fileURL)
+            jumpToChapter(item.chapterIndex)
         }
     }
 

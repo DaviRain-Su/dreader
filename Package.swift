@@ -7,7 +7,8 @@ let package = Package(
         .macOS(.v14)
     ],
     products: [
-        .executable(name: "DReader", targets: ["DReader"])
+        .executable(name: "DReader", targets: ["DReader"]),
+        .executable(name: "dreader-mcp", targets: ["dreader-mcp"]),
     ],
     dependencies: [],
     targets: [
@@ -15,6 +16,11 @@ let package = Package(
             name: "DReader",
             dependencies: [],
             path: "Sources/DReader"
-        )
+        ),
+        .executableTarget(
+            name: "dreader-mcp",
+            dependencies: [],
+            path: "Sources/dreader-mcp"
+        ),
     ]
 )
