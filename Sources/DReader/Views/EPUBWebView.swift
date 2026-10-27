@@ -22,6 +22,7 @@ struct EPUBWebView: NSViewRepresentable {
     var agentName: String = "AI 伴读"
     var onTranslateParagraph: ((Int, String) -> Void)? = nil
     var registerUpdateTranslationAction: ((@escaping (Int, String, String) -> Void) -> Void)? = nil
+    var onChapterLinkTapped: ((URL) -> Bool)? = nil
     let onScrollProgress: (Double) -> Void
     let registerScrollAction: (@escaping (Int) -> Void) -> Void
     let registerHighlightAction: (@escaping (String, String, String?) -> Void) -> Void
@@ -161,6 +162,24 @@ struct EPUBWebView: NSViewRepresentable {
             }
         }
 
+        /// 拦截页内链接导航（如 Kindle 目录页的章节链接）。
+        /// 原始章节文件大多没有 charset 声明，WebKit 裸导航会按 Latin-1 解码产生乱码，
+        /// 且丢失全部主题/高亮/进度环境。这里转交 Swift 跳章并走完整渲染管线。
+        func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+            guard navigationAction.navigationType == .linkActivated,
+                  let target = navigationAction.request.url else {
+                decisionHandler(.allow)
+                return
+            }
+            // 只拦截书内 file:// 链接；外链与锚点不动（锚点由 JS 端脚注拦截处理）
+            let insideBook = target.path.hasPrefix(parent.unzippedDirectory.path)
+            if insideBook, let handler = parent.onChapterLinkTapped, handler(target) {
+                decisionHandler(.cancel)
+            } else {
+                decisionHandler(.allow)
+            }
+        }
+
         func applyHighlightInDOM(colorHex: String, id: String, note: String?) {
             let escapedNote = note?
                 .replacingOccurrences(of: "\\", with: "\\\\")
@@ -232,12 +251,9 @@ struct EPUBWebView: NSViewRepresentable {
             let rawHTML: String
             if let cached = parent.getCachedHTML(url) {
                 rawHTML = cached
-            } else if let loaded = try? String(contentsOf: url, encoding: .utf8) {
+            } else if let loaded = Self.readTextSmart(url) {
                 rawHTML = loaded
                 parent.cacheHTML(loaded, url)
-            } else if let loadedLatin = try? String(contentsOf: url, encoding: .isoLatin1) {
-                rawHTML = loadedLatin
-                parent.cacheHTML(loadedLatin, url)
             } else {
                 webView.loadFileURL(url, allowingReadAccessTo: unzippedDir)
                 return
@@ -287,6 +303,33 @@ struct EPUBWebView: NSViewRepresentable {
 
         func refreshCurrentChapterHighlights(highlights: [Highlight]) {
             restoreHighlightsInDOM(highlights)
+        }
+
+        /// 智能读文本：UTF-8 → 声明编码 → GBK → Latin-1。
+        /// Kindle 等来源的章节文件可能没有 charset 声明，或声明 GBK 实际 UTF-8，
+        /// 直接 String(contentsOf:encoding:) 会产生 mojibake 乱码。
+        static func readTextSmart(_ url: URL) -> String? {
+            guard let data = try? Data(contentsOf: url) else { return nil }
+            // 1. UTF-8 优先（严格校验，避免半 UTF-8 被误读）
+            if let s = String(data: data, encoding: .utf8) { return s }
+            // 2. 读 XML/HTML 声明中声称的编码
+            let head = String(data: data.prefix(300), encoding: .isoLatin1) ?? ""
+            if let match = head.range(of: "encoding=[\"']([^\"']+)[\"']", options: .regularExpression) {
+                let quoted = head[match]
+                let enc = quoted.split(whereSeparator: { $0 == "\"" || $0 == "'" }).last.map(String.init) ?? ""
+                if !enc.isEmpty {
+                    let iana = CFStringConvertIANACharSetNameToEncoding(enc as CFString)
+                    if iana != kCFStringEncodingInvalidId {
+                        let nsEncoding = CFStringConvertEncodingToNSStringEncoding(iana)
+                        if let s = String(data: data, encoding: String.Encoding(rawValue: nsEncoding)) { return s }
+                    }
+                }
+            }
+            // 3. 中文电子书最常见的 GBK/GB18030 兜底
+            let gbk = CFStringConvertEncodingToNSStringEncoding(CFStringEncoding(CFStringEncodings.GB_18030_2000.rawValue))
+            if let s = String(data: data, encoding: String.Encoding(rawValue: gbk)) { return s }
+            // 4. 最后 Latin-1（永不失败）
+            return String(data: data, encoding: .isoLatin1)
         }
 
         func updateScriptModeInCurrentChapter(

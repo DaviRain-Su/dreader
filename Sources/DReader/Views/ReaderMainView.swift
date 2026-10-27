@@ -788,6 +788,20 @@ struct ReaderMainView: View {
                         registerUpdateTranslationAction: { action in
                             vm.updateTranslationAction = action
                         },
+                        onChapterLinkTapped: { targetURL in
+                            // 页内目录/交叉引用链接：定位目标章节并走完整渲染管线跳转
+                            let standardized = targetURL.standardizedFileURL.path
+                            if let book = vm.currentBook,
+                               let idx = book.chapters.firstIndex(where: { $0.fileURL.standardizedFileURL.path == standardized || $0.fileURL.deletingPathExtension().path == targetURL.path }) {
+                                if targetURL.fragment != nil {
+                                    vm.jumpToChapter(idx)
+                                    return true
+                                }
+                                vm.jumpToChapter(idx)
+                                return true
+                            }
+                            return false
+                        },
                         onScrollProgress: { pct in vm.chapterScrollProgress = pct },
                         registerScrollAction: { action in vm.scrollPageAction = action },
                         registerHighlightAction: { action in vm.applyHighlightAction = action },
