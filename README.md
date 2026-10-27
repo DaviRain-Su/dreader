@@ -20,7 +20,7 @@
    - 彻底解决 macOS Info-ZIP (`unzip`) 遇到中文/Unicode/GBK 文件名崩溃阻断的难题，采用 Apple 官方原生 `/usr/bin/ditto -xk` 解压架构。
    - 具备 XML 命名空间与特殊 HTML 实体（`&nbsp;`、`&mdash;`、未转义 `&` 等）自动修复能力，支持 GB18030 / Big5 / UTF-8 多重编码自适应。
    - 经实机 45 本真实复杂中英文多卷本 EPUB（包括古籍《周易》、146卷《与神对话》、243卷《魔鬼经济学》合集等）严苛测试，达到 **100% 导入解析成功率**。
-   - 内置三本精排经典书目：《瓦尔登湖》、《小王子》、《朝花夕拾》。
+   - 中文古籍自动识别并支持**传统竖排（writing-mode: vertical-rl）**阅读，右起左行古典版式一键切换。
 
 4. **双页对开实体书 & 禅意全屏沉浸模式**
    - **双页对开模式 (`⌘ + ⇧ + D`)**：宽屏下自动呈现实体精装书的双栏对开阅读效果，中央伴随典雅中缝内阴影。
@@ -94,9 +94,56 @@ open Package.swift
 
 ---
 
+## 🔌 MCP Server：让任意 AI 助手读懂你的整个书房
+
+DReader 内置一个本地 MCP (Model Context Protocol) Server（`dreader-mcp`），把你的书架、划线、思考与阅读统计开放给 Claude Desktop、Claude Code 等任意支持 MCP 的 AI 客户端——AI 可以直接检索你的 11554 条划线、跨书查找金句、读取章节原文，而无需你手动复制粘贴。
+
+**开放 5 个工具：**
+
+| 工具 | 能力 |
+| :--- | :--- |
+| `list_books` | 列出书架全部藏书与元数据 |
+| `search_highlights` | 跨书全文检索划线（自动繁→简归一化，支持模糊匹配） |
+| `get_book_notes` | 读取某本书的全部划线与思考笔记 |
+| `get_chapter_text` | 直读某本书某一章的完整原文 |
+| `get_reading_stats` | 获取阅读统计（天数、字数、划线数等） |
+
+### 安装（三步）
+
+```bash
+# 1. 克隆并构建 Release 版 MCP 二进制
+git clone https://github.com/yourname/dreader.git
+cd dreader
+swift build -c release --product dreader-mcp
+
+# 2.（可选）验证二进制可用
+echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}' | .build/release/dreader-mcp
+
+# 3. 注入到 Claude Code（项目级），或复制到 Claude Desktop 配置
+claude mcp add dreader -- "$(pwd)/.build/release/dreader-mcp"
+```
+
+**Claude Desktop 用户**：编辑 `~/Library/Application Support/Claude/claude_desktop_config.json`：
+
+```json
+{
+  "mcpServers": {
+    "dreader": {
+      "command": "/absolute/path/to/dreader/.build/release/dreader-mcp"
+    }
+  }
+}
+```
+
+**Claude Code 用户**：项目根目录已带 `.mcp.json`（`command` 使用 `${CLAUDE_PROJECT_DIR}`），克隆仓库并 `swift build -c release --product dreader-mcp` 后重启 Claude Code 即自动发现。
+
+> 注：MCP Server 直接读取 `~/Library/Application Support/DReader` 下的书库与 SQLite 数据，与 DReader App 共享同一份数据，无需额外配置路径。
+
+---
+
 ## 🗺️ 后续迭代路线
 
 - [ ] PDF 排版解析与多模态视觉版面还原
-- [ ] 本地 MCP (Model Context Protocol) Agent 协议接入
+- [x] 本地 MCP (Model Context Protocol) Agent 协议接入（`dreader-mcp`，5 工具）
 - [ ] 导出阅读高亮与 AI 笔记至 Obsidian / Markdown
 - [ ] 外部 API 服务与自定义云端 Agent 支持

@@ -6,6 +6,10 @@ struct ReaderMainView: View {
     @State private var isHoveringPrev: Bool = false
     @State private var isHoveringNext: Bool = false
     @State private var quoteCardHighlight: Highlight? = nil
+    /// 划线详情弹卡的实测高度（智能放置用）
+    @State private var highlightCardHeight: CGFloat = 175
+    /// 选词悬浮工具条的实测高度
+    @State private var selectionToolbarHeight: CGFloat = 52
 
     var body: some View {
         ZStack(alignment: .top) {
@@ -286,9 +290,14 @@ struct ReaderMainView: View {
 
                             // 1. Floating Selection Toolbar
                             if let selection = vm.selectionManager.activeSelection {
-                                let barW: CGFloat = 340
+                                let barW: CGFloat = min(340, max(280, areaW - 24))
+                                let barH = selectionToolbarHeight
                                 let posX = min(max(selection.x, barW / 2 + 12), max(barW / 2 + 12, areaW - barW / 2 - 12))
-                                let posY = max(selection.y - 32, 28)
+                                // 默认悬于选区上方；贴近顶端时改为选区下方
+                                let aboveY = selection.y - 16 - barH / 2
+                                let posY: CGFloat = (aboveY >= barH / 2 + 8)
+                                    ? aboveY
+                                    : min(selection.bottomY + 16 + barH / 2, areaH - barH / 2 - 8)
 
                                 SelectionFloatingToolbar(
                                     selection: selection,
@@ -369,19 +378,35 @@ struct ReaderMainView: View {
                                 )
                                 .position(x: posX, y: posY)
                                 .transition(.scale(scale: 0.95).combined(with: .opacity))
+                                .onGeometryChange(for: CGFloat.self) { proxy in
+                                    proxy.size.height
+                                } action: { measured in
+                                    if abs(measured - selectionToolbarHeight) > 1 {
+                                        selectionToolbarHeight = measured
+                                    }
+                                }
                             }
 
                             // 2. Floating Highlight & Thought Interaction Card
                             if let cardInfo = vm.selectionManager.activeHighlightCard,
                                let highlight = vm.highlights.first(where: { $0.id == cardInfo.highlightId }) {
-                                let cardW: CGFloat = 280
-                                let cardH: CGFloat = 175
-                                let posX = min(max(cardInfo.x, cardW / 2 + 12), max(cardW / 2 + 12, areaW - cardW / 2 - 12))
+                                // 卡片宽度自适应窗口（260~320），高度按内容实测钳制
+                                let cardW = min(320, max(260, areaW - 24))
+                                let cardH = min(highlightCardHeight, areaH - 24)
+                                let halfW = cardW / 2
+                                let halfH = cardH / 2
 
-                                // Smart vertical placement: above if near bottom, else below
-                                let posY: CGFloat = (cardInfo.bottomY + cardH + 20 < areaH)
-                                    ? (cardInfo.bottomY + cardH / 2 + 8)
-                                    : max(cardH / 2 + 8, cardInfo.y - cardH / 2 - 8)
+                                // 水平：跟随划线中心，左右全钳制（窗口窄时贴边不出界）
+                                let posX = min(max(cardInfo.x, halfW + 8), max(halfW + 8, areaW - halfW - 8))
+
+                                // 垂直：优先下方（bottomY+16 起），空间不足放上方，再不够则贴下缘
+                                let belowY = cardInfo.bottomY + 16 + halfH
+                                let aboveY = cardInfo.y - 16 - halfH
+                                let posY: CGFloat = {
+                                    if belowY + halfH <= areaH - 8 { return belowY }
+                                    if aboveY - halfH >= 8 { return aboveY }
+                                    return areaH - halfH - 8
+                                }()
 
                                 HighlightDetailCard(
                                     highlight: highlight,
@@ -416,6 +441,14 @@ struct ReaderMainView: View {
                                 .position(x: posX, y: posY)
                                 .transition(.scale(scale: 0.95).combined(with: .opacity))
                                 .zIndex(100)
+                                // 实测卡片高度，供智能放置使用
+                                .onGeometryChange(for: CGFloat.self) { proxy in
+                                    proxy.size.height
+                                } action: { measured in
+                                    if abs(measured - highlightCardHeight) > 1 {
+                                        highlightCardHeight = measured
+                                    }
+                                }
                             }
                         }
                     }
@@ -935,8 +968,10 @@ struct ReaderMainView: View {
                             }
                         )
                         .position(
-                            x: min(max(footnote.x, 230), max(230, geo.size.width - 230)),
-                            y: footnote.y + 24
+                            x: min(max(footnote.x, 214), max(214, geo.size.width - 214)),
+                            y: (footnote.bottomY + 300 < geo.size.height)
+                                ? footnote.bottomY + 16 + 140
+                                : max(150, footnote.y - 16 - 140)
                         )
                     }
                     .transition(.scale(scale: 0.92, anchor: .top).combined(with: .opacity))

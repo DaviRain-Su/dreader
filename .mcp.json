@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "dreader": {
+      "command": "${CLAUDE_PROJECT_DIR}/.build/release/dreader-mcp",
+      "env": {}
+    }
+  }
+}

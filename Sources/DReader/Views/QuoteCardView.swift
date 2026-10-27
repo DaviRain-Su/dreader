@@ -99,8 +99,9 @@ struct QuoteCardView: View {
                     // Theme Switcher & Options Bar
                     controlPanel
 
-                    // The Renderable Quote Card Preview
+                    // The Renderable Quote Card Preview（阴影只属于预览层，导出走纯净卡片边界）
                     cardContent
+                        .shadow(color: Color.black.opacity(0.22), radius: 18, x: 0, y: 8)
                         .padding(.vertical, 4)
 
                     Spacer(minLength: 12)
@@ -282,12 +283,12 @@ struct QuoteCardView: View {
                         endPoint: .bottomTrailing
                     )
                 )
-                .shadow(color: Color.black.opacity(0.22), radius: 18, x: 0, y: 8)
                 .overlay(
                     RoundedRectangle(cornerRadius: 16, style: .continuous)
                         .stroke(Color(hex: "#A83226").opacity(0.22), lineWidth: 0.8)
                 )
         )
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
 
     private var horizontalCard: some View {
@@ -424,12 +425,12 @@ struct QuoteCardView: View {
                         endPoint: .bottomTrailing
                     )
                 )
-                .shadow(color: Color.black.opacity(0.22), radius: 18, x: 0, y: 8)
                 .overlay(
                     RoundedRectangle(cornerRadius: 16, style: .continuous)
                         .stroke(selectedTheme.isDark ? Color.white.opacity(0.12) : Color.black.opacity(0.08), lineWidth: 0.8)
                 )
         )
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
 
     // MARK: - Bottom Action Bar
@@ -483,9 +484,28 @@ struct QuoteCardView: View {
     // MARK: - Image Rendering Actions
     @MainActor
     private func generateCardNSImage() -> NSImage? {
+        // 3x 超采样导出，卡片背景已在源视图内含纯色兜底（不透明），
+        // 导出内容不含投影 —— 分享到微信/微博等白底场景不会出现灰脏半透明边。
         let renderer = ImageRenderer(content: cardContent)
-        renderer.scale = 2.0 // Retina 2x high-DPI crisp export
-        return renderer.nsImage
+        renderer.scale = 3.0
+        guard let cgImage = renderer.cgImage else { return renderer.nsImage }
+
+        // 经 8-bit RGBA 位图上下文落盘，避免 TIFF 往返造成的色彩/透明度损耗
+        let width = cgImage.width
+        let height = cgImage.height
+        guard let context = CGContext(
+            data: nil,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: width * 4,
+            space: CGColorSpace(name: CGColorSpace.sRGB)!,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else { return nil }
+
+        context.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
+        guard let flattened = context.makeImage() else { return nil }
+        return NSImage(cgImage: flattened, size: NSSize(width: width / 3, height: height / 3))
     }
 
     @MainActor
