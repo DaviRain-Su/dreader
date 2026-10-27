@@ -437,6 +437,20 @@ struct ReaderMainView: View {
                         withAnimation(.easeInOut(duration: 0.2)) {
                             vm.isAIPanelVisible = false
                         }
+                    },
+                    chapterBodyText: {
+                        vm.currentChapterBodyText()
+                    },
+                    retrieveBookPassages: { question in
+                        guard let book = vm.currentBook else { return [] }
+                        return BookIndexService.shared.retrieve(
+                            question: question,
+                            bookId: book.id,
+                            currentChapterIndex: book.currentChapterIndex
+                        )
+                    },
+                    onJumpToOriginalText: { text in
+                        vm.scrollToSearchMatchAction?(text, 0)
                     }
                 )
                 .transition(.move(edge: .trailing))

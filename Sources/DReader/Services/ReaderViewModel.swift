@@ -204,6 +204,11 @@ final class ReaderViewModel: @unchecked Sendable {
             if let self = self {
                 await self.storePreloadedChapters(preloaded, counts: counts)
             }
+            // Whole-book AI index piggybacks on the same preload pass
+            let preloadedSnapshot = preloaded
+            BookIndexService.shared.ensureIndexBuilt(for: book) { url in
+                preloadedSnapshot[url]
+            }
         }
     }
 
@@ -272,9 +277,26 @@ final class ReaderViewModel: @unchecked Sendable {
     }
 
     // MARK: - Highlighting & Thoughts (WeChat Read style)
+    // MARK: - Highlighting & Thoughts (WeChat Read style)
     func currentBookHighlights() -> [Highlight] {
         guard let book = currentBook else { return [] }
         return highlights.filter { $0.bookTitle == book.title || $0.bookId == book.id }
+    }
+
+    /// Sanitized plain-text of the current chapter for AI context injection.
+    func currentChapterBodyText(maxLength: Int = 14000) -> String {
+        guard let book = currentBook, let chapter = book.currentChapter else { return "" }
+        let raw = getCachedHTML(for: chapter.fileURL)
+            ?? (try? String(contentsOf: chapter.fileURL, encoding: .utf8)) ?? ""
+        guard !raw.isEmpty else { return "" }
+        let body = EPUBThemeInjector.extractBodyContent(from: raw)
+        let sanitized = EPUBThemeInjector.sanitizeAndElevateLayout(body)
+        let paragraphs = EPUBThemeExtractor.extractParagraphs(from: sanitized).map { $0.text }
+        var text = paragraphs.joined(separator: "\n\n")
+        if text.count > maxLength {
+            text = String(text.prefix(maxLength)) + "\n【…（本章内容过长，已截断展示前半部分，可结合具体段落提问获取后文）】"
+        }
+        return text
     }
 
     func currentChapterHighlights() -> [Highlight] {
@@ -357,14 +379,18 @@ final class ReaderViewModel: @unchecked Sendable {
     }
 
     private func savePersistedHighlights() {
-        if let encoded = try? JSONEncoder().encode(highlights) {
-            UserDefaults.standard.set(encoded, forKey: "dreader.highlights")
-        }
+        LibraryDatabase.shared.upsertHighlights(highlights)
+        // Legacy UserDefaults copy retired from active use; SQLite (LibraryDatabase) is now
+        // the source of truth. The old UserDefaults blob stays as a historical backup.
     }
 
     private func loadPersistedHighlights() {
-        if let data = UserDefaults.standard.data(forKey: "dreader.highlights"),
-           let decoded = try? JSONDecoder().decode([Highlight].self, from: data) {
+        let stored = LibraryDatabase.shared.loadHighlights()
+        if !stored.isEmpty {
+            self.highlights = stored
+        } else if let data = UserDefaults.standard.data(forKey: "dreader.highlights"),
+                  let decoded = try? JSONDecoder().decode([Highlight].self, from: data) {
+            // Fallback for the rare case migration was skipped (Database handled it internally too)
             self.highlights = decoded
         }
     }
@@ -522,14 +548,15 @@ final class ReaderViewModel: @unchecked Sendable {
     }
 
     private func savePersistedBookmarks() {
-        if let encoded = try? JSONEncoder().encode(bookmarks) {
-            UserDefaults.standard.set(encoded, forKey: "dreader.bookmarks")
-        }
+        LibraryDatabase.shared.upsertBookmarks(bookmarks)
     }
 
     private func loadPersistedBookmarks() {
-        if let data = UserDefaults.standard.data(forKey: "dreader.bookmarks"),
-           let decoded = try? JSONDecoder().decode([Bookmark].self, from: data) {
+        let stored = LibraryDatabase.shared.loadBookmarks()
+        if !stored.isEmpty {
+            self.bookmarks = stored
+        } else if let data = UserDefaults.standard.data(forKey: "dreader.bookmarks"),
+                  let decoded = try? JSONDecoder().decode([Bookmark].self, from: data) {
             self.bookmarks = decoded
         }
     }

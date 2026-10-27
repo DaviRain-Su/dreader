@@ -296,6 +296,43 @@ struct EPUBThemeInjector {
             content = regex.stringByReplacingMatches(in: content, options: [], range: NSRange(content.startIndex..., in: content), withTemplate: template)
         }
 
+        // 7. Tag every substantive paragraph with a stable `data-dreader-para` index (in
+        //    lockstep with EPUBThemeExtractor.extractParagraphs) so AI citations and other
+        //    features can target paragraphs precisely without the bilingual mode being on.
+        //    NOTE: every <p> consumes an index slot (matching the bilingual injector's
+        //    enumeration scheme); only substantive ones actually receive the attribute.
+        if let regex = try? NSRegularExpression(pattern: "(?i)(<p\\b[^>]*>)", options: []) {
+            let ns = content as NSString
+            var runningIndex = 0
+            // Collect open tags first, then apply replacements in reverse order.
+            var edits: [(range: NSRange, tag: String)] = []
+            regex.enumerateMatches(in: content, options: [], range: NSRange(location: 0, length: ns.length)) { match, _, _ in
+                guard let match else { return }
+                let paraIdx = runningIndex
+                runningIndex += 1
+                let openTag = ns.substring(with: match.range(at: 1))
+                // Look ahead: is this paragraph substantive? Find the matching close tag cheaply.
+                let remainingLength = ns.length - match.range.location
+                if remainingLength <= 0 { return }
+                let lookaheadRange = NSRange(location: match.range.location, length: min(remainingLength, 8000))
+                let inner = ns.substring(with: lookaheadRange)
+                guard let closeIdx = inner.range(of: "</p>", options: .caseInsensitive) else { return }
+                let innerContent = String(inner[..<closeIdx.lowerBound])
+                let plainText = innerContent
+                    .replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                guard plainText.count >= 2 else { return }
+                guard !openTag.contains("data-dreader-para") else { return }
+                let attributedTag = openTag.replacingOccurrences(of: ">", with: " data-dreader-para=\"\(paraIdx)\">")
+                edits.append((match.range(at: 1), attributedTag))
+            }
+            for edit in edits.reversed() {
+                if edit.range.location != NSNotFound, edit.range.location + edit.range.length <= ns.length {
+                    content = (content as NSString).replacingCharacters(in: edit.range, with: edit.tag)
+                }
+            }
+        }
+
         return content
     }
 

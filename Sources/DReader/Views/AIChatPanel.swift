@@ -24,6 +24,12 @@ struct AIChatPanel: View {
     @Binding var activeQuote: String?
     @Bindable var agentService: AIAgentService
     let onClose: () -> Void
+    /// Sanitized plain-text of the current chapter (AI can actually read this chapter)
+    var chapterBodyText: (() -> String)? = nil
+    /// Whole-book paragraph retrieval for the "全书" scope (query -> relevant passages)
+    var retrieveBookPassages: ((String) -> [BookIndexService.IndexedParagraph])? = nil
+    /// Jump-to-text in the reader (clickable AI citations)
+    var onJumpToOriginalText: ((String) -> Void)? = nil
 
     @State private var messages: [ChatMessage] = []
     @State private var inputText: String = ""
@@ -68,8 +74,10 @@ struct AIChatPanel: View {
                         }
 
                         ForEach(messages) { msg in
-                            MessageRow(message: msg)
-                                .id(msg.id)
+                            MessageRow(message: msg) { quoted in
+                                onJumpToOriginalText?(quoted)
+                            }
+                            .id(msg.id)
                         }
 
                         // Thinking placeholder before tokens arrive
@@ -543,7 +551,8 @@ struct AIChatPanel: View {
         var resolvedPrompt = prompt
         var resolvedChapterTitle = currentChapter?.title ?? "当前章节"
 
-        if searchScope == .library {
+        switch searchScope {
+        case .library:
             resolvedChapterTitle = "【全书架跨书智能脑库检索】"
             var libContext = "\n\n【用户书架藏书目录】：\n"
             for b in allBooks {
@@ -551,8 +560,37 @@ struct AIChatPanel: View {
             }
             libContext += "请站在全书架全局宏观视角，融会贯通书架中各名著的思想脉络，进行跨文本深度对照与综合剖析。"
             resolvedPrompt = prompt + libContext
-        } else if searchScope == .book {
+
+        case .book:
             resolvedChapterTitle = "【全书全局视角】" + (currentChapter?.title ?? "")
+            var bookContext = "\n\n【本书全文语境检索（从全书段落索引中精准命中）】：\n"
+            if book != nil {
+                let passages = retrieveBookPassages?(prompt) ?? []
+                if !passages.isEmpty {
+                    bookContext += "《\(book?.title ?? "")》中的相关段落：\n"
+                    let currentIdx = book?.currentChapterIndex ?? -1
+                    for (i, passage) in passages.enumerated() {
+                        let chapterLabel = passage.chapterTitle.isEmpty ? "第\(passage.chapterIndex + 1)章" : passage.chapterTitle
+                        let isCurrent = passage.chapterIndex == currentIdx ? "（当前章节）" : ""
+                        let clipped = passage.text.count > 260 ? String(passage.text.prefix(260)) + "…" : passage.text
+                        bookContext += "\n【段落 \(i + 1) · 「\(chapterLabel)」\(isCurrent)】\n\(clipped)\n"
+                    }
+                } else {
+                    bookContext += "（全书索引尚未构建完成，请稍候重试提问。）\n"
+                }
+                bookContext += "\n——检索结束。请优先引用上方段落回答；若问题更贴近当前章节，可结合当前章节全文。"
+            }
+            // Always append current-chapter full text as grounding
+            if let chapterText = chapterBodyText?(), !chapterText.isEmpty {
+                bookContext += "\n\n【当前章节全文】：\n\(chapterText)"
+            }
+            resolvedPrompt = prompt + bookContext
+
+        case .chapter:
+            // Inject current-chapter full text so the AI truly reads the chapter
+            if let chapterText = chapterBodyText?(), !chapterText.isEmpty {
+                resolvedPrompt = prompt + "\n\n【当前章节全文（AI 请直接依据原文回答）】：\n\(chapterText)"
+            }
         }
 
         agentService.sendMessage(
@@ -603,6 +641,29 @@ struct AIChatPanel: View {
 // MARK: - Message Row
 private struct MessageRow: View {
     let message: ChatMessage
+    var onJumpToQuotation: ((String) -> Void)? = nil
+
+    /// Extracts verbatim quotations from AI markdown answers so they become
+    /// clickable "jump to text" chips (in both 「…」 and "…" styles).
+    private var quotablePassages: [String] {
+        guard message.role == .assistant else { return [] }
+        let patterns = ["「([^」]{6,80})」", "『([^』]{6,80})』", "\u{201c}([^\u{201d}]{6,80})\u{201d}"]
+        var seen = Set<String>()
+        var results: [String] = []
+        for pattern in patterns {
+            guard let regex = try? NSRegularExpression(pattern: pattern) else { continue }
+            let ns = message.content as NSString
+            regex.enumerateMatches(in: message.content, range: NSRange(location: 0, length: ns.length)) { match, _, _ in
+                guard let match, match.numberOfRanges >= 2 else { return }
+                let quote = ns.substring(with: match.range(at: 1)).trimmingCharacters(in: .whitespacesAndNewlines)
+                guard quote.count >= 6, !seen.contains(quote) else { return }
+                seen.insert(quote)
+                results.append(quote)
+            }
+            if results.count >= 5 { break }
+        }
+        return Array(results.prefix(5))
+    }
 
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
@@ -658,6 +719,36 @@ private struct MessageRow: View {
                             RoundedRectangle(cornerRadius: 12, style: .continuous)
                                 .stroke(Color.primary.opacity(0.06), lineWidth: 0.5)
                         )
+
+                    if !quotablePassages.isEmpty {
+                        // Clickable citation chips: jump to the exact original passage
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 6) {
+                                ForEach(Array(quotablePassages.enumerated()), id: \.offset) { _, quote in
+                                    Button {
+                                        onJumpToQuotation?(quote)
+                                    } label: {
+                                        HStack(spacing: 3) {
+                                            Image(systemName: "text.magnifyingglass")
+                                                .font(.system(size: 8))
+                                            Text("回原文 · \(quote.prefix(18))…")
+                                                .lineLimit(1)
+                                        }
+                                        .font(.system(size: 10))
+                                        .foregroundStyle(.purple)
+                                        .padding(.horizontal, 8)
+                                        .padding(.vertical, 4)
+                                        .background(Color.purple.opacity(0.08))
+                                        .clipShape(Capsule())
+                                    }
+                                    .buttonStyle(.plain)
+                                    .help("跳转并高亮原文出处")
+                                }
+                            }
+                            .padding(.horizontal, 2)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
                 }
                 Spacer(minLength: 24)
             }

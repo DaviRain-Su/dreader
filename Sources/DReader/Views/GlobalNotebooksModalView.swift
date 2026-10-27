@@ -322,10 +322,63 @@ struct GlobalNotebooksModalView: View {
             }
             .menuStyle(.borderlessButton)
             .disabled(filteredHighlights.isEmpty)
+
+            // Knowledge Asset Backup (SQLite transport format)
+            Menu {
+                Button {
+                    exportJSONBackup()
+                } label: {
+                    Label("导出划线与书签备份 (.json)", systemImage: "externaldrive.badge.icloud")
+                }
+
+                Divider()
+
+                Button {
+                    importJSONBackup()
+                } label: {
+                    Label("从备份恢复 (合并导入)", systemImage: "arrow.down.doc")
+                }
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "externaldrive")
+                        .font(.system(size: 11))
+                    Text("备份")
+                        .font(.system(size: 11.5, weight: .medium))
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 5)
+                .background(Color.primary.opacity(0.05))
+                .foregroundStyle(.secondary)
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+            }
+            .menuStyle(.borderlessButton)
         }
         .padding(.horizontal, 18)
         .padding(.vertical, 8)
         .background(Color.primary.opacity(0.015))
+    }
+
+    // MARK: - JSON Backup Actions
+
+    private func exportJSONBackup() {
+        guard let data = try? LibraryDatabase.shared.exportBackup() else { return }
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.json]
+        panel.nameFieldStringValue = "DReader_知识备份_\(Date().formatted(date: .numeric, time: .omitted).replacingOccurrences(of: "/", with: "-")).json"
+        if panel.runModal() == .OK, let url = panel.url {
+            try? data.write(to: url)
+        }
+    }
+
+    private func importJSONBackup() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.json]
+        panel.allowsMultipleSelection = false
+        guard panel.runModal() == .OK, let url = panel.url,
+              let data = try? Data(contentsOf: url) else { return }
+        if let count = try? LibraryDatabase.shared.importBackup(data), count > 0 {
+            viewModel.highlights = LibraryDatabase.shared.loadHighlights()
+        }
     }
 
     // MARK: - Left Books Directory
