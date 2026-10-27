@@ -33,7 +33,14 @@ struct ReaderTypographySettingsPopover: View {
                 HStack(spacing: 6) {
                     ForEach(ReaderTheme.allCases) { theme in
                         Button {
+                            // 手动选主题 = 退出跟随，并把它记为当前明暗侧的偏好主题
+                            settings.followSystemAppearance = false
                             settings.theme = theme
+                            if theme.isDark {
+                                settings.darkTheme = theme
+                            } else {
+                                settings.lightTheme = theme
+                            }
                         } label: {
                             VStack(spacing: 4) {
                                 RoundedRectangle(cornerRadius: 7, style: .continuous)
@@ -60,6 +67,17 @@ struct ReaderTypographySettingsPopover: View {
                         .buttonStyle(.plain)
                     }
                 }
+
+                // 跟随系统外观：亮暗模式切换自动换对应的昼/夜主题
+                Toggle(isOn: $settings.followSystemAppearance) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "circle.lefthalf.filled")
+                            .foregroundStyle(Color.primary.opacity(0.75))
+                        Text("跟随系统外观 (亮暗自动切换昼/夜主题)")
+                            .font(.system(size: 11.5))
+                    }
+                }
+                .help("开启后：系统进入深色模式自动用夜间主题，回到浅色用昼间主题；手动点主题卡即退出跟随")
             }
 
             Divider()

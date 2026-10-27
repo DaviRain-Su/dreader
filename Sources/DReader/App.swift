@@ -111,7 +111,18 @@ struct DReaderApp: App {
 
                 Button("切换白天 / 夜间阅读主题") {
                     withAnimation {
-                        viewModel.settings.theme = viewModel.settings.theme.isDark ? .white : .dark
+                        let s = viewModel.settings
+                        if s.followSystemAppearance {
+                            // 跟随模式下：把当前侧的偏好主题翻到另一侧亮暗（保留跟随，改的是自动切换的目标）
+                            if s.theme.isDark {
+                                s.darkTheme = s.darkTheme.isDark ? .white : .dark
+                            } else {
+                                s.lightTheme = s.lightTheme.isDark ? .gray : .sepia
+                            }
+                            s.applySystemAppearance()
+                        } else {
+                            s.theme = s.theme.isDark ? .white : .dark
+                        }
                     }
                 }
                 .keyboardShortcut("l", modifiers: [.command, .shift])

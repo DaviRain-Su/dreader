@@ -239,6 +239,39 @@ final class ReaderSettings: @unchecked Sendable {
             UserDefaults.standard.set(isPageTurnAnimation, forKey: "dreader.page_turn_animation")
         }
     }
+
+    // 主题跟随系统外观：macOS 亮/暗模式切换时自动换昼/夜主题。
+    // 手动点主题卡 = 关闭跟随并把该主题记入对应的昼（或夜）偏好。
+    var followSystemAppearance: Bool = {
+        UserDefaults.standard.bool(forKey: "dreader.follow_system_appearance")
+    }() {
+        didSet {
+            UserDefaults.standard.set(followSystemAppearance, forKey: "dreader.follow_system_appearance")
+            if followSystemAppearance { applySystemAppearance() }
+        }
+    }
+
+    var lightTheme: ReaderTheme = {
+        if let raw = UserDefaults.standard.string(forKey: "dreader.light_theme"),
+           let t = ReaderTheme(rawValue: raw) { return t }
+        return .sepia
+    }() {
+        didSet { UserDefaults.standard.set(lightTheme.rawValue, forKey: "dreader.light_theme") }
+    }
+
+    var darkTheme: ReaderTheme = {
+        if let raw = UserDefaults.standard.string(forKey: "dreader.dark_theme"),
+           let t = ReaderTheme(rawValue: raw) { return t }
+        return .dark
+    }() {
+        didSet { UserDefaults.standard.set(darkTheme.rawValue, forKey: "dreader.dark_theme") }
+    }
+
+    /// 按当前系统外观把主题设为昼（或夜）偏好主题；跟随模式开启时与外观变化时调用
+    func applySystemAppearance() {
+        let isDarkMode = NSApp.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+        theme = isDarkMode ? darkTheme : lightTheme
+    }
     /// 记住每本书的竖排偏好（bookId → "1"/"0"），切书时恢复
     private static let verticalPrefsKey = "dreader.vertical_by_book"
 

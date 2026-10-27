@@ -46,6 +46,10 @@ final class ReaderViewModel: @unchecked Sendable {
     init() {
         loadPersistedHighlights()
         loadPersistedBookmarks()
+        // 跟随系统外观：启动即按当前亮暗套用昼/夜主题偏好
+        if settings.followSystemAppearance {
+            settings.applySystemAppearance()
+        }
         Task {
             await initializeLibrary()
         }
@@ -55,6 +59,16 @@ final class ReaderViewModel: @unchecked Sendable {
         ) { [weak self] _ in
             Task { @MainActor in
                 self?.reloadLibraryFromDisk()
+            }
+        }
+        // 跟随系统外观：macOS 亮/暗模式切换（AppleInterfaceTheme: Dark=暗, Light/Auto=亮）
+        DistributedNotificationCenter.default.addObserver(
+            forName: Notification.Name("AppleInterfaceThemeChanged"), object: nil, queue: .main
+        ) { [weak self] _ in
+            // 系统切换动画落定后再应用，避免主题与窗口材质闪跳
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                guard let self, self.settings.followSystemAppearance else { return }
+                self.settings.applySystemAppearance()
             }
         }
     }
