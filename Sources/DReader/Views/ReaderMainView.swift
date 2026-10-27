@@ -121,6 +121,11 @@ struct ReaderMainView: View {
                 vm.showGlobalNotebooksModal = false
             }
         }
+        .sheet(isPresented: $vm.showReviewSessionModal) {
+            ReviewSessionModalView(viewModel: vm) {
+                vm.showReviewSessionModal = false
+            }
+        }
         .onKeyPress(.space) {
             if !vm.isViewingBookshelf && !vm.isSearchPresented {
                 vm.scrollPage(direction: 1)
@@ -456,6 +461,12 @@ struct ReaderMainView: View {
                 .transition(.move(edge: .trailing))
             }
         }
+        // Read-aloud carousel: auto-scroll the page to the paragraph being narrated
+        .onChange(of: vm.readAloud.currentParagraphIndex) { _, newIdx in
+            guard vm.readAloud.state == .playing,
+                  let anchor = vm.readAloudAnchor(for: newIdx) else { return }
+            vm.scrollToSearchMatchAction?(anchor, 0)
+        }
     }
 
     // MARK: - Reader Top Bar (Apple Books Native Translucent Bar)
@@ -594,6 +605,30 @@ struct ReaderMainView: View {
                 },
                 helpText: vm.settings.isBilingualEnabled ? "关闭双语对照 (⌘+T)" : "开启段落双语对照 (⌘+T)"
             )
+
+            // Whole-Chapter Read Aloud (听书) with Right-Click Sleep Timer
+            AppleToolbarButton(
+                icon: vm.readAloud.state == .playing ? "speaker.wave.3.fill" : (vm.readAloud.state == .paused ? "speaker.slash" : "headphones"),
+                title: vm.readAloud.state == .playing ? "暂停" : (vm.readAloud.state == .paused ? "继续" : "听书"),
+                isActive: vm.readAloud.state != .idle,
+                activeColor: .orange,
+                action: {
+                    vm.toggleChapterReadAloud()
+                },
+                helpText: vm.readAloud.state == .playing ? "暂停整章朗读 (⌘+⇧+S)" : "开始整章连续朗读 (⌘+⇧+S)"
+            )
+            .contextMenu {
+                Menu("定时关闭") {
+                    Button("10 分钟") { vm.readAloud.enableSleepTimer(minutes: 10) }
+                    Button("20 分钟") { vm.readAloud.enableSleepTimer(minutes: 20) }
+                    Button("30 分钟") { vm.readAloud.enableSleepTimer(minutes: 30) }
+                    Button("60 分钟") { vm.readAloud.enableSleepTimer(minutes: 60) }
+                    Divider()
+                    Button("取消定时") {
+                        vm.readAloud.cancelSleepTimer()
+                    }
+                }
+            }
 
             AppleToolbarButton(
                 icon: "textformat.size",
@@ -844,6 +879,29 @@ struct ReaderMainView: View {
                         .help("下一页 / 下一章 (PageDown / Space)")
                     }
                     .padding(.vertical, 30)
+                }
+
+                // In-page Footnote Popover (Apple Books style)
+                if let footnote = vm.selectionManager.activeFootnoteCard {
+                    GeometryReader { geo in
+                        FootnotePopoverView(
+                            footnote: footnote,
+                            onDismiss: { vm.selectionManager.activeFootnoteCard = nil },
+                            onAskAI: { noteText in
+                                vm.selectionManager.quoteForAI = "【请解读这条脚注】：\(noteText)"
+                                withAnimation(.easeInOut(duration: 0.2)) {
+                                    vm.isAIPanelVisible = true
+                                }
+                                vm.selectionManager.activeFootnoteCard = nil
+                            }
+                        )
+                        .position(
+                            x: min(max(footnote.x, 230), max(230, geo.size.width - 230)),
+                            y: footnote.y + 24
+                        )
+                    }
+                    .transition(.scale(scale: 0.92, anchor: .top).combined(with: .opacity))
+                    .zIndex(240)
                 }
             } else {
                 VStack(spacing: 16) {

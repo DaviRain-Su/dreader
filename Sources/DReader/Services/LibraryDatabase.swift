@@ -70,10 +70,172 @@ final class LibraryDatabase: @unchecked Sendable {
             created_at REAL NOT NULL DEFAULT 0,
             note TEXT
         );
+        CREATE TABLE IF NOT EXISTS review_schedule (
+            highlight_id TEXT PRIMARY KEY,
+            mastery_level INTEGER NOT NULL DEFAULT 0,
+            interval_days REAL NOT NULL DEFAULT 0,
+            due_at REAL NOT NULL DEFAULT 0,
+            review_count INTEGER NOT NULL DEFAULT 0,
+            last_reviewed_at REAL
+        );
         CREATE INDEX IF NOT EXISTS idx_highlights_book ON highlights(book_id);
         CREATE INDEX IF NOT EXISTS idx_bookmarks_book ON bookmarks(book_id);
+        CREATE INDEX IF NOT EXISTS idx_review_due ON review_schedule(due_at);
         """
         sqlite3_exec(db, sql, nil, nil, nil)
+    }
+
+    // MARK: - Mastery Review Scheduling (Readwise-style spaced resurfacing)
+
+    /// A highlight joined with its review state.
+    struct DueReviewCard: Sendable {
+        let highlight: Highlight
+        let masteryLevel: Int
+        let reviewCount: Int
+        let isOverdue: Bool
+    }
+
+    /// Highlights due for review, oldest-due first. New (never-reviewed) highlights
+    /// surface interleaved at the end. `limit` caps the daily dose (10 by default).
+    func dueReviewCards(limit: Int = 10, asOf date: Date = Date()) -> [DueReviewCard] {
+        guard let db else { return [] }
+        var stmt: OpaquePointer?
+        let sql = """
+        SELECT h.id, h.book_id, h.book_title, h.chapter_index, h.chapter_title, h.text, h.color_hex,
+               h.created_at, h.note, h.updated_at, h.source, h.wechat_book_id, h.wechat_bookmark_id, h.wechat_author,
+               COALESCE(r.mastery_level, 0), COALESCE(r.review_count, 0),
+               CASE WHEN r.due_at IS NOT NULL AND r.due_at < ? THEN 1 ELSE 0 END
+        FROM highlights h
+        LEFT JOIN review_schedule r ON r.highlight_id = h.id
+        WHERE r.highlight_id IS NULL                    -- brand-new, never scheduled
+           OR r.due_at <= ?                             -- due or overdue
+        ORDER BY COALESCE(r.due_at, h.created_at) ASC
+        LIMIT ?
+        """
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
+        defer { sqlite3_finalize(stmt) }
+        let now = date.timeIntervalSince1970
+        sqlite3_bind_double(stmt, 1, now)
+        sqlite3_bind_double(stmt, 2, now)
+        sqlite3_bind_int64(stmt, 3, Int64(limit))
+
+        var results: [DueReviewCard] = []
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            guard let idStr = text(stmt, 0), let id = UUID(uuidString: idStr) else { continue }
+            let bookIdStr = text(stmt, 1) ?? ""
+            let h = Highlight(
+                id: id,
+                bookId: UUID(uuidString: bookIdStr) ?? UUID(),
+                bookTitle: text(stmt, 2) ?? "",
+                chapterIndex: Int(sqlite3_column_int64(stmt, 3)),
+                chapterTitle: text(stmt, 4) ?? "",
+                text: text(stmt, 5) ?? "",
+                colorHex: text(stmt, 6) ?? "#FFE066",
+                createdAt: Date(timeIntervalSince1970: sqlite3_column_double(stmt, 7)),
+                note: text(stmt, 8),
+                updatedAt: sqlite3_column_type(stmt, 9) != SQLITE_NULL
+                    ? Date(timeIntervalSince1970: sqlite3_column_double(stmt, 9)) : nil,
+                source: text(stmt, 10),
+                wechatBookId: text(stmt, 11),
+                wechatBookmarkId: text(stmt, 12),
+                wechatAuthor: text(stmt, 13)
+            )
+            results.append(DueReviewCard(
+                highlight: h,
+                masteryLevel: Int(sqlite3_column_int64(stmt, 14)),
+                reviewCount: Int(sqlite3_column_int64(stmt, 15)),
+                isOverdue: sqlite3_column_int64(stmt, 16) == 1
+            ))
+        }
+        return results
+    }
+
+    /// Total cards due right now (for the badge on the review entry).
+    func dueReviewCount(asOf date: Date = Date()) -> Int {
+        guard let db else { return 0 }
+        var stmt: OpaquePointer?
+        let sql = """
+        SELECT COUNT(*) FROM (
+            SELECT h.id FROM highlights h
+            LEFT JOIN review_schedule r ON r.highlight_id = h.id
+            WHERE r.highlight_id IS NULL OR r.due_at <= ?
+            LIMIT 999
+        )
+        """
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return 0 }
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_double(stmt, 1, date.timeIntervalSince1970)
+        return sqlite3_step(stmt) == SQLITE_ROW ? Int(sqlite3_column_int64(stmt, 0)) : 0
+    }
+
+    /// Readwise-style mastery lanes: never-reviewed (interval 0) → 7d → 14d → 28d.
+    /// Score ≥ 3 (QualityScore 0..5) promotes a lane; score < 3 drops back one lane.
+    private static let laneIntervals: [Double] = [0, 7, 14, 28]
+
+    func recordReview(highlightId: UUID, score: Int, asOf date: Date = Date()) {
+        guard let db else { return }
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, "SELECT mastery_level, review_count FROM review_schedule WHERE highlight_id = ?", -1, &stmt, nil) == SQLITE_OK else { return }
+        sqlite3_bind_text(stmt, 1, highlightId.uuidString, -1, Self.transient)
+        var currentLevel = 0
+        var currentCount = 0
+        if sqlite3_step(stmt) == SQLITE_ROW {
+            currentLevel = Int(sqlite3_column_int64(stmt, 0))
+            currentCount = Int(sqlite3_column_int64(stmt, 1))
+        }
+        sqlite3_finalize(stmt)
+
+        var newLevel: Int
+        if score >= 3 {
+            newLevel = min(currentLevel + 1, Self.laneIntervals.count - 1)
+        } else {
+            newLevel = max(currentLevel - 1, 0)
+        }
+        // First successful review moves into the 7-day lane rather than staying due forever
+        if currentLevel == 0 && score >= 3 { newLevel = max(newLevel, 1) }
+
+        let interval = Self.laneIntervals[newLevel]
+        let dueAt = date.timeIntervalSince1970 + interval * 86400
+
+        guard sqlite3_prepare_v2(db, """
+        INSERT OR REPLACE INTO review_schedule
+        (highlight_id, mastery_level, interval_days, due_at, review_count, last_reviewed_at)
+        VALUES (?,?,?,?,?,?)
+        """, -1, &stmt, nil) == SQLITE_OK else { return }
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_text(stmt, 1, highlightId.uuidString, -1, Self.transient)
+        sqlite3_bind_int64(stmt, 2, Int64(newLevel))
+        sqlite3_bind_double(stmt, 3, interval)
+        sqlite3_bind_double(stmt, 4, dueAt)
+        sqlite3_bind_int64(stmt, 5, Int64(currentCount + 1))
+        sqlite3_bind_double(stmt, 6, date.timeIntervalSince1970)
+        _ = sqlite3_step(stmt)
+    }
+
+    /// Removes a highlight's schedule row when the highlight itself is deleted.
+    func deleteReviewSchedule(highlightId: UUID) {
+        guard let db else { return }
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, "DELETE FROM review_schedule WHERE highlight_id = ?", -1, &stmt, nil) == SQLITE_OK else { return }
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_text(stmt, 1, highlightId.uuidString, -1, Self.transient)
+        _ = sqlite3_step(stmt)
+    }
+
+    /// Cards reviewed today and small stats for the session banner.
+    func reviewStats(asOf date: Date = Date()) -> (reviewedToday: Int, masteredCards: Int) {
+        guard let db else { return (0, 0) }
+        var stmt: OpaquePointer?
+        let dayStart = Calendar.current.startOfDay(for: date).timeIntervalSince1970
+        let sql = "SELECT COUNT(*) FROM review_schedule WHERE last_reviewed_at >= ?; SELECT COUNT(*) FROM review_schedule WHERE mastery_level >= 3"
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return (0, 0) }
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_double(stmt, 1, dayStart)
+        var reviewedToday = 0
+        if sqlite3_step(stmt) == SQLITE_ROW { reviewedToday = Int(sqlite3_column_int64(stmt, 0)) }
+        var mastered = 0
+        if sqlite3_step(stmt) == SQLITE_ROW { mastered = Int(sqlite3_column_int64(stmt, 0)) }
+        return (reviewedToday, mastered)
     }
 
     /// One-time migration from the legacy UserDefaults JSON blobs.

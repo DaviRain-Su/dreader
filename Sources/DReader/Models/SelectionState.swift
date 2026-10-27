@@ -19,15 +19,26 @@ struct HighlightCardInfo: Equatable, Sendable {
     let bottomY: CGFloat
 }
 
+/// Active footnote popover (clicking a numbered footnote reference)
+struct FootnoteCardInfo: Equatable, Sendable {
+    let text: String
+    let x: CGFloat
+    let y: CGFloat
+    let bottomY: CGFloat
+    var longContent: Bool { text.count > 900 }
+}
+
 @Observable
 final class ReaderSelectionManager: @unchecked Sendable {
     var activeSelection: SelectionInfo?
     var activeHighlightCard: HighlightCardInfo?
+    var activeFootnoteCard: FootnoteCardInfo?
     var isAIPanelVisible: Bool = true
     var quoteForAI: String?
 
     func clear() {
         activeSelection = nil
         activeHighlightCard = nil
+        activeFootnoteCard = nil
     }
 }

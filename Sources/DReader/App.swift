@@ -36,6 +36,16 @@ struct DReaderApp: App {
                 }
                 .keyboardShortcut("n", modifiers: [.command, .shift])
 
+                Button(viewModel.readAloud.state == .playing ? "暂停整章朗读" : "开始整章朗读 (听书)") {
+                    viewModel.toggleChapterReadAloud()
+                }
+                .keyboardShortcut("s", modifiers: [.command, .shift])
+
+                Button("今日划线 Mastery 复习...") {
+                    viewModel.showReviewSessionModal = true
+                }
+                .keyboardShortcut("r", modifiers: [.command, .shift])
+
                 Button("返回书架大厅") {
                     viewModel.returnToBookshelf()
                 }

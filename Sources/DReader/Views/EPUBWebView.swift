@@ -557,6 +557,20 @@ struct EPUBWebView: NSViewRepresentable {
                     )
                 } else if type == "dismissHighlightCard" {
                     self.parent.selectionManager.activeHighlightCard = nil
+                } else if type == "footnote",
+                          let noteText = body["text"] as? String,
+                          let x = body["x"] as? Double,
+                          let y = body["y"] as? Double,
+                          let bottomY = body["bottomY"] as? Double,
+                          !noteText.isEmpty {
+                    self.parent.selectionManager.activeSelection = nil
+                    self.parent.selectionManager.activeHighlightCard = nil
+                    self.parent.selectionManager.activeFootnoteCard = FootnoteCardInfo(
+                        text: noteText,
+                        x: CGFloat(x),
+                        y: CGFloat(y),
+                        bottomY: CGFloat(bottomY)
+                    )
                 } else if type == "nextChapter" {
                     self.parent.onNextChapter()
                 } else if type == "prevChapter" {

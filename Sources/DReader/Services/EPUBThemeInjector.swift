@@ -1326,6 +1326,41 @@ struct EPUBThemeInjector {
                         window.webkit.messageHandlers.selectionBridge.postMessage({ type: 'dismissHighlightCard' });
                     }
                 }
+
+                // Footnote reference interception: pop the footnote body in-page instead of navigating away
+                const anchor = e.target.closest('a');
+                if (anchor) {
+                    const href = anchor.getAttribute('href') || '';
+                    const match = href.match(/#(foot[-_]?\\d+|fn\\d+|note\\d+|nt\\d+)$/i) || (anchor.className && anchor.className.indexOf('ref') !== -1 && href.match(/#(.+)$/));
+                    if (match && !e.metaKey && !e.ctrlKey) {
+                        const targetId = match[1];
+                        let target = document.getElementById(targetId);
+                        if (!target) {
+                            try { target = document.getElementById(decodeURIComponent(targetId)); } catch (err) {}
+                        }
+                        if (target) {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            let rawText = (target.innerText || target.textContent || '').trim();
+                            // Trim leading reference markers like "1." or "[1]"
+                            rawText = rawText.replace(/^\\s*\\[?\\d+\\]?[.、）)]?\\s*/, '');
+                            if (rawText.length > 4000) rawText = rawText.slice(0, 4000) + '…';
+                            const rect = anchor.getBoundingClientRect();
+                            if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.selectionBridge) {
+                                window.webkit.messageHandlers.selectionBridge.postMessage({
+                                    type: 'footnote',
+                                    text: rawText,
+                                    x: rect.x + (rect.width / 2),
+                                    y: rect.y,
+                                    bottomY: rect.bottom,
+                                    width: rect.width,
+                                    height: rect.height
+                                });
+                            }
+                            return;
+                        }
+                    }
+                }
             });
 
             // In-place ultra-fast DOM chapter swapping function called from Swift

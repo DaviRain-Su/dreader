@@ -2,6 +2,7 @@ import Foundation
 
 enum EPUBParserError: LocalizedError {
     case fileNotFound
+    case notAZipArchive
     case unzipFailed(String)
     case containerXMLNotFound
     case opfPathNotFound
@@ -13,6 +14,8 @@ enum EPUBParserError: LocalizedError {
         switch self {
         case .fileNotFound:
             return "找不到指定的 EPUB 文件"
+        case .notAZipArchive:
+            return "这不是有效的 EPUB 文件（缺少 ZIP 包结构签名）。常见原因：① 文件被浏览器或下载工具拦成了空壳；② 实际是个 .mobi/.azw3 文件改了扩展名；③ DRM 加密版本书源导出的拷贝。建议用 Calibre 转换后再试。"
         case .unzipFailed(let msg):
             return "EPUB 解压失败: \(msg)"
         case .containerXMLNotFound:
@@ -45,6 +48,13 @@ final class EPUBParser: Sendable {
     func parse(fileURL: URL) async throws -> EPUBBook {
         guard FileManager.default.fileExists(atPath: fileURL.path) else {
             throw EPUBParserError.fileNotFound
+        }
+
+        // Bail out early with a clear diagnosis when the file lacks the ZIP signature
+        if let header = try? FileHandle(forReadingFrom: fileURL).read(upToCount: 4),
+           header.count >= 4,
+           header.prefix(4) != Data([0x50, 0x4B, 0x03, 0x04]) {
+            throw EPUBParserError.notAZipArchive
         }
 
         // Deterministic bookId based on file name so highlights and cache persist reliably across launches

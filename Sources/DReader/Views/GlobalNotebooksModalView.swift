@@ -15,6 +15,8 @@ struct GlobalNotebooksModalView: View {
     @State private var quoteCardHighlight: Highlight? = nil
     @State private var showExportToast: Bool = false
     @State private var exportToastMessage: String = ""
+    @State private var showReviewSession: Bool = false
+    @State private var highlightTick: Int = 0 // bump to refresh due-count badge
 
     enum HighlightSourceFilter: String, CaseIterable, Identifiable {
         case all = "全部来源"
@@ -102,6 +104,11 @@ struct GlobalNotebooksModalView: View {
         viewModel.highlights.filter { !$0.isFromWeChatRead }.count
     }
 
+    /// Cards due for today's Mastery review (badge count)
+    private var dueCount: Int {
+        LibraryDatabase.shared.dueReviewCount()
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             // Header Bar
@@ -152,6 +159,15 @@ struct GlobalNotebooksModalView: View {
                 book: viewModel.books.first { $0.title == item.bookTitle },
                 onClose: { quoteCardHighlight = nil }
             )
+        }
+        .sheet(isPresented: $showReviewSession) {
+            ReviewSessionModalView(viewModel: viewModel) {
+                showReviewSession = false
+                highlightTick += 1
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .NSCalendarDayChanged)) { _ in
+            highlightTick += 1 // new day -> fresh due badge
         }
     }
 
@@ -226,6 +242,38 @@ struct GlobalNotebooksModalView: View {
             }
             .buttonStyle(.plain)
             .help("打开微信读书同步面板 (⌘+⇧+W)")
+
+            // Daily Mastery Review Entry
+            Button {
+                showReviewSession = true
+            } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: "brain.head.profile")
+                        .font(.system(size: 11))
+                    Text("今日复习")
+                    if dueCount > 0 {
+                        Text(dueCount >= 99 ? "99+" : "\(dueCount)")
+                            .font(.system(size: 9.5, weight: .bold, design: .monospaced))
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 1)
+                            .background(Color.white.opacity(0.85))
+                            .foregroundStyle(Color.purple)
+                            .clipShape(Capsule())
+                    }
+                }
+                .font(.system(size: 11.5, weight: .medium))
+                .foregroundStyle(.purple)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 5)
+                .background(Color.purple.opacity(0.12))
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6)
+                        .stroke(Color.purple.opacity(0.25), lineWidth: 0.5)
+                )
+            }
+            .buttonStyle(.plain)
+            .help("开始今日 Mastery 划线复习（间隔重现记忆）")
 
             // Close Button
             Button {
