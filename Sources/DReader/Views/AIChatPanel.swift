@@ -90,12 +90,12 @@ struct AIChatPanel: View {
                                     .controlSize(.small)
                                 Text("正在向 \(agentService.currentPreset.name) 传输语境并思考...")
                                     .font(.system(size: 12))
-                                    .foregroundStyle(.purple)
+                                    .foregroundStyle(.secondary)
                             }
                             .padding(.horizontal, 14)
                             .padding(.vertical, 10)
                             .frame(maxWidth: .infinity, alignment: .leading)
-                            .background(Color.purple.opacity(0.06))
+                            .background(Color.primary.opacity(0.04))
                             .clipShape(RoundedRectangle(cornerRadius: 10))
                             .id("thinking-placeholder")
                         }
@@ -149,11 +149,11 @@ struct AIChatPanel: View {
     // MARK: - Header
     private var headerBar: some View {
         HStack(spacing: 6) {
-            // Title & Role Chip
+            // Title & Role Chip —— 无彩 chrome，角色芯片为灰阶玻璃
             HStack(spacing: 5) {
                 Image(systemName: "sparkles")
                     .font(.system(size: 12, weight: .bold))
-                    .foregroundStyle(.purple)
+                    .foregroundStyle(.secondary)
 
                 Text("AI 伴读")
                     .font(.system(size: 13, weight: .bold))
@@ -170,14 +170,14 @@ struct AIChatPanel: View {
                     HStack(spacing: 2) {
                         Text(agentService.role.rawValue)
                             .font(.system(size: 10.5, weight: .medium))
-                            .foregroundStyle(.purple)
+                            .foregroundStyle(.secondary)
                         Image(systemName: "chevron.down")
                             .font(.system(size: 8))
-                            .foregroundStyle(.purple.opacity(0.8))
+                            .foregroundStyle(.secondary.opacity(0.8))
                     }
                     .padding(.horizontal, 6)
                     .padding(.vertical, 2.5)
-                    .background(Color.purple.opacity(0.1))
+                    .background(Color.primary.opacity(0.05))
                     .clipShape(Capsule())
                 }
                 .buttonStyle(.plain)
@@ -280,8 +280,8 @@ struct AIChatPanel: View {
                         }
                         .padding(.horizontal, 8)
                         .padding(.vertical, 3)
-                        .background(searchScope == scope ? Color.purple.opacity(0.18) : Color.clear)
-                        .foregroundStyle(searchScope == scope ? Color.purple : Color.secondary)
+                        .background(searchScope == scope ? Color.primary.opacity(0.1) : Color.clear)
+                        .foregroundStyle(searchScope == scope ? Color.primary.opacity(0.8) : Color.secondary)
                         .clipShape(Capsule())
                     }
                     .buttonStyle(.plain)
@@ -302,7 +302,7 @@ struct AIChatPanel: View {
         HStack(alignment: .top, spacing: 8) {
             Image(systemName: "quote.opening")
                 .font(.system(size: 11))
-                .foregroundStyle(.purple)
+                .foregroundStyle(.secondary)
                 .padding(.top, 2)
 
             VStack(alignment: .leading, spacing: 2) {
@@ -331,7 +331,7 @@ struct AIChatPanel: View {
             .buttonStyle(.plain)
         }
         .padding(10)
-        .background(Color.purple.opacity(0.08))
+        .background(Color.primary.opacity(0.04))
         .clipShape(RoundedRectangle(cornerRadius: 8))
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
@@ -360,7 +360,7 @@ struct AIChatPanel: View {
                     HStack(spacing: 6) {
                         Image(systemName: "sparkles")
                             .font(.system(size: 11, weight: .bold))
-                            .foregroundStyle(.purple)
+                            .foregroundStyle(.secondary)
 
                         Text("本章导读前瞻 · 背景速览")
                             .font(.system(size: 11.5, weight: .bold))
@@ -388,7 +388,7 @@ struct AIChatPanel: View {
                                 HStack(alignment: .top, spacing: 5) {
                                     Text("•")
                                         .font(.system(size: 11, weight: .bold))
-                                        .foregroundStyle(.purple)
+                                        .foregroundStyle(.secondary)
                                     Text(pt)
                                         .font(.system(size: 10))
                                         .foregroundStyle(.secondary)
@@ -411,10 +411,10 @@ struct AIChatPanel: View {
                                 Text("向 AI 探讨本章脉络")
                                     .font(.system(size: 10.5, weight: .medium))
                             }
-                            .foregroundStyle(.purple)
+                            .foregroundStyle(Color.primary.opacity(0.75))
                             .padding(.horizontal, 9)
                             .padding(.vertical, 4)
-                            .background(Color.purple.opacity(0.08))
+                            .background(Color.primary.opacity(0.06))
                             .clipShape(Capsule())
                         }
                         .buttonStyle(.plain)
@@ -424,11 +424,11 @@ struct AIChatPanel: View {
                 }
             }
             .padding(10)
-            .background(Color.purple.opacity(0.05))
+            .background(Color.primary.opacity(0.035))
             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .stroke(Color.purple.opacity(0.18), lineWidth: 0.6)
+                    .stroke(Color.primary.opacity(0.07), lineWidth: 0.6)
             )
         }
     }
@@ -438,7 +438,7 @@ struct AIChatPanel: View {
         VStack(spacing: 12) {
             Image(systemName: "sparkles")
                 .font(.system(size: 32))
-                .foregroundStyle(.purple.gradient)
+                .foregroundStyle(.secondary.opacity(0.6))
                 .padding(.top, 28)
 
             Text("AI 伴读助手")
@@ -453,7 +453,7 @@ struct AIChatPanel: View {
             VStack(alignment: .leading, spacing: 8) {
                 Label("Agent: \(agentService.currentPreset.name)", systemImage: agentService.currentPreset.iconName)
                     .font(.system(size: 11))
-                    .foregroundStyle(.purple)
+                    .foregroundStyle(Color.primary.opacity(0.75))
                 Label("通讯驱动: \(agentService.currentPreset.driverType.rawValue)", systemImage: "bolt.horizontal.fill")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
@@ -475,7 +475,7 @@ struct AIChatPanel: View {
                         HStack(spacing: 4) {
                             Image(systemName: item.icon)
                                 .font(.system(size: 9))
-                                .foregroundStyle(.purple)
+                                .foregroundStyle(.secondary.opacity(0.8))
                             Text(item.title)
                                 .font(.system(size: 11, weight: .medium))
                         }
@@ -527,7 +527,7 @@ struct AIChatPanel: View {
                     } label: {
                         Image(systemName: "arrow.up.circle.fill")
                             .font(.system(size: 24))
-                            .foregroundStyle(inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? Color.secondary.opacity(0.5) : Color.purple)
+                            .foregroundStyle(inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? Color.secondary.opacity(0.5) : Color.primary.opacity(0.8))
                     }
                     .buttonStyle(.plain)
                     .disabled(inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
@@ -681,14 +681,14 @@ private struct MessageRow: View {
                             .font(.system(size: 11))
                             .foregroundStyle(.secondary)
                             .padding(6)
-                            .background(Color.purple.opacity(0.1))
+                            .background(Color.primary.opacity(0.05))
                             .clipShape(RoundedRectangle(cornerRadius: 6))
                     }
                     Text(message.content)
                         .font(.system(size: 13))
                         .padding(.horizontal, 12)
                         .padding(.vertical, 8)
-                        .background(Color.purple.opacity(0.2))
+                        .background(Color.primary.opacity(0.08))
                         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                 }
             } else {
@@ -696,7 +696,7 @@ private struct MessageRow: View {
                     HStack(spacing: 4) {
                         Image(systemName: "sparkles")
                             .font(.system(size: 11))
-                            .foregroundStyle(.purple)
+                            .foregroundStyle(.secondary)
                         Text("AI 导读")
                             .font(.system(size: 11, weight: .semibold))
                             .foregroundStyle(.secondary)
@@ -761,10 +761,10 @@ private struct MessageRow: View {
                                                 .lineLimit(1)
                                         }
                                         .font(.system(size: 10))
-                                        .foregroundStyle(.purple)
+                                        .foregroundStyle(.secondary)
                                         .padding(.horizontal, 8)
                                         .padding(.vertical, 4)
-                                        .background(Color.purple.opacity(0.08))
+                                        .background(Color.primary.opacity(0.05))
                                         .clipShape(Capsule())
                                     }
                                     .buttonStyle(.plain)
@@ -794,7 +794,7 @@ private struct LiveStreamingRow: View {
                         .controlSize(.mini)
                     Text("AI 正在实时流式生成...")
                         .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(.purple)
+                        .foregroundStyle(.secondary)
                 }
 
                 MarkdownContentView(markdown: text)
@@ -804,7 +804,7 @@ private struct LiveStreamingRow: View {
                     .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                     .overlay(
                         RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .stroke(Color.purple.opacity(0.2), lineWidth: 0.5)
+                            .stroke(Color.primary.opacity(0.08), lineWidth: 0.5)
                     )
             }
             Spacer(minLength: 24)

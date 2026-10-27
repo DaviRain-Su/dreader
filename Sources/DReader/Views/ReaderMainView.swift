@@ -10,6 +10,8 @@ struct ReaderMainView: View {
     @State private var highlightCardHeight: CGFloat = 46
     /// 选词悬浮工具条的实测高度
     @State private var selectionToolbarHeight: CGFloat = 52
+    /// 禅意模式退出胶囊：鼠标悬停时才完全显现
+    @State private var isZenPillHovered: Bool = false
 
     var body: some View {
         ZStack(alignment: .top) {
@@ -255,7 +257,7 @@ struct ReaderMainView: View {
                     ZStack(alignment: .topLeading) {
                         readerContentArea
 
-                        // Floating Zen Mode Exit Pill
+                        // Floating Zen Mode Exit Pill —— 平时隐去，鼠标移近右上角才浮现（保持沉浸）
                         if vm.settings.isZenMode {
                             HStack {
                                 Spacer()
@@ -270,14 +272,20 @@ struct ReaderMainView: View {
                                         Text("退出禅意模式 (Esc)")
                                             .font(.system(size: 11, weight: .medium))
                                     }
-                                    .foregroundStyle(vm.settings.theme.swiftUIText.opacity(0.8))
+                                    .foregroundStyle(vm.settings.theme.swiftUIText.opacity(isZenPillHovered ? 0.9 : 0.55))
                                     .padding(.horizontal, 10)
                                     .padding(.vertical, 5)
                                     .background(.ultraThinMaterial)
+                                    .opacity(isZenPillHovered ? 1 : 0.35)
                                     .clipShape(Capsule())
-                                    .shadow(color: .black.opacity(0.12), radius: 6, y: 2)
+                                    .shadow(color: .black.opacity(isZenPillHovered ? 0.14 : 0.04), radius: 6, y: 2)
                                 }
                                 .buttonStyle(.plain)
+                                .onHover { hovering in
+                                    withAnimation(.easeInOut(duration: 0.2)) {
+                                        isZenPillHovered = hovering
+                                    }
+                                }
                                 .padding(14)
                             }
                             .frame(maxWidth: .infinity, alignment: .topTrailing)
@@ -750,7 +758,7 @@ struct ReaderMainView: View {
                 helpText: "全屏禅意沉浸模式 (⌘+Enter)"
             )
 
-            // AI Panel Toggle
+            // AI Panel Toggle —— 无彩玻璃胶囊，激活态实底（与 Apple Books 工具栏逻辑一致）
             Button {
                 withAnimation(.easeInOut(duration: 0.2)) {
                     vm.isAIPanelVisible.toggle()
@@ -762,18 +770,13 @@ struct ReaderMainView: View {
                     Text("AI 伴读")
                         .font(.system(size: 11.5, weight: .semibold))
                 }
-                .foregroundStyle(vm.isAIPanelVisible ? Color.white : Color.purple)
+                .foregroundStyle(vm.isAIPanelVisible ? Color.white : Color.primary.opacity(0.75))
                 .padding(.horizontal, 10)
                 .frame(height: 28)
                 .background(
                     Capsule()
-                        .fill(
-                            vm.isAIPanelVisible
-                                ? AnyShapeStyle(LinearGradient(colors: [Color.purple, Color.indigo], startPoint: .topLeading, endPoint: .bottomTrailing))
-                                : AnyShapeStyle(Color.purple.opacity(0.12))
-                        )
+                        .fill(vm.isAIPanelVisible ? AnyShapeStyle(Color.primary.opacity(0.82)) : AnyShapeStyle(Color.primary.opacity(0.06)))
                 )
-                .shadow(color: vm.isAIPanelVisible ? Color.purple.opacity(0.3) : Color.clear, radius: 4, y: 1.5)
             }
             .buttonStyle(.plain)
             .help("展开/折叠 AI 伴读面板 (⌘+Shift+K)")

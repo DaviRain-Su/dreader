@@ -226,7 +226,7 @@ struct RealisticBookItemView: View {
                                 .foregroundStyle(.white)
                                 .padding(.horizontal, 6)
                                 .padding(.vertical, 3)
-                                .background(book.progress > 0 ? Color.purple.opacity(0.88) : Color.black.opacity(0.65))
+                                .background(Color.black.opacity(0.68))
                                 .clipShape(Capsule())
                                 .shadow(radius: 2)
                                 .padding(8)
@@ -234,9 +234,10 @@ struct RealisticBookItemView: View {
                         .frame(width: 140, height: 204, alignment: .topTrailing)
                     }
                 }
-                .offset(y: isHovered ? -10 : 0)
-                .scaleEffect(isHovered ? 1.03 : 1.0)
-                .animation(.spring(response: 0.28, dampingFraction: 0.72), value: isHovered)
+                // 统一书脊悬浮动效：抬升 + 轻微放大 + 接触影随动（全书架唯一节奏）
+                .offset(y: isHovered ? -8 : 0)
+                .scaleEffect(isHovered ? 1.025 : 1.0)
+                .animation(.spring(response: 0.3, dampingFraction: 0.75), value: isHovered)
             }
         }
         .buttonStyle(.plain)

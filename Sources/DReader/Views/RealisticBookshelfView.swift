@@ -694,8 +694,8 @@ private struct CuratedClassicBookCard: View {
                 }
             }
             .offset(y: isHovered ? -8 : 0)
-            .scaleEffect(isHovered ? 1.02 : 1.0)
-            .animation(.spring(response: 0.25, dampingFraction: 0.72), value: isHovered)
+            .scaleEffect(isHovered ? 1.025 : 1.0)
+            .animation(.spring(response: 0.3, dampingFraction: 0.75), value: isHovered)
         }
         .onHover { isHovered = $0 }
         .help("一键将《\(classic.title)》置入个人书架")
