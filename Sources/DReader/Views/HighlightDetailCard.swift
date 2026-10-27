@@ -1,7 +1,9 @@
 import SwiftUI
 import AppKit
 
-/// WeChat Read (微信读书) Style Compact Highlight & Thought Popover Card
+/// 微信读书范式：点已有划线弹出的是一条紧凑工具条（单行，~44pt），
+/// 而非内容卡片。划线原文就在背后页面上抬头可见，无需重复引用；
+/// 「写想法」按需临时展开一个小输入框，完事收回。
 struct HighlightDetailCard: View {
     let highlight: Highlight
     let onUpdateColor: (String) -> Void
@@ -13,7 +15,6 @@ struct HighlightDetailCard: View {
 
     @State private var isEditingThought: Bool = false
     @State private var thoughtDraft: String = ""
-    @State private var copyFeedback: Bool = false
     @State private var dragOffset: CGSize = .zero
 
     private let colors: [(name: String, hex: String, color: Color)] = [
@@ -24,9 +25,13 @@ struct HighlightDetailCard: View {
         ("橙色", "#FFC078", Color(hex: "#FFC078"))
     ]
 
+    private var hasThought: Bool {
+        !(highlight.note?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 9) {
-            // Header: Color Palette & Compact Action Icons
+        VStack(alignment: .leading, spacing: 8) {
+            // 主行：色板 + 操作按钮（单行工具条）
             HStack(spacing: 6) {
                 // Color dots (tap to switch highlight color)
                 HStack(spacing: 4) {
@@ -55,7 +60,29 @@ struct HighlightDetailCard: View {
 
                 Spacer(minLength: 4)
 
-                // Ask AI Button
+                // 写想法 / 编辑想法
+                Button {
+                    thoughtDraft = highlight.note ?? ""
+                    withAnimation(.easeInOut(duration: 0.15)) {
+                        isEditingThought = true
+                    }
+                } label: {
+                    HStack(spacing: 3) {
+                        Image(systemName: hasThought ? "text.bubble" : "square.and.pencil")
+                            .font(.system(size: 9.5))
+                        Text(hasThought ? "想法" : "写想法")
+                            .font(.system(size: 10.5, weight: .semibold))
+                    }
+                    .foregroundStyle(.purple)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 3.5)
+                    .background(Color.purple.opacity(0.12))
+                    .clipShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .help(hasThought ? "查看 / 编辑想法" : "写下此处的想法")
+
+                // Ask AI
                 Button {
                     onAskAI(highlight.text)
                 } label: {
@@ -67,14 +94,14 @@ struct HighlightDetailCard: View {
                     }
                     .foregroundStyle(.purple)
                     .padding(.horizontal, 6)
-                    .padding(.vertical, 3)
-                    .background(Color.purple.opacity(0.12))
+                    .padding(.vertical, 3.5)
+                    .background(Color.purple.opacity(0.1))
                     .clipShape(Capsule())
                 }
                 .buttonStyle(.plain)
                 .help("结合划线向 AI 深度请教")
 
-                // Quote Card Button
+                // Quote Card
                 Button {
                     onMakeQuoteCard()
                 } label: {
@@ -88,7 +115,7 @@ struct HighlightDetailCard: View {
                 .buttonStyle(.plain)
                 .help("制作精美金句书摘卡片")
 
-                // Delete Button
+                // Delete
                 Button {
                     onDelete()
                 } label: {
@@ -102,7 +129,7 @@ struct HighlightDetailCard: View {
                 .buttonStyle(.plain)
                 .help("删除划线")
 
-                // Close Button
+                // Close
                 Button {
                     onDismiss()
                 } label: {
@@ -117,12 +144,12 @@ struct HighlightDetailCard: View {
                 .help("关闭 (Esc)")
             }
 
-            // Middle: Thoughts Section (Display / Edit)
+            // 想法编辑态：临时展开的小输入框（仅此时卡变高，保存/取消即收回）
             if isEditingThought {
                 VStack(alignment: .leading, spacing: 5) {
                     TextEditor(text: $thoughtDraft)
                         .font(.system(size: 12))
-                        .frame(height: 60)
+                        .frame(height: 56)
                         .scrollContentBackground(.hidden)
                         .padding(5)
                         .background(Color.primary.opacity(0.03))
@@ -136,7 +163,9 @@ struct HighlightDetailCard: View {
                         Spacer()
 
                         Button("取消") {
-                            isEditingThought = false
+                            withAnimation(.easeInOut(duration: 0.15)) {
+                                isEditingThought = false
+                            }
                         }
                         .font(.system(size: 10.5))
                         .buttonStyle(.plain)
@@ -144,7 +173,9 @@ struct HighlightDetailCard: View {
 
                         Button {
                             onSaveThought(thoughtDraft)
-                            isEditingThought = false
+                            withAnimation(.easeInOut(duration: 0.15)) {
+                                isEditingThought = false
+                            }
                         } label: {
                             Text("保存想法")
                                 .font(.system(size: 10.5, weight: .semibold))
@@ -157,81 +188,11 @@ struct HighlightDetailCard: View {
                         .buttonStyle(.plain)
                     }
                 }
-            } else if let note = highlight.note, !note.isEmpty {
-                VStack(alignment: .leading, spacing: 3) {
-                    HStack {
-                        HStack(spacing: 3) {
-                            Text("💭")
-                                .font(.system(size: 10))
-                            Text("我的想法")
-                                .font(.system(size: 10.5, weight: .semibold))
-                                .foregroundStyle(Color.primary.opacity(0.8))
-                        }
-
-                        Spacer()
-
-                        Button {
-                            thoughtDraft = note
-                            isEditingThought = true
-                        } label: {
-                            Image(systemName: "pencil")
-                                .font(.system(size: 9))
-                                .foregroundStyle(Color.purple)
-                                .frame(width: 18, height: 18)
-                        }
-                        .buttonStyle(.plain)
-                        .help("编辑想法")
-                    }
-
-                    Text(note)
-                        .font(.system(size: 11.5))
-                        .foregroundStyle(Color.primary.opacity(0.9))
-                        .lineSpacing(2)
-                        .lineLimit(5)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(6)
-                        .background(Color.primary.opacity(0.04))
-                        .clipShape(RoundedRectangle(cornerRadius: 6))
-                }
-            } else {
-                Button {
-                    thoughtDraft = ""
-                    isEditingThought = true
-                } label: {
-                    HStack(spacing: 4) {
-                        Image(systemName: "square.and.pencil")
-                            .font(.system(size: 10))
-                        Text("写下此处的想法与感悟...")
-                            .font(.system(size: 11))
-                    }
-                    .foregroundStyle(Color.purple)
-                    .frame(maxWidth: .infinity, alignment: .center)
-                    .padding(.vertical, 5)
-                    .background(Color.purple.opacity(0.05))
-                    .clipShape(RoundedRectangle(cornerRadius: 6))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 6)
-                            .stroke(Color.purple.opacity(0.2), style: StrokeStyle(lineWidth: 0.8, dash: [4, 3]))
-                    )
-                }
-                .buttonStyle(.plain)
-            }
-
-            // Bottom: Quoted Text with color indicator
-            HStack(alignment: .top, spacing: 6) {
-                RoundedRectangle(cornerRadius: 1.5)
-                    .fill(Color(hex: highlight.colorHex))
-                    .frame(width: 2.5)
-
-                Text(highlight.text)
-                    .font(.system(size: 11, design: .serif))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(3)
-                    .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
-        .padding(11)
-        .frame(width: 280)
+        .padding(10)
+        .frame(width: 300)
+        .fixedSize(horizontal: true, vertical: false)
         .cardPopoverChrome()
         .onAppear {
             if let note = highlight.note, !note.isEmpty {
@@ -257,11 +218,11 @@ struct HighlightDetailCard: View {
 private extension View {
     func cardPopoverChrome() -> some View {
         background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
+            RoundedRectangle(cornerRadius: 11, style: .continuous)
                 .fill(.ultraThinMaterial)
                 .shadow(color: .black.opacity(0.22), radius: 14, x: 0, y: 6)
                 .overlay(
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    RoundedRectangle(cornerRadius: 11, style: .continuous)
                         .stroke(Color.white.opacity(0.28), lineWidth: 0.6)
                 )
         )

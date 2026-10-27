@@ -6,8 +6,8 @@ struct ReaderMainView: View {
     @State private var isHoveringPrev: Bool = false
     @State private var isHoveringNext: Bool = false
     @State private var quoteCardHighlight: Highlight? = nil
-    /// 划线详情弹卡的实测高度（智能放置用）
-    @State private var highlightCardHeight: CGFloat = 175
+    /// 划线详情工具条的实测高度（智能放置用；常态单行约 46，编辑想法时展开）
+    @State private var highlightCardHeight: CGFloat = 46
     /// 选词悬浮工具条的实测高度
     @State private var selectionToolbarHeight: CGFloat = 52
 
