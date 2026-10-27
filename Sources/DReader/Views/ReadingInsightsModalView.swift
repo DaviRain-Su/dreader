@@ -7,6 +7,9 @@ struct ReadingInsightsModalView: View {
 
     private let weekdays = ["日", "一", "二", "三", "四", "五", "六"]
 
+    /// 知识资产快照（SQLite 真实数据，进入面板时刷新一次）
+    @State private var knowledgeSnapshot: KnowledgeSnapshot?
+
     var body: some View {
         VStack(spacing: 0) {
             // Header Bar
@@ -26,6 +29,12 @@ struct ReadingInsightsModalView: View {
                     // 7-Day Weekly Chart
                     weeklyActivityChart
 
+                    // 30-Day Activity Heatmap
+                    monthHeatmap
+
+                    // Knowledge Asset Panel (SQLite 真实数据)
+                    knowledgeAssetSection
+
                     // Achievement Milestone Badges
                     achievementBadgesSection
 
@@ -34,8 +43,70 @@ struct ReadingInsightsModalView: View {
                 .padding(20)
             }
         }
-        .frame(minWidth: 460, idealWidth: 500, maxWidth: 540, minHeight: 480, idealHeight: 560, maxHeight: 620)
+        .frame(minWidth: 460, idealWidth: 500, maxWidth: 540, minHeight: 480, idealHeight: 640, maxHeight: 720)
         .background(.ultraThinMaterial)
+        .task {
+            knowledgeSnapshot = KnowledgeSnapshot.load()
+        }
+    }
+
+    // MARK: - 知识资产区块
+
+    private var knowledgeAssetSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("知识资产")
+                    .font(.system(size: 12, weight: .bold))
+                Text("本地知识库 · 真实数据")
+                    .font(.system(size: 9.5, design: .serif))
+                    .foregroundStyle(.tertiary)
+                Spacer()
+                if let snapshot = knowledgeSnapshot {
+                    Text(snapshot.generatedDescription)
+                        .font(.system(size: 9.5, design: .monospaced))
+                        .foregroundStyle(.tertiary)
+                }
+            }
+
+            if let snap = knowledgeSnapshot {
+                HStack(spacing: 10) {
+                    knowledgeTile(title: "划线", value: "\(snap.highlightCount)", icon: "highlighter", color: .yellow)
+                    knowledgeTile(title: "思考笔记", value: "\(snap.noteCount)", icon: "bubble.left.and.bubble.right.fill", color: .blue)
+                    knowledgeTile(title: "书库", value: "\(snap.bookmarkCount)", icon: "books.vertical.fill", color: .brown)
+                    knowledgeTile(title: "记忆卡片", value: "\(snap.scheduledCards)", icon: "brain.head.profile.fill", color: .purple)
+                }
+            } else {
+                HStack(spacing: 8) {
+                    ProgressView()
+                        .controlSize(.mini)
+                    Text("正在读取本地知识库...")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                }
+                .padding(14)
+                .frame(maxWidth: .infinity)
+                .background(Color.primary.opacity(0.03))
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            }
+        }
+    }
+
+    private func knowledgeTile(title: String, value: String, icon: String, color: Color) -> some View {
+        VStack(spacing: 4) {
+            Image(systemName: icon)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(color)
+            Text(value)
+                .font(.system(size: 13, weight: .bold, design: .monospaced))
+                .foregroundStyle(Color.primary)
+            Text(title)
+                .font(.system(size: 9))
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 10)
+        .background(color.opacity(0.05))
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 
     // MARK: - Header Bar
@@ -169,10 +240,10 @@ struct ReadingInsightsModalView: View {
                 color: .green
             )
             statTile(
-                title: "历史最佳连续",
-                value: "\(max(stats.currentStreakDays, 7)) 天",
-                icon: "trophy.fill",
-                color: .yellow
+                title: "连续阅读天数",
+                value: "\(stats.currentStreakDays) 天",
+                icon: "flame.fill",
+                color: .orange
             )
         }
     }
@@ -253,6 +324,60 @@ struct ReadingInsightsModalView: View {
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 
+    // MARK: - 30-Day Activity Heatmap
+
+    private var monthHeatmap: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("近 30 天阅读足迹")
+                    .font(.system(size: 12, weight: .bold))
+                Spacer()
+                Text("本月累计 \(stats.monthTotalMinutes) 分钟 · 日均 \(stats.monthDailyAverage) 分钟")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+            }
+
+            let history = stats.dailyHistory ?? []
+            let maxVal = max(30, history.max() ?? 30)
+            let todayIndex = history.count - 1
+
+            HStack(alignment: .bottom, spacing: 3) {
+                ForEach(history.indices, id: \.self) { idx in
+                    let mins = history[idx]
+                    let ratio = Double(mins) / Double(maxVal)
+                    let isToday = idx == todayIndex
+                    let barColor: Color = mins == 0
+                        ? Color.primary.opacity(0.07)
+                        : (isToday ? Color.orange : Color.purple.opacity(0.35 + 0.55 * ratio))
+
+                    RoundedRectangle(cornerRadius: 2.5, style: .continuous)
+                        .fill(barColor)
+                        .frame(height: max(5, 46 * ratio))
+                        .frame(maxWidth: .infinity)
+                        .help("\(mins) 分钟")
+                }
+            }
+            .frame(height: 50)
+
+            HStack {
+                Text("30 天前")
+                    .font(.system(size: 8.5))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Text("今天")
+                    .font(.system(size: 8.5, weight: isTodayActive ? .bold : .regular))
+                    .foregroundStyle(isTodayActive ? Color.orange : Color.secondary)
+            }
+        }
+        .padding(14)
+        .background(Color.primary.opacity(0.03))
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+
+    private var isTodayActive: Bool {
+        (stats.dailyHistory?.last ?? 0) > 0
+    }
+
     // MARK: - Achievement Badges
     private var achievementBadgesSection: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -294,5 +419,29 @@ struct ReadingInsightsModalView: View {
         .background(Color.primary.opacity(0.025))
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         .opacity(isUnlocked ? 1.0 : 0.6)
+    }
+}
+
+/// 知识资产实时快照（SQLite 真实统计）
+struct KnowledgeSnapshot {
+    let highlightCount: Int
+    let noteCount: Int
+    let bookmarkCount: Int
+    let scheduledCards: Int
+
+    var generatedDescription: String {
+        "共 \(highlightCount + noteCount) 条资产"
+    }
+
+    static func load() -> KnowledgeSnapshot {
+        let db = LibraryDatabase.shared
+        let highlights = db.loadHighlights()
+        let bookmarks = db.loadBookmarks()
+        return KnowledgeSnapshot(
+            highlightCount: highlights.count,
+            noteCount: highlights.filter { ($0.note ?? "").isEmpty == false }.count,
+            bookmarkCount: bookmarks.count,
+            scheduledCards: db.scheduledCardCount()
+        )
     }
 }

@@ -224,18 +224,24 @@ final class LibraryDatabase: @unchecked Sendable {
 
     /// Cards reviewed today and small stats for the session banner.
     func reviewStats(asOf date: Date = Date()) -> (reviewedToday: Int, masteredCards: Int) {
-        guard let db else { return (0, 0) }
-        var stmt: OpaquePointer?
         let dayStart = Calendar.current.startOfDay(for: date).timeIntervalSince1970
-        let sql = "SELECT COUNT(*) FROM review_schedule WHERE last_reviewed_at >= ?; SELECT COUNT(*) FROM review_schedule WHERE mastery_level >= 3"
-        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return (0, 0) }
-        defer { sqlite3_finalize(stmt) }
-        sqlite3_bind_double(stmt, 1, dayStart)
-        var reviewedToday = 0
-        if sqlite3_step(stmt) == SQLITE_ROW { reviewedToday = Int(sqlite3_column_int64(stmt, 0)) }
-        var mastered = 0
-        if sqlite3_step(stmt) == SQLITE_ROW { mastered = Int(sqlite3_column_int64(stmt, 0)) }
+        let reviewedToday = scalarCount("SELECT COUNT(*) FROM review_schedule WHERE last_reviewed_at >= \(dayStart)")
+        let mastered = scalarCount("SELECT COUNT(*) FROM review_schedule WHERE mastery_level >= 3")
         return (reviewedToday, mastered)
+    }
+
+    /// 复习排期总数（进入记忆通道的卡片数）
+    func scheduledCardCount() -> Int {
+        scalarCount("SELECT COUNT(*) FROM review_schedule")
+    }
+
+    private func scalarCount(_ sql: String) -> Int {
+        guard let db else { return 0 }
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return 0 }
+        defer { sqlite3_finalize(stmt) }
+        guard sqlite3_step(stmt) == SQLITE_ROW else { return 0 }
+        return Int(sqlite3_column_int64(stmt, 0))
     }
 
     /// One-time migration from the legacy UserDefaults JSON blobs.

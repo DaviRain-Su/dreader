@@ -47,6 +47,12 @@ final class ReadingStatsManager: @unchecked Sendable {
         if stats.weeklyMinutes.indices.contains(weekday) {
             stats.weeklyMinutes[weekday] = max(stats.weeklyMinutes[weekday], stats.todayMinutes)
         }
+
+        // 30 天历史：今天那一格同步累加
+        stats.ensureHistoryCapacity()
+        if !stats.dailyHistory!.isEmpty {
+            stats.dailyHistory![stats.dailyHistory!.count - 1] = stats.todayMinutes
+        }
         save()
     }
 
@@ -56,24 +62,40 @@ final class ReadingStatsManager: @unchecked Sendable {
 
         guard let lastDate = stats.lastReadDate else {
             stats.lastReadDate = today
+            stats.ensureHistoryCapacity()
             save()
             return
         }
 
         if !calendar.isDate(lastDate, inSameDayAs: today) {
+            // 跨天前先把最后一天的收尾数据写进历史
+            if let history = stats.dailyHistory, !history.isEmpty {
+                var updated = history
+                updated[updated.count - 1] = stats.todayMinutes
+                stats.dailyHistory = updated
+            }
+
             // New day! Check if yesterday was read
             if let yesterday = calendar.date(byAdding: .day, value: -1, to: today),
                calendar.isDate(lastDate, inSameDayAs: yesterday) {
                 // Maintained streak!
                 stats.currentStreakDays += 1
+            } else if calendar.isDateInToday(lastDate) {
+                // Same day, nothing to roll
             } else {
                 // Streak broken or reset
-                stats.currentStreakDays = 1
+                stats.currentStreakDays = stats.todayMinutes > 0 ? 1 : 0
             }
 
             stats.todayMinutes = 0
             stats.todayWords = 0
             stats.lastReadDate = today
+            stats.ensureHistoryCapacity()
+            // 滑动窗口：丢最旧一天，追加今天
+            if stats.dailyHistory!.count >= 30 {
+                stats.dailyHistory!.removeFirst()
+            }
+            stats.dailyHistory!.append(0)
             save()
         }
     }
