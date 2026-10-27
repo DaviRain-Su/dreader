@@ -3,6 +3,15 @@ import AppKit
 import AVFoundation
 import UniformTypeIdentifiers
 
+/// 前情回顾邀请：隔了多天重新翻开一本有阅读印记的书时，阅读区浮现的可关闭小条
+struct RecapHint: Equatable, Identifiable {
+    let bookTitle: String
+    let lastChapterIndex: Int
+    let lastChapterTitle: String
+    let daysAway: Int
+    var id: String { "\(bookTitle)-\(lastChapterIndex)" }
+}
+
 @Observable
 final class ReaderViewModel: @unchecked Sendable {
     var books: [EPUBBook] = []
@@ -24,6 +33,11 @@ final class ReaderViewModel: @unchecked Sendable {
     var isLoadingBook: Bool = false
     var errorMessage: String?
     var chapterRenderID: UUID = UUID()
+    var pendingRecap: RecapHint? = nil
+
+    /// 前情回顾的延迟浮现任务（换书时取消旧的），以及本会话内已关闭提示的书
+    private var recapTask: Task<Void, Never>?
+    private var recapDismissedBookTitles: Set<String> = []
 
     var readingStats: ReadingStats {
         ReadingStatsManager.shared.stats
@@ -107,6 +121,7 @@ final class ReaderViewModel: @unchecked Sendable {
             isSidebarVisible = false
             selectionManager.clear()
         }
+        scheduleRecapIfAwayLong(for: book)
         // 竖排偏好：已设置按书记忆 → 恢复；未设置 → 古籍默认竖排（仅首开时写入偏好）
         if settings.storedVertical(for: book.id) {
             settings.isVertical = true
@@ -125,6 +140,40 @@ final class ReaderViewModel: @unchecked Sendable {
         }
         updateSubsequentChaptersTotalChars()
         preloadAllChapters(for: book)
+    }
+
+    // MARK: - 前情回顾（Kindle Recaps 范式）
+
+    /// 开书后判定是否值得给出前情回顾：本书最近印记 ≥ 3 天前、位置不在第一章，且本会话未关过提示。
+    /// 邀请条延迟 1.4s 浮现，避免与开书动效抢注意力。
+    private func scheduleRecapIfAwayLong(for book: EPUBBook) {
+        recapTask?.cancel()
+        pendingRecap = nil
+        guard !recapDismissedBookTitles.contains(book.title), book.currentChapterIndex == 0 else { return }
+        guard let activity = LibraryDatabase.shared.latestActivity(bookTitle: book.title) else { return }
+        let days = max(1, Int(Date().timeIntervalSince(activity.date) / 86_400))
+        guard days >= 3, activity.chapterIndex > 0 else { return }
+        recapTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 1_400_000_000)
+            guard !Task.isCancelled, currentBook?.title == book.title else { return }
+            withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) {
+                pendingRecap = RecapHint(
+                    bookTitle: book.title,
+                    lastChapterIndex: activity.chapterIndex,
+                    lastChapterTitle: activity.chapterTitle,
+                    daysAway: days
+                )
+            }
+        }
+    }
+
+    func dismissRecap() {
+        if let hint = pendingRecap {
+            recapDismissedBookTitles.insert(hint.bookTitle)
+        }
+        withAnimation(.easeOut(duration: 0.2)) {
+            pendingRecap = nil
+        }
     }
 
     // MARK: - Open EPUB
@@ -582,6 +631,21 @@ final class ReaderViewModel: @unchecked Sendable {
         )
         LibraryDatabase.shared.upsertHighlights([note])
         highlights.append(note)
+    }
+
+    /// Kindle 生词本闭环：查词动作把词自动收进生词库（source="vocabulary"），
+    /// 首次到期复习由 review_schedule 的 NULL 分支自然接管，进入 7/14/28 天队列。
+    func saveVocabularyWord(_ raw: String) {
+        guard let book = currentBook, let chapter = book.currentChapter else { return }
+        if LibraryDatabase.shared.upsertVocabularyWord(
+            raw,
+            bookId: book.id,
+            bookTitle: book.title,
+            chapterTitle: chapter.title
+        ) != nil {
+            // 仅新词才刷新内存列表（去重命中时静默）
+            highlights = LibraryDatabase.shared.loadHighlights()
+        }
     }
 
     // MARK: - Cross-Book Library Search (全书库搜索)

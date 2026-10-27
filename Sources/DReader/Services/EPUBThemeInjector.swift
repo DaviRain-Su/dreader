@@ -1142,6 +1142,97 @@ struct EPUBThemeInjector {
                 }
             };
 
+            // ===== Line Guide 行引导线（Apple Books 同款：跟随视线的一条淡线防长行串行）=====
+            // 横排：淡横线吸附到鼠标所在文本行底线 + 该行轻微提亮；竖排（vertical-rl）：淡竖线跟随所在列。
+            let dreaderGuideState = { enabled: false, color: '#888888' };
+
+            window.dreaderSetLineGuide = function(enabled, colorHex) {
+                dreaderGuideState.enabled = !!enabled;
+                dreaderGuideState.color = colorHex || '#888888';
+                const line = document.getElementById('dreader-line-guide');
+                const row = document.getElementById('dreader-line-guide-row');
+                if (!dreaderGuideState.enabled) {
+                    if (line) line.remove();
+                    if (row) row.remove();
+                    document.removeEventListener('mousemove', dreaderGuideOnMove, true);
+                    return;
+                }
+                if (!line) {
+                    const l = document.createElement('div');
+                    l.id = 'dreader-line-guide';
+                    const r = document.createElement('div');
+                    r.id = 'dreader-line-guide-row';
+                    document.body.appendChild(r);
+                    document.body.appendChild(l);
+                }
+                document.removeEventListener('mousemove', dreaderGuideOnMove, true);
+                document.addEventListener('mousemove', dreaderGuideOnMove, true);
+            };
+
+            function dreaderGuideOnMove(e) {
+                if (!dreaderGuideState.enabled) return;
+                const line = document.getElementById('dreader-line-guide');
+                const row = document.getElementById('dreader-line-guide-row');
+                if (!line || !row) return;
+
+                const vertical = window.dreaderIsVertical ? window.dreaderIsVertical() : false;
+                // 选区标注时不画（干扰划线手势）
+                const sel = window.getSelection();
+                if (sel && !sel.isCollapsed) {
+                    line.style.opacity = '0';
+                    row.style.opacity = '0';
+                    return;
+                }
+
+                const range = document.caretRangeFromPoint(e.clientX, e.clientY);
+                if (!range || !range.startContainer) {
+                    line.style.opacity = '0'; row.style.opacity = '0'; return;
+                }
+                let el = range.startContainer;
+                if (el.nodeType === 3) el = el.parentElement;
+                if (!el || !(el instanceof Element) || el.closest('#dreader-line-guide, #dreader-line-guide-row')) {
+                    line.style.opacity = '0'; row.style.opacity = '0'; return;
+                }
+
+                // 用整个元素的 Range 得到逐行矩形，找鼠标命中的那一行
+                const rng = document.createRange();
+                rng.selectNodeContents(el);
+                const rects = Array.from(rng.getClientRects()).filter(function(r) { return r.height > 0 && r.width > 0; });
+                if (!rects.length) { line.style.opacity = '0'; row.style.opacity = '0'; return; }
+
+                let hit = null;
+                for (const r of rects) {
+                    if (e.clientY >= r.top && e.clientY <= r.bottom && e.clientX >= r.left - 2 && e.clientX <= r.right + 2) { hit = r; break; }
+                }
+                if (!hit) {
+                    hit = rects.reduce(function(best, r) {
+                        const dR = Math.abs(r.top + r.height / 2 - e.clientY) + Math.abs(r.left + r.width / 2 - e.clientX);
+                        const dB = best ? (Math.abs(best.top + best.height / 2 - e.clientY) + Math.abs(best.left + best.width / 2 - e.clientX)) : 1e9;
+                        return dR < dB ? r : best;
+                    }, null);
+                }
+                if (!hit) { line.style.opacity = '0'; row.style.opacity = '0'; return; }
+
+                const c = dreaderGuideState.color;
+                if (vertical) {
+                    // 竖排：列框 + 列右缘竖线（阅读起始侧）
+                    row.style.cssText = 'position:fixed;pointer-events:none;z-index:9997;border-radius:2px;' +
+                        'left:' + hit.left + 'px;top:' + hit.top + 'px;width:' + hit.width + 'px;height:' + hit.height + 'px;' +
+                        'background:rgba(128,128,128,0.06);opacity:1;transition:opacity .18s;';
+                    line.style.cssText = 'position:fixed;pointer-events:none;z-index:9998;' +
+                        'left:' + (hit.right - 1) + 'px;top:' + hit.top + 'px;width:1px;height:' + hit.height + 'px;' +
+                        'background:' + c + ';opacity:0.22;transition:opacity .18s,left .06s,top .06s,height .06s;';
+                } else {
+                    // 横排：行框 + 行底线下 3px 的横线
+                    row.style.cssText = 'position:fixed;pointer-events:none;z-index:9997;border-radius:2px;' +
+                        'left:' + hit.left + 'px;top:' + hit.top + 'px;width:' + hit.width + 'px;height:' + hit.height + 'px;' +
+                        'background:rgba(128,128,128,0.06);opacity:1;transition:opacity .18s;';
+                    line.style.cssText = 'position:fixed;pointer-events:none;z-index:9998;' +
+                        'left:' + hit.left + 'px;top:' + (hit.bottom + 2) + 'px;width:' + hit.width + 'px;height:1px;' +
+                        'background:' + c + ';opacity:0.22;transition:opacity .18s,left .06s,top .06s,width .06s;';
+                }
+            };
+
             // Keyboard Shortcuts for Space, PageDown, PageUp, Arrow Keys
             document.addEventListener('keydown', function(e) {
                 if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable) return;

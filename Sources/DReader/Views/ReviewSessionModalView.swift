@@ -246,6 +246,8 @@ struct ReviewSessionModalView: View {
         let (icon, label, color): (String, String, Color) = {
             if highlight.isFromWeChatRead {
                 return ("quote.bubble.fill", "微信读书", Color(hex: "#07C160"))
+            } else if highlight.source == "vocabulary" {
+                return ("character.book.closed", "生词本", Color(hex: "#4A90C2"))
             } else if highlight.source == "ai_companion" {
                 return ("sparkles", "AI 伴读", Color(hex: "#8E7CC3"))
             } else {
@@ -266,6 +268,9 @@ struct ReviewSessionModalView: View {
     }
 
     private func recallPrompt(for highlight: Highlight) -> String {
+        if highlight.source == "vocabulary" {
+            return "还记得「\(highlight.text)」的含义、读音，以及是在哪本书的什么语境里查到它的吗？"
+        }
         if let note = highlight.note, !note.isEmpty {
             return "还记得当时的思考吗？【\(highlight.bookTitle) · \(highlight.chapterTitle)】"
         }

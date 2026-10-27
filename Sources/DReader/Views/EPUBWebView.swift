@@ -135,7 +135,7 @@ struct EPUBWebView: NSViewRepresentable {
     }
 
     private var settingsSummary: String {
-        "\(settings.theme.rawValue)-\(settings.fontFamily.rawValue)-\(settings.fontSize)-\(settings.lineHeight)-\(settings.maxWidth)-\(settings.paragraphSpacing)-\(settings.isJustified)-\(settings.pageLayout.rawValue)-\(settings.isBilingualEnabled)-\(settings.chineseScriptMode.rawValue)-\(settings.isVertical ? "V" : "H")-\(highlightsSummary)"
+        "\(settings.theme.rawValue)-\(settings.fontFamily.rawValue)-\(settings.fontSize)-\(settings.lineHeight)-\(settings.maxWidth)-\(settings.paragraphSpacing)-\(settings.isJustified)-\(settings.pageLayout.rawValue)-\(settings.isBilingualEnabled)-\(settings.chineseScriptMode.rawValue)-\(settings.isVertical ? "V" : "H")-\(settings.isLineGuide ? "G1" : "G0")-\(highlightsSummary)"
     }
 
     // MARK: - Coordinator
@@ -493,6 +493,11 @@ struct EPUBWebView: NSViewRepresentable {
                 let success = (result as? Bool) ?? false
                 if success {
                     self?.restoreHighlightsInDOM(highlights)
+                    // 换章后同步行引导线（DOM 重挂会移除引导元素）
+                    let guideScript = settings.isLineGuide
+                        ? "window.dreaderSetLineGuide && window.dreaderSetLineGuide(true, '\(settings.theme.textColorHex)');"
+                        : "window.dreaderSetLineGuide && window.dreaderSetLineGuide(false);"
+                    webView.evaluateJavaScript(guideScript, completionHandler: nil)
                     if let pendingId = self?.pendingScrollHighlightId {
                         self?.pendingScrollHighlightId = nil
                         DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
@@ -539,6 +544,14 @@ struct EPUBWebView: NSViewRepresentable {
             })();
             """
             webView.evaluateJavaScript(js, completionHandler: nil)
+
+            // 行引导线开/关与主题色同步（横排/竖排双轴均由 JS 内部处理）
+            let guideColor = settings.theme.textColorHex
+            if settings.isLineGuide {
+                webView.evaluateJavaScript("window.dreaderSetLineGuide && window.dreaderSetLineGuide(true, '\(guideColor)');", completionHandler: nil)
+            } else {
+                webView.evaluateJavaScript("window.dreaderSetLineGuide && window.dreaderSetLineGuide(false);", completionHandler: nil)
+            }
         }
 
         func applyHighlight(colorHex: String, id: String) {

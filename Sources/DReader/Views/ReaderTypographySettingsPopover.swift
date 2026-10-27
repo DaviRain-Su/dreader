@@ -231,6 +231,17 @@ struct ReaderTypographySettingsPopover: View {
                 }
             }
 
+            // Line Guide (行引导线)
+            Toggle(isOn: $settings.isLineGuide) {
+                HStack(spacing: 4) {
+                    Image(systemName: "line.3.horizontal.decrease")
+                        .foregroundStyle(Color.primary.opacity(0.75))
+                    Text("行引导线 (跟随视线，防长行串行)")
+                        .font(.system(size: 11.5))
+                }
+            }
+            .help("Apple Books 同款：鼠标所在文本行显示一条淡引导线，方便通读古籍长行")
+
             Divider()
                 .opacity(0.3)
 

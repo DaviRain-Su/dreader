@@ -219,6 +219,15 @@ final class ReaderSettings: @unchecked Sendable {
 
     // Vertical Typesetting (中文古籍竖排 right-to-left)
     var isVertical: Bool = false
+
+    // Line Guide (行引导线：跟随视线的淡线，防长行串行 —— Apple Books Line Guide)
+    var isLineGuide: Bool = {
+        UserDefaults.standard.bool(forKey: "dreader.line_guide_enabled") == true
+    }() {
+        didSet {
+            UserDefaults.standard.set(isLineGuide, forKey: "dreader.line_guide_enabled")
+        }
+    }
     /// 记住每本书的竖排偏好（bookId → "1"/"0"），切书时恢复
     private static let verticalPrefsKey = "dreader.vertical_by_book"
 

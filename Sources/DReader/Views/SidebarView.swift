@@ -602,6 +602,14 @@ struct SidebarView: View {
                             .font(.system(size: 8.5, weight: .medium))
                     }
                     .foregroundStyle(.secondary.opacity(0.75))
+                } else if item.source == "vocabulary" {
+                    HStack(spacing: 2.5) {
+                        Image(systemName: "character.book.closed")
+                            .font(.system(size: 7.5))
+                        Text("生词本")
+                            .font(.system(size: 8.5, weight: .medium))
+                    }
+                    .foregroundStyle(.secondary.opacity(0.75))
                 } else if item.source == "ai_companion" {
                     HStack(spacing: 2.5) {
                         Image(systemName: "sparkles")

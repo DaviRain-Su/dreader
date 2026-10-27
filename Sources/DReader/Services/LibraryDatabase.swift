@@ -389,6 +389,72 @@ final class LibraryDatabase: @unchecked Sendable {
         }
     }
 
+    // MARK: - Vocabulary Builder (Kindle 生词本闭环)
+
+    /// Kindle Vocabulary Builder 范式：查过的词收进生词本（source = "vocabulary" 的划线条目），
+    /// 首次复习排程复用 review_schedule —— 查过的词自然进入 7/14/28 天精通队列。
+    /// 按（词 + 书名）去重；同一本书不重复收录，跨书可分别积累语境。
+    @discardableResult
+    func upsertVocabularyWord(_ word: String, bookId: UUID, bookTitle: String, chapterTitle: String) -> Highlight? {
+        let cleaned = word.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleaned.isEmpty, cleaned.count <= 24 else { return nil }
+
+        return dbQueue.sync {
+            guard let db else { return nil }
+            // 去重：同词 + 同书已收录
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, """
+            SELECT id FROM highlights
+            WHERE source = 'vocabulary' AND text = ? AND book_title = ? LIMIT 1
+            """, -1, &stmt, nil) == SQLITE_OK else { return nil }
+            sqlite3_bind_text(stmt, 1, cleaned, -1, Self.transient)
+            sqlite3_bind_text(stmt, 2, bookTitle, -1, Self.transient)
+            let exists = sqlite3_step(stmt) == SQLITE_ROW
+            sqlite3_finalize(stmt)
+            guard !exists else { return nil }
+
+            let entry = Highlight(
+                bookId: bookId,
+                bookTitle: bookTitle,
+                chapterIndex: 0,
+                chapterTitle: chapterTitle,
+                text: cleaned,
+                colorHex: "#A5D8FF",
+                createdAt: Date(),
+                source: "vocabulary"
+            )
+            upsertHighlightsSync([entry])
+            return entry
+        }
+    }
+
+    /// 生词总数（书架生词本入口角标用）
+    func vocabularyCount() -> Int {
+        dbQueue.sync {
+            guard let db else { return 0 }
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, "SELECT COUNT(*) FROM highlights WHERE source = 'vocabulary'", -1, &stmt, nil) == SQLITE_OK else { return 0 }
+            defer { sqlite3_finalize(stmt) }
+            return sqlite3_step(stmt) == SQLITE_ROW ? Int(sqlite3_column_int64(stmt, 0)) : 0
+        }
+    }
+
+    /// 某本书最后一次「留下印记」的记录（划线/书签/生词的时间与所在章），前情回顾的判定源。
+    /// 单一 MAX 聚合下 SQLite 的 bare columns 取自极值所在行，章节信息与时间同源。
+    func latestActivity(bookTitle: String) -> (chapterIndex: Int, chapterTitle: String, date: Date)? {
+        dbQueue.sync {
+            guard let db else { return nil }
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, "SELECT chapter_index, chapter_title, MAX(created_at) FROM highlights WHERE book_title = ?", -1, &stmt, nil) == SQLITE_OK else { return nil }
+            defer { sqlite3_finalize(stmt) }
+            sqlite3_bind_text(stmt, 1, bookTitle, -1, Self.transient)
+            guard sqlite3_step(stmt) == SQLITE_ROW, sqlite3_column_type(stmt, 2) != SQLITE_NULL else { return nil }
+            let idx = Int(sqlite3_column_int64(stmt, 0))
+            let title = sqlite3_column_text(stmt, 1).map { String(cString: $0) } ?? ""
+            return (idx, title, Date(timeIntervalSince1970: sqlite3_column_double(stmt, 2)))
+        }
+    }
+
     // MARK: - Bookmarks
 
     func loadBookmarks() -> [Bookmark] {

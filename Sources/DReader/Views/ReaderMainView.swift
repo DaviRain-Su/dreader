@@ -291,6 +291,18 @@ struct ReaderMainView: View {
                             .frame(maxWidth: .infinity, alignment: .topTrailing)
                         }
 
+                        // Floating Recap Invite —— 前情回顾邀请（Kindle Recaps 范式，本会话书级只打扰一次）
+                        if let hint = vm.pendingRecap {
+                            HStack {
+                                recapInviteCard(hint)
+                                Spacer()
+                            }
+                            .padding(.leading, 20)
+                            .padding(.bottom, 18)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+                            .transition(.move(edge: .bottom).combined(with: .opacity))
+                        }
+
                         // Floating Toolbars & Cards Geometry-Constrained Overlay
                         GeometryReader { geo in
                             let areaW = geo.size.width
@@ -370,6 +382,8 @@ struct ReaderMainView: View {
                                     },
                                     onLookUp: { text in
                                         vm.speakText(text)
+                                        // Kindle 生词本范式：查词自动收进生词库并进入复习队列
+                                        vm.saveVocabularyWord(text)
                                         vm.selectionManager.quoteForAI = text
                                         vm.isAIPanelVisible = true
                                         let prompt = "请为词汇/短语「\(text)」提供权威深度词典解析：包含【标准发音/拼音】、【词性与基本释义】、【在本书语境中的微言大义与深层寓意】及【近义词与典故词源】。"
@@ -1165,6 +1179,71 @@ struct ReaderMainView: View {
                         .stroke(Color.white.opacity(0.25), lineWidth: 0.5)
                 )
         )
+    }
+}
+
+// MARK: - Recap Invite Card（前情回顾邀请，无彩 chrome）
+
+extension ReaderMainView {
+    func recapInviteCard(_ hint: RecapHint) -> some View {
+        let currentChapterTitle = vm.currentBook?.currentChapter?.title ?? ""
+        return HStack(spacing: 10) {
+            Image(systemName: "clock.arrow.circlepath")
+                .font(.system(size: 15, weight: .medium))
+                .foregroundStyle(Color.primary.opacity(0.55))
+            VStack(alignment: .leading, spacing: 2) {
+                Text("时隔 \(hint.daysAway) 天回到《\(hint.bookTitle)》")
+                    .font(.system(size: 12, weight: .bold))
+                    .lineLimit(1)
+                Text("上次的印记留在第 \(hint.lastChapterIndex + 1) 章「\(hint.lastChapterTitle)」附近")
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            Button {
+                vm.dismissRecap()
+                vm.isAIPanelVisible = true
+                var prompt = "我隔了 \(hint.daysAway) 天才重新翻开《\(hint.bookTitle)》。"
+                prompt += "上次我在这本书里留下印记，是在第 \(hint.lastChapterIndex + 1) 章《\(hint.lastChapterTitle)》附近。"
+                if !currentChapterTitle.isEmpty {
+                    prompt += "此刻我从《\(currentChapterTitle)》重新读起。"
+                }
+                prompt += "请用 200 字以内帮我做一次前情提要：讲清上次读到的那部分留下什么线索与意境，并提醒我带着什么样的注意力重新进入这本书。像一位见面就有默契的书友，直接说。"
+                NotificationCenter.default.post(
+                    name: NSNotification.Name("DReaderTriggerAIPrompt"),
+                    object: nil,
+                    userInfo: ["prompt": prompt, "quote": ""]
+                )
+            } label: {
+                Text("AI 回顾前情")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 13)
+                    .padding(.vertical, 6)
+                    .background(Color.primary.opacity(0.78))
+                    .clipShape(Capsule())
+            }
+            .buttonStyle(.plain)
+            Button {
+                vm.dismissRecap()
+            } label: {
+                Text("知道了")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .padding(.vertical, 6)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(Color(nsColor: .windowBackgroundColor))
+        .clipShape(RoundedRectangle(cornerRadius: 13))
+        .overlay(
+            RoundedRectangle(cornerRadius: 13)
+                .stroke(Color(nsColor: .separatorColor).opacity(0.55), lineWidth: 0.5)
+        )
+        .shadow(color: .black.opacity(0.16), radius: 14, y: 5)
+        .frame(maxWidth: 480)
     }
 }
 
