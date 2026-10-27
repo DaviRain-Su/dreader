@@ -96,14 +96,15 @@ final class WeReadQRLoginService: @unchecked Sendable {
         baseURL + "/web/confirm?uid=" + percentEncode(uid)
     }
 
-    /// 步骤 4：单次轮询；transport 错误向上抛，由调用方决定是否继续
+    /// 步骤 4：单次长轮询（服务端会阻塞至状态变化或 ~5s，超时设 6s 紧贴其窗口）；
+    /// transport 错误向上抛，由调用方决定是否继续
     func poll(uid: String, otp: String) async throws -> PollOutcome {
         let otpSuffix = otp.isEmpty ? "" : Self.percentEncode(otp)
         let (data, resp) = try await get(
             "/api/auth/getLoginInfo?uid=\(Self.percentEncode(uid))&otp=\(otpSuffix)",
             referer: Self.skillsPage,
             accept: "application/json, text/plain, */*",
-            timeout: 12
+            timeout: 6
         )
         guard (200..<300).contains(resp.statusCode) else {
             throw LoginError.http(resp.statusCode, "getLoginInfo")

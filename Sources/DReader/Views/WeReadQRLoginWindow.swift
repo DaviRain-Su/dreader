@@ -120,7 +120,7 @@ final class WeReadQRLoginFlow: ObservableObject {
                             message: result.logicCode == "OTP_NOT_MATCH"
                                 ? "验证码不正确，请重新输入手机上的 4 位数字。"
                                 : nil
-                        ), let _ = code.isEmpty ? nil : () else { return }
+                        ), !code.isEmpty else { return }
                         otp = code
                     case "OTP_EXPIRED":
                         otp = ""
@@ -130,15 +130,14 @@ final class WeReadQRLoginFlow: ObservableObject {
                         phase = .expired
                         return
                     default:
-                        phase = .failed(
-                            message: result.logicCode.isEmpty ? "登录响应异常，请重试" : "登录被拒绝：\(result.logicCode)"
-                        )
-                        return
+                        // 未知状态码（含空轮询响应）：不判死，继续轮到会话过期
+                        break
                     }
                 } catch {
                     // transport 错误（超时/网络抖动）：继续轮到会话过期为止
                 }
-                try? await Task.sleep(nanoseconds: 1_500_000_000)
+                // 服务端长轮询 ~5s 阻塞返回，这里只补 0.5s 间隔（KOReader 同款节奏）
+                try? await Task.sleep(nanoseconds: 500_000_000)
             }
         } catch is CancellationError {
             // 停流：静默
