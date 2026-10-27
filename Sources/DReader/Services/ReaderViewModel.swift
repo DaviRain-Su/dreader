@@ -901,6 +901,7 @@ final class ReaderViewModel: @unchecked Sendable {
 
     /// Starts continuous chapter narration from a given paragraph offset (default 0).
     func startChapterReadAloud() {
+        readAloud.settingsProvider = { [settings] in settings }
         guard let book = currentBook, let chapter = book.currentChapter else { return }
         let raw = getCachedHTML(for: chapter.fileURL)
             ?? (try? String(contentsOf: chapter.fileURL, encoding: .utf8)) ?? ""

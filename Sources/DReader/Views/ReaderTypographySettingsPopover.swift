@@ -1,3 +1,4 @@
+import AVFoundation
 import SwiftUI
 
 struct ReaderTypographySettingsPopover: View {
@@ -300,6 +301,86 @@ struct ReaderTypographySettingsPopover: View {
             Divider()
                 .opacity(0.3)
 
+            // Read-Aloud Engine Section (听书引擎)
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 4) {
+                    Image(systemName: "headphones")
+                        .foregroundStyle(Color.primary.opacity(0.75))
+                    Text("听书音色")
+                        .font(.system(size: 11.5, weight: .semibold))
+                    Spacer()
+                    Picker("", selection: $settings.readAloudEngine) {
+                        ForEach(ReaderSettings.ReadAloudEngine.allCases) { engine in
+                            Text(engine.rawValue).tag(engine)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .frame(width: 190)
+                }
+
+                if settings.readAloudEngine == .system {
+                    // 系统语音：列出已安装中文语音（质量档标注）
+                    VStack(alignment: .leading, spacing: 4) {
+                        Picker("语音", selection: $settings.systemVoiceIdentifier) {
+                            Text("自动（选最高质量）").tag(String?.none)
+                            ForEach(systemChineseVoices, id: \.identifier) { voice in
+                                Text("\(voice.name) · \(qualityLabel(voice.quality)) (\(voice.language))")
+                                    .tag(String?.some(voice.identifier))
+                            }
+                        }
+                        .font(.system(size: 11))
+
+                        Text("提示：在系统设置 → 辅助功能 → 朗读内容 → 系统声音里可下载「增强/高级」档中文语音，接近真人")
+                            .font(.system(size: 9.5))
+                            .foregroundStyle(.secondary.opacity(0.8))
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                } else {
+                    // AI 大模型语音：OpenAI 兼容 TTS 配置
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack(spacing: 6) {
+                            Text("端点")
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundStyle(.secondary)
+                            TextField("https://api.siliconflow.cn/v1", text: $settings.aiTTSEndpoint)
+                                .textFieldStyle(.roundedBorder)
+                                .font(.system(size: 10.5, design: .monospaced))
+                        }
+                        HStack(spacing: 6) {
+                            Text("密钥")
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundStyle(.secondary)
+                            SecureField("sk-...", text: $settings.aiTTSAPIKey)
+                                .textFieldStyle(.roundedBorder)
+                                .font(.system(size: 10.5, design: .monospaced))
+                        }
+                        HStack(spacing: 6) {
+                            Text("模型")
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundStyle(.secondary)
+                            TextField("FunAudioLLM/CosyVoice2-0.5B", text: $settings.aiTTSModel)
+                                .textFieldStyle(.roundedBorder)
+                                .font(.system(size: 10.5, design: .monospaced))
+                        }
+                        HStack(spacing: 6) {
+                            Text("音色")
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundStyle(.secondary)
+                            TextField("FunAudioLLM/CosyVoice2-0.5B:anna", text: $settings.aiTTSVoice)
+                                .textFieldStyle(.roundedBorder)
+                                .font(.system(size: 10.5, design: .monospaced))
+                        }
+                        Text("兼容 OpenAI /v1/audio/speech 接口（硅基流动 CosyVoice2 拟人效果佳，有免费额度）。朗读中请求失败会自动回退系统语音，不打断听书")
+                            .font(.system(size: 9.5))
+                            .foregroundStyle(.secondary.opacity(0.8))
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+
+            Divider()
+                .opacity(0.3)
+
             // Bilingual Interlinear Reading Section
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
@@ -362,5 +443,23 @@ struct ReaderTypographySettingsPopover: View {
         .padding(16)
         .frame(width: 310)
         .background(.ultraThinMaterial)
+    }
+
+    // MARK: - 听书系统语音枚举
+
+    /// 已安装的中文系统语音（质量降序，每次弹窗打开时重新拉取）
+    private var systemChineseVoices: [AVSpeechSynthesisVoice] {
+        AVSpeechSynthesisVoice.speechVoices()
+            .filter { $0.language.hasPrefix("zh") }
+            .sorted { $0.quality.rawValue > $1.quality.rawValue }
+    }
+
+    private func qualityLabel(_ quality: AVSpeechSynthesisVoiceQuality) -> String {
+        switch quality {
+        case .default: return "默认"
+        case .enhanced: return "增强"
+        case .premium: return "高级"
+        @unknown default: return "未知"
+        }
     }
 }

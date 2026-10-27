@@ -272,6 +272,59 @@ final class ReaderSettings: @unchecked Sendable {
         let isDarkMode = NSApp.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
         theme = isDarkMode ? darkTheme : lightTheme
     }
+
+    // MARK: - 听书引擎（Read-Aloud）
+
+    /// 听书语音来源：系统内置语音（离线免费）或 OpenAI 兼容 TTS API（大模型拟人）
+    enum ReadAloudEngine: String, Codable, CaseIterable, Identifiable {
+        case system = "系统语音（离线）"
+        case ai = "AI 大模型语音（拟人）"
+        var id: String { rawValue }
+    }
+
+    var readAloudEngine: ReadAloudEngine = {
+        if let raw = UserDefaults.standard.string(forKey: "dreader.readaloud.engine"),
+           let e = ReadAloudEngine(rawValue: raw) { return e }
+        return .system
+    }() {
+        didSet { UserDefaults.standard.set(readAloudEngine.rawValue, forKey: "dreader.readaloud.engine") }
+    }
+
+    /// 系统语音标识（nil = 自动挑最高质量的中文语音）
+    var systemVoiceIdentifier: String? = {
+        UserDefaults.standard.string(forKey: "dreader.readaloud.system_voice")
+    }() {
+        didSet { UserDefaults.standard.set(systemVoiceIdentifier, forKey: "dreader.readaloud.system_voice") }
+    }
+
+    /// OpenAI 兼容 /v1/audio/speech 端点（OpenAI、硅基流动等）
+    var aiTTSEndpoint: String = {
+        UserDefaults.standard.string(forKey: "dreader.readaloud.ai_endpoint")
+            ?? "https://api.siliconflow.cn/v1"
+    }() {
+        didSet { UserDefaults.standard.set(aiTTSEndpoint, forKey: "dreader.readaloud.ai_endpoint") }
+    }
+
+    var aiTTSAPIKey: String = {
+        UserDefaults.standard.string(forKey: "dreader.readaloud.ai_key") ?? ""
+    }() {
+        didSet { UserDefaults.standard.set(aiTTSAPIKey, forKey: "dreader.readaloud.ai_key") }
+    }
+
+    var aiTTSModel: String = {
+        UserDefaults.standard.string(forKey: "dreader.readaloud.ai_model")
+            ?? "FunAudioLLM/CosyVoice2-0.5B"
+    }() {
+        didSet { UserDefaults.standard.set(aiTTSModel, forKey: "dreader.readaloud.ai_model") }
+    }
+
+    /// 音色：OpenAI 为 alloy 等短名；硅基流动为 "模型名:音色" 全称
+    var aiTTSVoice: String = {
+        UserDefaults.standard.string(forKey: "dreader.readaloud.ai_voice")
+            ?? "FunAudioLLM/CosyVoice2-0.5B:anna"
+    }() {
+        didSet { UserDefaults.standard.set(aiTTSVoice, forKey: "dreader.readaloud.ai_voice") }
+    }
     /// 记住每本书的竖排偏好（bookId → "1"/"0"），切书时恢复
     private static let verticalPrefsKey = "dreader.vertical_by_book"
 
