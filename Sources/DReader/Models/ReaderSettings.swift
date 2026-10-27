@@ -228,6 +228,17 @@ final class ReaderSettings: @unchecked Sendable {
             UserDefaults.standard.set(isLineGuide, forKey: "dreader.line_guide_enabled")
         }
     }
+
+    // 仿真翻页：翻页时旧页以整幅纸面平移滑出（快照合成，无闪烁）
+    var isPageTurnAnimation: Bool = {
+        UserDefaults.standard.object(forKey: "dreader.page_turn_animation") == nil
+            ? true // 默认开：更接近纸书手感
+            : UserDefaults.standard.bool(forKey: "dreader.page_turn_animation")
+    }() {
+        didSet {
+            UserDefaults.standard.set(isPageTurnAnimation, forKey: "dreader.page_turn_animation")
+        }
+    }
     /// 记住每本书的竖排偏好（bookId → "1"/"0"），切书时恢复
     private static let verticalPrefsKey = "dreader.vertical_by_book"
 

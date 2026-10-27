@@ -149,6 +149,8 @@ struct EPUBWebView: NSViewRepresentable {
         var lastBilingualEnabled: Bool = false
         var lastScriptMode: ChineseScriptMode = .original
         var pendingScrollHighlightId: String? = nil
+        /// 仿真翻页进行中（防止连按叠帧）
+        var isPageTurnAnimating: Bool = false
 
         init(_ parent: EPUBWebView) {
             self.parent = parent
@@ -157,9 +159,130 @@ struct EPUBWebView: NSViewRepresentable {
         func scrollPage(direction: Int) {
             if direction == 0 {
                 webView?.evaluateJavaScript("window.scrollTo({ top: 0, behavior: 'smooth' }); document.body.scrollTop = 0; document.documentElement.scrollTop = 0;", completionHandler: nil)
-            } else {
-                webView?.evaluateJavaScript("window.dreaderScrollPage(\(direction));", completionHandler: nil)
+                return
             }
+            // 仿真翻页：旧页快照盖在原地 → webview 无动画瞬时跳页 → 快照整幅滑出露出新页。
+            // 快照为完整矩形（非轮廓路径），不会闪出透明 webview 底色。
+            if parent.settings.isPageTurnAnimation, let webView = webView, isPageReady, !isPageTurnAnimating {
+                isPageTurnAnimating = true
+                let pageColor = parent.settings.theme.backgroundColorHex
+                webView.takeSnapshot(with: nil) { [weak self] image, _ in
+                    guard let self = self, let image = image else {
+                        self?.isPageTurnAnimating = false
+                        self?.plainScroll(direction: direction)
+                        return
+                    }
+                    DispatchQueue.main.async {
+                        self.performPageTurn(direction: direction, snapshot: image, pageColor: pageColor, webView: webView)
+                    }
+                }
+            } else {
+                plainScroll(direction: direction)
+            }
+        }
+
+        private func plainScroll(direction: Int) {
+            webView?.evaluateJavaScript("window.dreaderScrollPage(\(direction));", completionHandler: nil)
+        }
+
+        /// 快照合成翻页：在 webview 上盖旧页图层，先把 webview 无动画滚到目标位置，再让快照滑出。
+        private func performPageTurn(direction: Int, snapshot: NSImage, pageColor: String, webView: WKWebView) {
+            // 先读当前滚动量与边界状态（动画开始前）
+            webView.evaluateJavaScript("window.dreaderPageTurnPlan(\(direction));") { [weak self] result, _ in
+                guard let self = self else { return }
+                guard let plan = result as? [String: Any],
+                      let willTurn = plan["willTurn"] as? Bool else {
+                    // JS 未就绪：退回普通平滑滚动
+                    self.isPageTurnAnimating = false
+                    self.plainScroll(direction: direction)
+                    return
+                }
+                guard willTurn else {
+                    // 页内滚动（未到边界）或需翻章：交回普通路径（翻章自带 DOM 切换，不套平移动画）
+                    self.isPageTurnAnimating = false
+                    self.plainScroll(direction: direction)
+                    return
+                }
+                let offset = (plan["offset"] as? Double) ?? 0
+                let vertical = (plan["vertical"] as? Bool) ?? false
+
+                self.runPageTurnOverlay(
+                    direction: direction,
+                    offset: offset,
+                    vertical: vertical,
+                    snapshot: snapshot,
+                    pageColor: pageColor,
+                    webView: webView
+                )
+            }
+        }
+
+        private func runPageTurnOverlay(
+            direction: Int,
+            offset: Double,
+            vertical: Bool,
+            snapshot: NSImage,
+            pageColor: String,
+            webView: WKWebView
+        ) {
+            let bounds = webView.bounds
+            guard bounds.width > 1, bounds.height > 1 else {
+                isPageTurnAnimating = false
+                plainScroll(direction: direction)
+                return
+            }
+
+            // 1. 不透明纸面垫底（webview 背景透明，直接露底会闪）
+            let paper = NSView(frame: bounds)
+            paper.wantsLayer = true
+            paper.layer?.backgroundColor = Color(hex: pageColor).cgColor
+            webView.addSubview(paper)
+
+            // 2. 旧页快照：从起始位置滑向终点的方向平移一整页
+            let snapshotView = NSImageView(frame: bounds)
+            snapshotView.image = snapshot
+            snapshotView.wantsLayer = true
+            webView.addSubview(snapshotView)
+
+            // 3. webview 内容瞬时跳到目标位置（被快照+纸面盖住，不可见）
+            let js: String
+            if vertical {
+                // 竖排：前进 = scrollLeft 减小（从右往左读）
+                js = direction > 0
+                    ? "window.scrollBy({ left: -\(offset), behavior: 'auto' });"
+                    : "window.scrollBy({ left: \(offset), behavior: 'auto' });"
+            } else {
+                js = direction > 0
+                    ? "window.scrollBy({ top: \(offset), behavior: 'auto' });"
+                    : "window.scrollBy({ top: -\(offset), behavior: 'auto' });"
+            }
+            webView.evaluateJavaScript(js, completionHandler: nil)
+
+            // 4. 动画：快照朝阅读前进方向滑出
+            let dx: CGFloat
+            let dy: CGFloat
+            if vertical {
+                dx = direction > 0 ? bounds.width : -bounds.width // 前进 → 旧页左滑出
+                dy = 0
+            } else {
+                dx = 0
+                dy = direction > 0 ? -bounds.height : bounds.height // 前进 → 旧页上滑出
+            }
+            CATransaction.begin()
+            CATransaction.setCompletionBlock { [weak self] in
+                snapshotView.layer?.removeFromSuperlayer()
+                snapshotView.removeFromSuperview()
+                paper.removeFromSuperview()
+                self?.isPageTurnAnimating = false
+            }
+            let anim = CABasicAnimation(keyPath: "position")
+            anim.fromValue = NSValue(point: NSPoint(x: bounds.midX, y: bounds.midY))
+            anim.toValue = NSValue(point: NSPoint(x: bounds.midX + dx, y: bounds.midY + dy))
+            anim.duration = 0.32
+            anim.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            anim.isRemovedOnCompletion = true
+            snapshotView.layer?.add(anim, forKey: "dreader-page-turn")
+            CATransaction.commit()
         }
 
         /// 拦截页内链接导航（如 Kindle 目录页的章节链接）。

@@ -1112,6 +1112,33 @@ struct EPUBThemeInjector {
                 }
             };
 
+            // 仿真翻页规划：到页内边界时返回本次滚动偏移（足够滑满一屏）；
+            // willTurn=false 表示还在页中（普通平滑滚动即可）或需要翻章（走 DOM 切换，不套平移动画）
+            window.dreaderPageTurnPlan = function(direction) {
+                const vertical = window.dreaderIsVertical();
+                const pageSize = (vertical ? window.innerWidth : window.innerHeight) * 0.82;
+                const currentScroll = vertical
+                    ? (window.scrollX || document.documentElement.scrollLeft)
+                    : (window.scrollY || document.documentElement.scrollTop);
+                const maxScroll = vertical
+                    ? Math.max(0, document.documentElement.scrollWidth - window.innerWidth)
+                    : Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
+                const atEnd = direction > 0
+                    ? currentScroll >= maxScroll - 30
+                    : currentScroll <= 30;
+                if (atEnd) {
+                    return { willTurn: false }; // 边界 → 翻章，走既有 DOM 切换路径
+                }
+                // 页内整页跳：偏移取页长，但不超过边界（避免跳过头露白）
+                let offset = pageSize;
+                if (direction > 0) {
+                    offset = Math.min(pageSize, maxScroll - currentScroll);
+                } else {
+                    offset = Math.min(pageSize, currentScroll);
+                }
+                return { willTurn: true, offset: offset, vertical: vertical };
+            };
+
             window.dreaderGoNextChapter = function() {
                 if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.selectionBridge) {
                     window.webkit.messageHandlers.selectionBridge.postMessage({ type: 'nextChapter' });

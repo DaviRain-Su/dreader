@@ -203,17 +203,12 @@ struct RealisticBookshelfView: View {
             ShelfTopBarButton(icon: "globe.americas.fill", label: "在线书库") {
                 onOpenOnlineHub?()
             }
-            .help("探索 Open Library、古腾堡与 Z-Library 在线书库 (⌘ + L)")
+            .help("探索 Open Library、古腾堡、Z-Library 与 OPDS 自建书馆 (⌘ + L)")
 
             ShelfTopBarButton(icon: "quote.bubble.fill", label: "微信读书") {
                 onOpenWeChatSync?()
             }
             .help("同步微信读书划线与想法 (⌘ + ⇧ + W)")
-
-            ShelfTopBarButton(icon: "books.vertical.circle.fill", label: "云端书架") {
-                WeReadShelfWindowController.present()
-            }
-            .help("浏览微信读书云端书架并下载入架")
 
             ShelfTopBarButton(icon: "highlighter", label: "划线笔记") {
                 onOpenGlobalNotebooks?()

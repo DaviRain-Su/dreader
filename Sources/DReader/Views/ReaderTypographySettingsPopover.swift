@@ -242,6 +242,17 @@ struct ReaderTypographySettingsPopover: View {
             }
             .help("Apple Books 同款：鼠标所在文本行显示一条淡引导线，方便通读古籍长行")
 
+            // 仿真翻页
+            Toggle(isOn: $settings.isPageTurnAnimation) {
+                HStack(spacing: 4) {
+                    Image(systemName: "book.pages")
+                        .foregroundStyle(Color.primary.opacity(0.75))
+                    Text("仿真翻页 (旧页整幅滑出，纸书手感)")
+                        .font(.system(size: 11.5))
+                }
+            }
+            .help("空格/方向键翻页时，旧页以完整纸面平移滑出而不是滚动跳变")
+
             Divider()
                 .opacity(0.3)
 
