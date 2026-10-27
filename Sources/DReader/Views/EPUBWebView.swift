@@ -29,6 +29,7 @@ struct EPUBWebView: NSViewRepresentable {
     let registerUpdateThoughtAction: (@escaping (String, String?) -> Void) -> Void
     let registerRemoveHighlightAction: (@escaping (String) -> Void) -> Void
     var registerScrollToSearchMatchAction: ((@escaping (String, Int) -> Void) -> Void)? = nil
+    var registerScrollToHighlightAction: ((@escaping (String) -> Void) -> Void)? = nil
     let getCachedHTML: (URL) -> String?
     let cacheHTML: (String, URL) -> Void
 
@@ -54,6 +55,8 @@ struct EPUBWebView: NSViewRepresentable {
         configuration.userContentController = contentController
 
         let webView = WKWebView(frame: .zero, configuration: configuration)
+        webView.wantsLayer = true
+        webView.layer?.drawsAsynchronously = true
         webView.navigationDelegate = context.coordinator
         webView.setValue(false, forKey: "drawsBackground") // Transparent background
         webView.allowsMagnification = true
@@ -77,6 +80,9 @@ struct EPUBWebView: NSViewRepresentable {
         registerScrollToSearchMatchAction? { [weak coordinator = context.coordinator] keyword, matchIdx in
             coordinator?.scrollToSearchMatch(keyword: keyword, matchIndex: matchIdx)
         }
+        registerScrollToHighlightAction? { [weak coordinator = context.coordinator] id in
+            coordinator?.scrollToHighlight(id: id)
+        }
         registerUpdateTranslationAction? { [weak coordinator = context.coordinator] index, text, agentName in
             coordinator?.updateTranslationInDOM(index: index, translation: text, agentName: agentName)
         }
@@ -98,7 +104,10 @@ struct EPUBWebView: NSViewRepresentable {
         context.coordinator.parent = self
         context.coordinator.lastBilingualEnabled = settings.isBilingualEnabled
 
-        if context.coordinator.currentURL != chapterURL || prevBilingual != settings.isBilingualEnabled {
+        let prevScriptMode = context.coordinator.lastScriptMode
+        context.coordinator.lastScriptMode = settings.chineseScriptMode
+
+        if context.coordinator.currentURL != chapterURL || prevBilingual != settings.isBilingualEnabled || prevScriptMode != settings.chineseScriptMode {
             context.coordinator.loadChapter(
                 url: chapterURL,
                 opfDir: opfDirectory,
@@ -118,7 +127,7 @@ struct EPUBWebView: NSViewRepresentable {
     }
 
     private var settingsSummary: String {
-        "\(settings.theme.rawValue)-\(settings.fontFamily.rawValue)-\(settings.fontSize)-\(settings.lineHeight)-\(settings.maxWidth)-\(settings.paragraphSpacing)-\(settings.isJustified)-\(settings.pageLayout.rawValue)-\(settings.isBilingualEnabled)-\(highlightsSummary)"
+        "\(settings.theme.rawValue)-\(settings.fontFamily.rawValue)-\(settings.fontSize)-\(settings.lineHeight)-\(settings.maxWidth)-\(settings.paragraphSpacing)-\(settings.isJustified)-\(settings.pageLayout.rawValue)-\(settings.isBilingualEnabled)-\(settings.chineseScriptMode.rawValue)-\(highlightsSummary)"
     }
 
     // MARK: - Coordinator
@@ -130,6 +139,8 @@ struct EPUBWebView: NSViewRepresentable {
         var isPageReady: Bool = false
         var lastSettingsSummary: String = ""
         var lastBilingualEnabled: Bool = false
+        var lastScriptMode: ChineseScriptMode = .original
+        var pendingScrollHighlightId: String? = nil
 
         init(_ parent: EPUBWebView) {
             self.parent = parent
@@ -169,6 +180,17 @@ struct EPUBWebView: NSViewRepresentable {
         func removeHighlightFromDOM(id: String) {
             let script = "window.dreaderRemoveHighlight('\(id)');"
             webView?.evaluateJavaScript(script, completionHandler: nil)
+        }
+
+        func scrollToHighlight(id: String) {
+            let script = "window.dreaderScrollToHighlight('\(id)');"
+            webView?.evaluateJavaScript(script) { [weak self] result, _ in
+                if let found = result as? Bool, !found {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                        self?.webView?.evaluateJavaScript(script, completionHandler: nil)
+                    }
+                }
+            }
         }
 
         func restoreHighlightsInDOM(_ highlights: [Highlight]) {
@@ -317,6 +339,12 @@ struct EPUBWebView: NSViewRepresentable {
                 let success = (result as? Bool) ?? false
                 if success {
                     self?.restoreHighlightsInDOM(highlights)
+                    if let pendingId = self?.pendingScrollHighlightId {
+                        self?.pendingScrollHighlightId = nil
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
+                            self?.scrollToHighlight(id: pendingId)
+                        }
+                    }
                 } else if error != nil {
                     // Fall back to full reload if needed
                     self?.isPageReady = false
@@ -452,6 +480,12 @@ struct EPUBWebView: NSViewRepresentable {
             updateStyles(settings: parent.settings)
             // Ensure first chapter starts cleanly at the top
             webView.evaluateJavaScript("window.scrollTo(0, 0); document.body.scrollTop = 0; document.documentElement.scrollTop = 0;", completionHandler: nil)
+            if let pendingId = pendingScrollHighlightId {
+                pendingScrollHighlightId = nil
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) { [weak self] in
+                    self?.scrollToHighlight(id: pendingId)
+                }
+            }
         }
 
         func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {

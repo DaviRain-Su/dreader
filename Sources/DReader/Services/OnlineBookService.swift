@@ -479,9 +479,28 @@ final class OnlineBookService: Sendable {
             }
         }
 
-        // 2. Check if it's 《道德经》: build authentic, pristine 81-chapter complete classic EPUB
+        // 2. Check if it's a curated Chinese Classic: build authentic, pristine masterpiece EPUB
         if item.title.contains("道德经") || item.title.contains("道德經") || item.id == "classic-daodejing" || item.gutenbergID == "7337" {
+            try? fileManager.removeItem(at: destinationURL)
             if let authenticURL = await ChineseClassicsRegistry.shared.buildAuthenticDaoDeJingEPUB(targetURL: destinationURL) {
+                return authenticURL
+            }
+        }
+        if item.title.contains("红楼梦") || item.title.contains("紅樓夢") || item.title.contains("石头记") || item.id == "classic-hongloumeng" || item.gutenbergID == "24264" {
+            try? fileManager.removeItem(at: destinationURL)
+            if let authenticURL = await ChineseClassicsRegistry.shared.buildAuthenticHongLouMengEPUB(targetURL: destinationURL) {
+                return authenticURL
+            }
+        }
+        if item.title.contains("三国演义") || item.title.contains("三國演義") || item.id == "classic-sanguoyanyi" || item.gutenbergID == "23950" {
+            try? fileManager.removeItem(at: destinationURL)
+            if let authenticURL = await ChineseClassicsRegistry.shared.buildAuthenticSanGuoYanYiEPUB(targetURL: destinationURL) {
+                return authenticURL
+            }
+        }
+        if item.title.contains("西游记") || item.title.contains("西遊記") || item.id == "classic-xiyouji" || item.gutenbergID == "23962" {
+            try? fileManager.removeItem(at: destinationURL)
+            if let authenticURL = await ChineseClassicsRegistry.shared.buildAuthenticXiYouJiEPUB(targetURL: destinationURL) {
                 return authenticURL
             }
         }

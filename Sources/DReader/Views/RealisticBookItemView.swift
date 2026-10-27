@@ -3,6 +3,9 @@ import SwiftUI
 struct RealisticBookItemView: View {
     let book: EPUBBook
     let onOpen: () -> Void
+    var onOpenXRay: (() -> Void)? = nil
+    var onResetProgress: (() -> Void)? = nil
+    var onDelete: (() -> Void)? = nil
 
     @State private var isHovered: Bool = false
 
@@ -237,6 +240,41 @@ struct RealisticBookItemView: View {
         }
         .buttonStyle(.plain)
         .onHover { isHovered = $0 }
+        .contextMenu {
+            Button {
+                onOpen()
+            } label: {
+                Label("打开阅读", systemImage: "book.fill")
+            }
+
+            if let onOpenXRay = onOpenXRay {
+                Button {
+                    onOpenXRay()
+                } label: {
+                    Label("查看全书透视 (X-Ray)", systemImage: "atom")
+                }
+            }
+
+            Divider()
+
+            if let onResetProgress = onResetProgress {
+                Button {
+                    onResetProgress()
+                } label: {
+                    Label("重置本书阅读进度", systemImage: "arrow.counterclockwise")
+                }
+            }
+
+            Divider()
+
+            if let onDelete = onDelete {
+                Button(role: .destructive) {
+                    onDelete()
+                } label: {
+                    Label("从书架中移除", systemImage: "trash")
+                }
+            }
+        }
     }
 }
 

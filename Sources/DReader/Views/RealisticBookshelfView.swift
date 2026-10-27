@@ -6,6 +6,11 @@ struct RealisticBookshelfView: View {
     let onImportEPUB: () -> Void
     var onOpenReadingInsights: (() -> Void)? = nil
     var onOpenOnlineHub: (() -> Void)? = nil
+    var onOpenWeChatSync: (() -> Void)? = nil
+    var onDeleteBook: ((UUID) -> Void)? = nil
+    var onResetProgress: ((UUID) -> Void)? = nil
+    var onOpenXRay: ((EPUBBook) -> Void)? = nil
+    var onAddClassic: ((ChineseClassicsRegistry.ClassicBook) -> Void)? = nil
 
     @State private var searchText: String = ""
 
@@ -16,6 +21,13 @@ struct RealisticBookshelfView: View {
         return books.filter {
             $0.title.localizedCaseInsensitiveContains(searchText) ||
             $0.author.localizedCaseInsensitiveContains(searchText)
+        }
+    }
+
+    private var recommendedClassics: [ChineseClassicsRegistry.ClassicBook] {
+        let existingTitles = Set(books.map { $0.title })
+        return ChineseClassicsRegistry.shared.allClassics.filter { classic in
+            !existingTitles.contains(where: { $0.contains(classic.title) || classic.title.contains($0) })
         }
     }
 
@@ -43,14 +55,35 @@ struct RealisticBookshelfView: View {
                         .frame(height: 12)
 
                     if shelfRows.isEmpty {
-                        emptyShelfPlaceholder
+                        WarmEmptyStudyView(
+                            onImportEPUB: onImportEPUB,
+                            onOpenOnlineHub: onOpenOnlineHub,
+                            onOpenWeChatSync: onOpenWeChatSync,
+                            recommendedClassics: recommendedClassics,
+                            onAddClassic: { classic in
+                                onAddClassic?(classic)
+                            }
+                        )
                     } else {
                         ForEach(Array(shelfRows.enumerated()), id: \.offset) { index, rowBooks in
                             SingleShelfRowView(
                                 books: rowBooks,
                                 isLastRow: index == shelfRows.count - 1,
                                 onSelectBook: onSelectBook,
-                                onImportEPUB: onImportEPUB
+                                onImportEPUB: onImportEPUB,
+                                onOpenXRay: onOpenXRay,
+                                onResetProgress: onResetProgress,
+                                onDeleteBook: onDeleteBook
+                            )
+                        }
+
+                        // Curated Heritage Masterpieces Shelf (renders when personal shelf is < 6 or as featured shelf)
+                        if !recommendedClassics.isEmpty && books.count < 6 {
+                            CuratedClassicsShelfView(
+                                classics: recommendedClassics,
+                                onAddClassic: { classic in
+                                    onAddClassic?(classic)
+                                }
                             )
                         }
                     }
@@ -208,6 +241,32 @@ struct RealisticBookshelfView: View {
             .buttonStyle(.plain)
             .help("探索 Open Library、古腾堡与 Z-Library 在线书库 (⌘ + L)")
 
+            // WeChat Reading Note Sync Button
+            Button {
+                onOpenWeChatSync?()
+            } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: "quote.bubble.fill")
+                        .font(.system(size: 11))
+                    Text("微信读书")
+                        .font(.system(size: 12, weight: .semibold, design: .serif))
+                }
+                .foregroundStyle(Color.white)
+                .padding(.horizontal, 11)
+                .padding(.vertical, 6)
+                .background(
+                    LinearGradient(
+                        colors: [Color(hex: "#07C160"), Color(hex: "#059648")],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+                .shadow(color: Color(hex: "#07C160").opacity(0.35), radius: 3, y: 1.5)
+            }
+            .buttonStyle(.plain)
+            .help("同步微信读书划线与想法 (⌘ + ⇧ + W)")
+
             // Import Button
             Button(action: onImportEPUB) {
                 HStack(spacing: 6) {
@@ -237,112 +296,560 @@ struct RealisticBookshelfView: View {
         .background(Color.black.opacity(0.25))
     }
 
-    // MARK: - Empty Shelf Placeholder
-    private var emptyShelfPlaceholder: some View {
-        VStack(spacing: 16) {
-            Image(systemName: "books.vertical")
-                .font(.system(size: 48))
-                .foregroundStyle(Color(hex: "#E5C07B").opacity(0.4))
-                .padding(.top, 40)
+    // MARK: - Warm Empty Study View
+    // Replaced by WarmEmptyStudyView below
+}
 
-            Text("书架上暂时空空如也")
-                .font(.system(size: 16, weight: .medium, design: .serif))
-                .foregroundStyle(Color(hex: "#F5E6C8").opacity(0.8))
+// MARK: - Shelf Plank View
+struct ShelfPlankView: View {
+    var body: some View {
+        VStack(spacing: 0) {
+            // Shelf Top Surface Depth (层板上平面)
+            Rectangle()
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            Color(hex: "#5A3824"), // Specular reflection on wooden top edge
+                            Color(hex: "#3D2416"),
+                            Color(hex: "#2C180E")
+                        ],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                )
+                .frame(height: 10)
+                .overlay(
+                    // Top Highlight line simulating warm chandelier light catching the shelf lip
+                    Rectangle()
+                        .fill(Color(hex: "#8C5839").opacity(0.85))
+                        .frame(height: 0.5),
+                    alignment: .top
+                )
 
-            Button("从电脑导入第一本 EPUB 电子书") {
-                onImportEPUB()
-            }
-            .buttonStyle(.borderedProminent)
-            .tint(Color(hex: "#D4AF37"))
-            .foregroundStyle(Color(hex: "#1E120A"))
+            // Shelf Front Beveled Edge (层板前立面厚度)
+            Rectangle()
+                .fill(
+                    LinearGradient(
+                        colors: [Color(hex: "#24140C"), Color(hex: "#180D07")],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                )
+                .frame(height: 14)
+                .overlay(
+                    // Bottom Bevel shadow
+                    Rectangle()
+                        .fill(Color.black.opacity(0.5))
+                        .frame(height: 1),
+                    alignment: .bottom
+                )
+
+            // Deep Drop Shadow cast onto wall below
+            LinearGradient(
+                colors: [
+                    Color.black.opacity(0.68),
+                    Color.black.opacity(0.35),
+                    Color.clear
+                ],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .frame(height: 20)
         }
-        .frame(maxWidth: .infinity)
-        .padding(40)
     }
 }
 
-// MARK: - Single Shelf Row with Solid Wooden Plank
+// MARK: - Antique Brass Bookends (古典雕花黄铜书立)
+struct LeftBrassBookendView: View {
+    var body: some View {
+        HStack(alignment: .bottom, spacing: 0) {
+            // Base shelf plate
+            ZStack(alignment: .bottomTrailing) {
+                // Diagonal metal brace
+                Path { path in
+                    path.move(to: CGPoint(x: 0, y: 160))
+                    path.addLine(to: CGPoint(x: 18, y: 160))
+                    path.addLine(to: CGPoint(x: 18, y: 20))
+                    path.closeSubpath()
+                }
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            Color(hex: "#B8860B").opacity(0.3),
+                            Color(hex: "#8B6508").opacity(0.65)
+                        ],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                )
+                .frame(width: 18, height: 160)
+
+                // Upright brass plate hugging the book spine
+                Rectangle()
+                    .fill(
+                        LinearGradient(
+                            colors: [
+                                Color(hex: "#F9D976"),
+                                Color(hex: "#E5A93C"),
+                                Color(hex: "#A67C1E"),
+                                Color(hex: "#5C3E08")
+                            ],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+                    .frame(width: 5, height: 175)
+                    .clipShape(RoundedRectangle(cornerRadius: 2.5))
+                    .overlay(
+                        // Specular shine line
+                        Rectangle()
+                            .fill(Color.white.opacity(0.4))
+                            .frame(width: 0.8),
+                        alignment: .trailing
+                    )
+            }
+        }
+        .frame(width: 22, height: 180, alignment: .bottom)
+        .shadow(color: .black.opacity(0.4), radius: 3, x: -1, y: 2)
+    }
+}
+
+struct RightBrassBookendView: View {
+    var body: some View {
+        HStack(alignment: .bottom, spacing: 0) {
+            ZStack(alignment: .bottomLeading) {
+                // Diagonal metal brace
+                Path { path in
+                    path.move(to: CGPoint(x: 18, y: 160))
+                    path.addLine(to: CGPoint(x: 0, y: 160))
+                    path.addLine(to: CGPoint(x: 0, y: 20))
+                    path.closeSubpath()
+                }
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            Color(hex: "#B8860B").opacity(0.3),
+                            Color(hex: "#8B6508").opacity(0.65)
+                        ],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                )
+                .frame(width: 18, height: 160)
+
+                // Upright brass plate hugging the book page edge
+                Rectangle()
+                    .fill(
+                        LinearGradient(
+                            colors: [
+                                Color(hex: "#F9D976"),
+                                Color(hex: "#E5A93C"),
+                                Color(hex: "#A67C1E"),
+                                Color(hex: "#5C3E08")
+                            ],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+                    .frame(width: 5, height: 175)
+                    .clipShape(RoundedRectangle(cornerRadius: 2.5))
+                    .overlay(
+                        // Specular shine line
+                        Rectangle()
+                            .fill(Color.white.opacity(0.4))
+                            .frame(width: 0.8),
+                        alignment: .leading
+                    )
+            }
+        }
+        .frame(width: 22, height: 180, alignment: .bottom)
+        .shadow(color: .black.opacity(0.4), radius: 3, x: 1, y: 2)
+    }
+}
+
+// MARK: - Single Shelf Row with Symmetrical Centering & Solid Plank
 private struct SingleShelfRowView: View {
     let books: [EPUBBook]
     let isLastRow: Bool
     let onSelectBook: (EPUBBook) -> Void
     let onImportEPUB: () -> Void
+    var onOpenXRay: ((EPUBBook) -> Void)? = nil
+    var onResetProgress: ((UUID) -> Void)? = nil
+    var onDeleteBook: ((UUID) -> Void)? = nil
 
     var body: some View {
         VStack(spacing: 0) {
-            // Books standing on top of shelf
-            HStack(alignment: .bottom, spacing: 28) {
-                ForEach(books) { book in
-                    RealisticBookItemView(book: book) {
-                        onSelectBook(book)
+            // Books standing on top of shelf, centered symmetrically with brass bookends
+            HStack(alignment: .bottom, spacing: 0) {
+                Spacer(minLength: 20)
+
+                // Left Antique Brass Bookend
+                LeftBrassBookendView()
+                    .padding(.trailing, 6)
+
+                // Center Book Items
+                HStack(alignment: .bottom, spacing: 28) {
+                    ForEach(books) { book in
+                        RealisticBookItemView(
+                            book: book,
+                            onOpen: {
+                                onSelectBook(book)
+                            },
+                            onOpenXRay: {
+                                onOpenXRay?(book)
+                            },
+                            onResetProgress: {
+                                onResetProgress?(book.id)
+                            },
+                            onDelete: {
+                                onDeleteBook?(book.id)
+                            }
+                        )
+                    }
+
+                    // If last row and there is space, show "+ 放入新书" slot
+                    if isLastRow && books.count < 4 {
+                        AddBookSlotView(onImport: onImportEPUB)
                     }
                 }
 
-                // If last row and there is space, show "+ 放入新书" slot
-                if isLastRow && books.count < 4 {
-                    AddBookSlotView(onImport: onImportEPUB)
-                }
+                // Right Antique Brass Bookend
+                RightBrassBookendView()
+                    .padding(.leading, 6)
+
+                Spacer(minLength: 20)
+            }
+            .padding(.horizontal, 16)
+            .padding(.bottom, 2) // Sits directly on shelf surface
+
+            // Physical Wooden Shelf Plank
+            ShelfPlankView()
+        }
+    }
+}
+
+// MARK: - Curated Heritage Masterpieces Shelf (典藏名著 · 置入书斋)
+private struct CuratedClassicsShelfView: View {
+    let classics: [ChineseClassicsRegistry.ClassicBook]
+    let onAddClassic: (ChineseClassicsRegistry.ClassicBook) -> Void
+
+    var body: some View {
+        VStack(spacing: 12) {
+            // Shelf Plaque / Brass Header
+            HStack(spacing: 8) {
+                Image(systemName: "books.vertical.circle.fill")
+                    .font(.system(size: 14))
+                    .foregroundStyle(Color(hex: "#D4AF37"))
+
+                Text("典藏名著 · 一键置入书斋")
+                    .font(.system(size: 14, weight: .bold, design: .serif))
+                    .foregroundStyle(Color(hex: "#F5E6C8"))
+
+                Text("公版中华古典巨著 · 轻点直接下载入库")
+                    .font(.system(size: 11, design: .serif))
+                    .foregroundStyle(Color(hex: "#CBB393").opacity(0.65))
 
                 Spacer()
             }
-            .padding(.horizontal, 24)
-            .padding(.bottom, 2) // Sits directly on shelf surface
+            .padding(.horizontal, 32)
+            .padding(.top, 16)
 
-            // Physical Wooden Shelf Plank (实体厚质胡桃木架板)
-            VStack(spacing: 0) {
-                // Shelf Top Surface Depth (层板上平面)
-                Rectangle()
-                    .fill(
+            // Books Shelf Row
+            HStack(alignment: .bottom, spacing: 0) {
+                Spacer(minLength: 20)
+
+                LeftBrassBookendView()
+                    .padding(.trailing, 6)
+
+                HStack(alignment: .bottom, spacing: 28) {
+                    ForEach(classics.prefix(4)) { classic in
+                        CuratedClassicBookCard(
+                            classic: classic,
+                            onAdd: {
+                                onAddClassic(classic)
+                            }
+                        )
+                    }
+                }
+
+                RightBrassBookendView()
+                    .padding(.leading, 6)
+
+                Spacer(minLength: 20)
+            }
+            .padding(.horizontal, 16)
+            .padding(.bottom, 2)
+
+            ShelfPlankView()
+        }
+    }
+}
+
+// MARK: - Curated Classic Book Card (古典名著立体书模与一键入架)
+private struct CuratedClassicBookCard: View {
+    let classic: ChineseClassicsRegistry.ClassicBook
+    let onAdd: () -> Void
+
+    @State private var isHovered: Bool = false
+    @State private var isAdding: Bool = false
+
+    var body: some View {
+        VStack(spacing: 6) {
+            ZStack(alignment: .bottom) {
+                // Contact Shadow
+                Ellipse()
+                    .fill(Color.black.opacity(isHovered ? 0.35 : 0.45))
+                    .frame(width: 136, height: 16)
+                    .blur(radius: isHovered ? 6 : 3)
+                    .offset(y: isHovered ? 12 : 6)
+
+                // 3D Hardcover Body
+                ZStack {
+                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                        .fill(
+                            LinearGradient(
+                                colors: [Color(hex: classic.colorHex1), Color(hex: classic.colorHex2)],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                        )
+
+                    // Subtle Leather/Canvas Texture Grain
+                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                        .stroke(Color.white.opacity(0.08), lineWidth: 1)
+
+                    // Embossed Golden Filigree Frame
+                    RoundedRectangle(cornerRadius: 3, style: .continuous)
+                        .stroke(Color(hex: classic.goldHex).opacity(0.4), lineWidth: 1)
+                        .padding(8)
+
+                    RoundedRectangle(cornerRadius: 2, style: .continuous)
+                        .stroke(Color(hex: classic.goldHex).opacity(0.2), lineWidth: 0.5)
+                        .padding(11)
+
+                    // Cover Typography
+                    VStack(spacing: 6) {
+                        Image(systemName: "crown.fill")
+                            .font(.system(size: 11))
+                            .foregroundStyle(Color(hex: classic.goldHex).opacity(0.75))
+                            .padding(.top, 18)
+
+                        Spacer()
+
+                        Text(classic.title)
+                            .font(.system(size: 14, weight: .bold, design: .serif))
+                            .foregroundStyle(Color(hex: classic.goldHex))
+                            .multilineTextAlignment(.center)
+                            .lineLimit(2)
+                            .padding(.horizontal, 10)
+
+                        Rectangle()
+                            .fill(Color(hex: classic.goldHex).opacity(0.5))
+                            .frame(width: 28, height: 1)
+
+                        Text(classic.author)
+                            .font(.system(size: 11, weight: .medium, design: .serif))
+                            .foregroundStyle(Color(hex: classic.goldHex).opacity(0.8))
+                            .lineLimit(1)
+
+                        Spacer()
+
+                        Text(classic.publishYear)
+                            .font(.system(size: 9, weight: .semibold, design: .serif))
+                            .foregroundStyle(Color(hex: classic.goldHex).opacity(0.65))
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 2)
+                            .background(Color.black.opacity(0.25))
+                            .clipShape(Capsule())
+                            .padding(.bottom, 14)
+                    }
+
+                    // Spine Shadow & Groove
+                    HStack {
                         LinearGradient(
                             colors: [
-                                Color(hex: "#5A3824"), // Light specular reflection on edge
-                                Color(hex: "#3D2416"),
-                                Color(hex: "#2C180E")
+                                Color.white.opacity(0.18),
+                                Color.black.opacity(0.25),
+                                Color.white.opacity(0.08),
+                                Color.clear
                             ],
-                            startPoint: .top,
-                            endPoint: .bottom
+                            startPoint: .leading,
+                            endPoint: .trailing
                         )
-                    )
-                    .frame(height: 10)
-                    .overlay(
-                        // Top Highlight line simulating light catching the shelf lip
-                        Rectangle()
-                            .fill(Color(hex: "#8C5839").opacity(0.75))
-                            .frame(height: 0.5),
-                        alignment: .top
-                    )
+                        .frame(width: 14)
 
-                // Shelf Front Beveled Edge (层板前立面)
-                Rectangle()
-                    .fill(
-                        LinearGradient(
-                            colors: [Color(hex: "#22130B"), Color(hex: "#160C06")],
-                            startPoint: .top,
-                            endPoint: .bottom
+                        Spacer()
+                    }
+
+                    // Spine Hinge Line
+                    HStack {
+                        Rectangle()
+                            .fill(Color.black.opacity(0.35))
+                            .frame(width: 1)
+                            .offset(x: 14)
+                        Spacer()
+                    }
+                }
+                .frame(width: 140, height: 204)
+
+                // Hover "一键入架" Banner overlay
+                if isHovered || isAdding {
+                    Button(action: {
+                        isAdding = true
+                        onAdd()
+                    }) {
+                        HStack(spacing: 4) {
+                            if isAdding {
+                                ProgressView()
+                                    .scaleEffect(0.6)
+                                    .frame(width: 12, height: 12)
+                            } else {
+                                Image(systemName: "plus.circle.fill")
+                                    .font(.system(size: 11))
+                            }
+                            Text(isAdding ? "置入中..." : "置入书斋")
+                                .font(.system(size: 11, weight: .semibold, design: .serif))
+                        }
+                        .foregroundStyle(Color(hex: "#1E120A"))
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                        .background(
+                            LinearGradient(
+                                colors: [Color(hex: "#F9D976"), Color(hex: "#E5A93C")],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            )
                         )
-                    )
-                    .frame(height: 14)
-                    .overlay(
-                        // Bottom Bevel shadow
-                        Rectangle()
-                            .fill(Color.black.opacity(0.45))
-                            .frame(height: 1),
-                        alignment: .bottom
-                    )
+                        .clipShape(Capsule())
+                        .shadow(color: .black.opacity(0.4), radius: 4, y: 2)
+                        .padding(.bottom, 18)
+                    }
+                    .buttonStyle(.plain)
+                    .transition(.opacity.combined(with: .scale(scale: 0.9)))
+                }
+            }
+            .offset(y: isHovered ? -8 : 0)
+            .scaleEffect(isHovered ? 1.02 : 1.0)
+            .animation(.spring(response: 0.25, dampingFraction: 0.72), value: isHovered)
+        }
+        .onHover { isHovered = $0 }
+        .help("一键将《\(classic.title)》置入个人书架")
+    }
+}
 
-                // Deep Drop Shadow cast onto wall below
-                LinearGradient(
-                    colors: [
-                        Color.black.opacity(0.65),
-                        Color.black.opacity(0.35),
-                        Color.clear
-                    ],
-                    startPoint: .top,
-                    endPoint: .bottom
+// MARK: - Warm Empty Study View (典雅私人书斋迎宾屏)
+private struct WarmEmptyStudyView: View {
+    let onImportEPUB: () -> Void
+    var onOpenOnlineHub: (() -> Void)? = nil
+    var onOpenWeChatSync: (() -> Void)? = nil
+    let recommendedClassics: [ChineseClassicsRegistry.ClassicBook]
+    let onAddClassic: (ChineseClassicsRegistry.ClassicBook) -> Void
+
+    var body: some View {
+        VStack(spacing: 32) {
+            // Study Welcome Plaque
+            VStack(spacing: 12) {
+                ZStack {
+                    Circle()
+                        .fill(Color(hex: "#D4AF37").opacity(0.12))
+                        .frame(width: 72, height: 72)
+
+                    Image(systemName: "lamp.desk.fill")
+                        .font(.system(size: 32))
+                        .foregroundStyle(Color(hex: "#F3D084"))
+                }
+
+                Text("欢迎入座 DReader 私人书斋")
+                    .font(.system(size: 20, weight: .bold, design: .serif))
+                    .foregroundStyle(Color(hex: "#F5E6C8"))
+
+                Text("阁下书架尚无藏书。可从本地导入 EPUB，或直接一键置入传世名著开卷品读。")
+                    .font(.system(size: 13, design: .serif))
+                    .foregroundStyle(Color(hex: "#CBB393").opacity(0.75))
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 480)
+
+                // Quick Action Buttons
+                HStack(spacing: 16) {
+                    Button(action: onImportEPUB) {
+                        HStack(spacing: 6) {
+                            Image(systemName: "plus.circle.fill")
+                                .font(.system(size: 12))
+                            Text("从电脑导入 EPUB 电子书")
+                                .font(.system(size: 12, weight: .semibold, design: .serif))
+                        }
+                        .foregroundStyle(Color(hex: "#1E120A"))
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 8)
+                        .background(
+                            LinearGradient(
+                                colors: [Color(hex: "#F9D976"), Color(hex: "#D4AF37")],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            )
+                        )
+                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                        .shadow(color: .black.opacity(0.3), radius: 4, y: 2)
+                    }
+                    .buttonStyle(.plain)
+
+                    if let onOpenOnlineHub = onOpenOnlineHub {
+                        Button(action: onOpenOnlineHub) {
+                            HStack(spacing: 6) {
+                                Image(systemName: "globe.asia.australia.fill")
+                                    .font(.system(size: 12))
+                                Text("探索在线海量书库...")
+                                    .font(.system(size: 12, weight: .medium, design: .serif))
+                            }
+                            .foregroundStyle(Color(hex: "#F5E6C8"))
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 8)
+                            .background(Color.white.opacity(0.08))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 6)
+                                    .stroke(Color.white.opacity(0.15), lineWidth: 0.8)
+                            )
+                            .clipShape(RoundedRectangle(cornerRadius: 6))
+                        }
+                        .buttonStyle(.plain)
+                    }
+
+                    if let onOpenWeChatSync = onOpenWeChatSync {
+                        Button(action: onOpenWeChatSync) {
+                            HStack(spacing: 6) {
+                                Image(systemName: "quote.bubble.fill")
+                                    .font(.system(size: 12))
+                                Text("同步微信读书划线...")
+                                    .font(.system(size: 12, weight: .medium, design: .serif))
+                            }
+                            .foregroundStyle(Color(hex: "#A7F3D0"))
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 8)
+                            .background(Color(hex: "#07C160").opacity(0.18))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 6)
+                                    .stroke(Color(hex: "#07C160").opacity(0.35), lineWidth: 0.8)
+                            )
+                            .clipShape(RoundedRectangle(cornerRadius: 6))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.top, 4)
+            }
+            .padding(.vertical, 16)
+
+            // Direct Curated Classics Bookshelf on first load
+            if !recommendedClassics.isEmpty {
+                CuratedClassicsShelfView(
+                    classics: recommendedClassics,
+                    onAddClassic: onAddClassic
                 )
-                .frame(height: 18)
             }
         }
+        .frame(maxWidth: .infinity)
+        .padding(.horizontal, 24)
+        .padding(.vertical, 20)
     }
 }
 

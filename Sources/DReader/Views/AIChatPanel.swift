@@ -45,8 +45,6 @@ struct AIChatPanel: View {
             // Header
             headerBar
 
-            Divider()
-
             // Scope Selector Bar (Chapter / Full Book / Library RAG)
             scopeSelectorBar
 
@@ -119,6 +117,12 @@ struct AIChatPanel: View {
         }
         .frame(minWidth: 280, idealWidth: 320, maxWidth: 360)
         .background(.ultraThinMaterial)
+        .overlay(
+            Rectangle()
+                .fill(Color(nsColor: .separatorColor).opacity(0.3))
+                .frame(width: 0.5),
+            alignment: .leading
+        )
         .sheet(isPresented: $showSettingsSheet) {
             AIAgentSettingsSheet(agentService: agentService)
         }
@@ -228,8 +232,14 @@ struct AIChatPanel: View {
             .buttonStyle(.plain)
             .help("折叠 AI 伴读面板")
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+        .padding(.horizontal, 14)
+        .frame(height: 40)
+        .overlay(
+            Rectangle()
+                .fill(Color(nsColor: .separatorColor).opacity(0.3))
+                .frame(height: 0.5),
+            alignment: .bottom
+        )
     }
 
     private var connectionStatusColor: Color {

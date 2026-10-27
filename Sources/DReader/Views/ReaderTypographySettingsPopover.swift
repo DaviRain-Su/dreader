@@ -218,6 +218,32 @@ struct ReaderTypographySettingsPopover: View {
             Divider()
                 .opacity(0.3)
 
+            // Chinese Script Conversion Section (繁简字形转换)
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    HStack(spacing: 4) {
+                        Image(systemName: "character")
+                            .foregroundStyle(.purple)
+                        Text("中文简繁转换")
+                            .font(.system(size: 11.5, weight: .semibold))
+                    }
+                    Spacer()
+                    Text(settings.chineseScriptMode.rawValue)
+                        .font(.system(size: 10))
+                        .foregroundStyle(settings.chineseScriptMode != .original ? Color.purple : Color.secondary)
+                }
+
+                Picker("", selection: $settings.chineseScriptMode) {
+                    ForEach(ChineseScriptMode.allCases) { mode in
+                        Text(mode.rawValue).tag(mode)
+                    }
+                }
+                .pickerStyle(.segmented)
+            }
+
+            Divider()
+                .opacity(0.3)
+
             // Bilingual Interlinear Reading Section
             VStack(alignment: .leading, spacing: 8) {
                 HStack {

@@ -170,6 +170,23 @@ enum BilingualDisplayMode: String, CaseIterable, Identifiable, Codable {
     var id: String { rawValue }
 }
 
+/// Chinese script conversion mode (繁简一键转换)
+enum ChineseScriptMode: String, CaseIterable, Identifiable, Codable {
+    case original = "原版字形"
+    case simplified = "转换为简体"
+    case traditional = "转换为繁体"
+
+    var id: String { rawValue }
+
+    var shortLabel: String {
+        switch self {
+        case .original: return "原"
+        case .simplified: return "简"
+        case .traditional: return "繁"
+        }
+    }
+}
+
 /// User's reading preferences
 @Observable
 final class ReaderSettings: @unchecked Sendable {
@@ -186,6 +203,9 @@ final class ReaderSettings: @unchecked Sendable {
     // Bilingual Reading
     var isBilingualEnabled: Bool = false
     var bilingualMode: BilingualDisplayMode = .interlinear
+
+    // Chinese Script Conversion (繁体转简体)
+    var chineseScriptMode: ChineseScriptMode = .original
 
     init() {}
 }

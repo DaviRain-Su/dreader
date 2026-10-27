@@ -273,6 +273,15 @@ final class EPUBParser: Sendable {
             }
         }
 
+        // Check if TOC is bogus (e.g. Project Gutenberg NCX containing only a single LICENSE entry)
+        let isBogusTOC = (tocItems.count <= 2 && tocItems.contains(where: {
+            let t = $0.title.uppercased()
+            return t.contains("LICENSE") || t.contains("GUTENBERG") || t.contains("版权")
+        }))
+        if isBogusTOC {
+            tocItems.removeAll()
+        }
+
         // Fallback: If TOC is empty, build TOC from chapters
         if tocItems.isEmpty {
             tocItems = chapters.map { chap in
@@ -411,16 +420,23 @@ final class EPUBParser: Sendable {
 
     // MARK: - HTML Title Extractor
     private func extractTitleFromHTML(_ html: String) -> String? {
-        // 1. First priority: Check for Chinese classic chapter headings (e.g. "第一回 甄士隐梦幻识通灵", "第十二章 检欲")
-        let chineseHeadingPattern = "<(?:p|h1|h2|h3)[^>]*>(第[0-9一二三四五六七八九十百千]+[回章节卷部集篇][^<]{0,50})<\\/(?:p|h1|h2|h3)>"
-        if let regex = try? NSRegularExpression(pattern: chineseHeadingPattern, options: [.caseInsensitive]),
+        // 1. First priority: Check for Chinese classic chapter headings (handles multiline OCR & Gutenberg headers)
+        let chineseHeadingPattern = "<(?:p|h1|h2|h3)[^>]*>\\s*((?:第[0-9一二三四五六七八九十百千]+[回章节卷部集篇]|引子|楔子|序言|自序|卷首|前言|尾声|后记)[^<]{0,80})<\\/(?:p|h1|h2|h3)>"
+        if let regex = try? NSRegularExpression(pattern: chineseHeadingPattern, options: [.caseInsensitive, .dotMatchesLineSeparators]),
            let match = regex.firstMatch(in: html, range: NSRange(html.startIndex..., in: html)),
            let titleRange = Range(match.range(at: 1), in: html) {
             let raw = String(html[titleRange])
-            let clean = raw.replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
+            var clean = raw.replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
+                .replacingOccurrences(of: "[-—_~*]{3,}", with: " ", options: .regularExpression)
                 .replacingOccurrences(of: "\n", with: " ")
                 .replacingOccurrences(of: "\r", with: " ")
+                .replacingOccurrences(of: "\t", with: " ")
+                .replacingOccurrences(of: "　", with: " ")
                 .trimmingCharacters(in: .whitespacesAndNewlines)
+
+            // Collapse multiple spaces
+            clean = clean.replacingOccurrences(of: " {2,}", with: " ", options: .regularExpression)
+
             if !clean.isEmpty && clean.count < 65 {
                 return clean
             }

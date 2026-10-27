@@ -54,6 +54,8 @@ final class ChineseClassicsRegistry: Sendable {
     }
 
     // MARK: - Curated Classics Catalog
+    var allClassics: [ClassicBook] { classics }
+
     let classics: [ClassicBook] = [
         ClassicBook(
             id: "hongloumeng",
@@ -374,12 +376,31 @@ final class ChineseClassicsRegistry: Sendable {
         ("第八十一章：显质", "信言不美，美言不信。善者不辩，辩者不善。知者不博，博者不知。圣人不积，既以为人己愈有，既以与人己愈多。天之道，利而不害；圣人之道，为而不争。")
     ]
 
-    /// Generates a pristine, complete 81-chapter EPUB for 《道德经》
+    /// Generates a pristine, complete 81-chapter EPUB for 《道德经》with verse typography
     func buildAuthenticDaoDeJingEPUB(targetURL: URL) async -> URL? {
         let chapters: [(String, String)] = Self.daodejingFullText.map { item in
+            // Split sentences to format into beautiful, rhythmic classical verse stanzas
+            let rawSentences = item.text.components(separatedBy: "。")
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+
+            var versesHTML = ""
+            for s in rawSentences {
+                versesHTML += "<p class=\"dao-verse\">\(s)。</p>\n"
+            }
+
             let html = """
-            <h1>\(item.title)</h1>
-            <p>\(item.text)</p>
+            <div class="classic-chapter-wrapper">
+                <div class="classic-chapter-header">
+                    <div class="classic-dynasty-badge">春秋 · 楚国</div>
+                    <h1 class="classic-chapter-title">\(item.title)</h1>
+                    <div class="classic-author-line">老子 李耳 著 · 五千言真传</div>
+                    <div class="classic-ornament-divider">✦ ❦ ✦</div>
+                </div>
+                <div class="classic-content-body dao-body">
+                    \(versesHTML)
+                </div>
+            </div>
             """
             return (item.title, html)
         }
@@ -397,11 +418,26 @@ final class ChineseClassicsRegistry: Sendable {
         return await SampleBookGenerator.shared.buildEPUB(
             targetURL: targetURL,
             bookId: "classic-daodejing",
-            title: "道德经",
+            title: "道德经 (八十一章传世精校本)",
             author: "李耳 (老子)",
-            description: "道家开山鼻祖老子五千言无上大作，全八十一章传世定本。",
+            description: "道家开山鼻祖老子五千言无上大作，全八十一章传世定本，逐句标点精校，古典排版典藏。",
             coverImageData: coverData,
             chapters: chapters
         )
+    }
+
+    /// Generates a pristine masterpiece EPUB for 《红楼梦》
+    func buildAuthenticHongLouMengEPUB(targetURL: URL) async -> URL? {
+        await ClassicsMasterpieceCorpus.buildHongLouMengEPUB(targetURL: targetURL)
+    }
+
+    /// Generates a pristine masterpiece EPUB for 《三国演义》
+    func buildAuthenticSanGuoYanYiEPUB(targetURL: URL) async -> URL? {
+        await ClassicsMasterpieceCorpus.buildSanGuoYanYiEPUB(targetURL: targetURL)
+    }
+
+    /// Generates a pristine masterpiece EPUB for 《西游记》
+    func buildAuthenticXiYouJiEPUB(targetURL: URL) async -> URL? {
+        await ClassicsMasterpieceCorpus.buildXiYouJiEPUB(targetURL: targetURL)
     }
 }

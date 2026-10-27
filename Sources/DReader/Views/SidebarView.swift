@@ -32,14 +32,25 @@ struct SidebarView: View {
     let onImportEPUB: () -> Void
     let onDeleteHighlight: (UUID) -> Void
     let onUpdateHighlight: ((UUID, String) -> Void)?
+    var onSelectHighlight: ((Highlight) -> Void)? = nil
     var onMakeQuoteCard: ((Highlight) -> Void)? = nil
     var onDeleteBookmark: ((UUID) -> Void)? = nil
     var onSearchTerm: ((String) -> Void)? = nil
     var onAskAIAboutTerm: ((String) -> Void)? = nil
+    var onOpenWeChatSync: (() -> Void)? = nil
+    var chineseScriptMode: ChineseScriptMode = .original
     let onDeleteBook: (UUID) -> Void
+
+    enum HighlightSourceFilter: String, CaseIterable, Identifiable {
+        case all = "全部"
+        case dreader = "本地"
+        case wechat = "微信读书"
+        var id: String { rawValue }
+    }
 
     @State private var tocSearchText: String = ""
     @State private var highlightSearchText: String = ""
+    @State private var sourceFilter: HighlightSourceFilter = .all
     @State private var hoveredChapterIndex: Int? = nil
     @State private var editingHighlightId: UUID? = nil
     @State private var editingThoughtText: String = ""
@@ -58,13 +69,26 @@ struct SidebarView: View {
         let all: [(index: Int, chapter: EPUBChapter)] = book.chapters.enumerated().map { (index: $0.offset, chapter: $0.element) }
         let query = tocSearchText.trimmingCharacters(in: .whitespaces)
         if query.isEmpty { return all }
-        return all.filter { $0.chapter.title.localizedCaseInsensitiveContains(query) }
+        return all.filter {
+            let converted = ChineseScriptConverter.convert($0.chapter.title, mode: chineseScriptMode)
+            return converted.localizedCaseInsensitiveContains(query) || $0.chapter.title.localizedCaseInsensitiveContains(query)
+        }
     }
 
     private var filteredHighlights: [Highlight] {
+        var list = currentBookHighlights
+        switch sourceFilter {
+        case .all:
+            break
+        case .dreader:
+            list = list.filter { !$0.isFromWeChatRead }
+        case .wechat:
+            list = list.filter { $0.isFromWeChatRead }
+        }
+
         let query = highlightSearchText.trimmingCharacters(in: .whitespaces)
-        if query.isEmpty { return currentBookHighlights }
-        return currentBookHighlights.filter {
+        if query.isEmpty { return list }
+        return list.filter {
             $0.text.localizedCaseInsensitiveContains(query) ||
             ($0.note?.localizedCaseInsensitiveContains(query) ?? false) ||
             $0.chapterTitle.localizedCaseInsensitiveContains(query)
@@ -117,61 +141,100 @@ struct SidebarView: View {
         }
         .frame(minWidth: 240, idealWidth: 280, maxWidth: 340)
         .background(.ultraThinMaterial)
+        .overlay(
+            Rectangle()
+                .fill(Color(nsColor: .separatorColor).opacity(0.3))
+                .frame(width: 0.5),
+            alignment: .trailing
+        )
     }
 
-    // MARK: - Header Tab Switcher (Apple Books Style)
+    // MARK: - Header Tab Switcher (Apple Books Style Segmented Control)
     private var sidebarHeaderTabSwitcher: some View {
-        HStack(spacing: 4) {
-            ForEach(SidebarTab.allCases) { tab in
-                let isSelected = (currentTab == tab)
-                Button {
-                    withAnimation(.easeInOut(duration: 0.16)) {
-                        currentTab = tab
-                    }
-                } label: {
-                    HStack(spacing: 5) {
-                        Image(systemName: tab.icon)
-                            .font(.system(size: 11, weight: isSelected ? .semibold : .regular))
-
-                        Text(tab.rawValue)
-                            .font(.system(size: 11.5, weight: isSelected ? .semibold : .medium))
-
-                        if tab == .highlights && !currentBookHighlights.isEmpty {
-                            Text("\(currentBookHighlights.count)")
-                                .font(.system(size: 9.5, weight: .bold, design: .monospaced))
-                                .foregroundStyle(isSelected ? Color.white : Color.secondary)
-                                .padding(.horizontal, 5)
-                                .padding(.vertical, 1.5)
-                                .background(isSelected ? Color.purple : Color.primary.opacity(0.08))
-                                .clipShape(Capsule())
+        VStack(spacing: 8) {
+            // Segmented Icon Toolbar
+            HStack(spacing: 2) {
+                ForEach(SidebarTab.allCases) { tab in
+                    let isSelected = (currentTab == tab)
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.16)) {
+                            currentTab = tab
                         }
+                    } label: {
+                        ZStack(alignment: .topTrailing) {
+                            HStack(spacing: 0) {
+                                Spacer()
+                                Image(systemName: tab.icon)
+                                    .font(.system(size: 12, weight: isSelected ? .semibold : .regular))
+                                    .foregroundStyle(isSelected ? Color.purple : Color.secondary)
+                                Spacer()
+                            }
+                            .frame(height: 28)
+                            .background(
+                                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                    .fill(isSelected ? Color.primary.opacity(0.08) : Color.clear)
+                            )
 
-                        if tab == .bookmarks && !currentBookBookmarks.isEmpty {
-                            Text("\(currentBookBookmarks.count)")
-                                .font(.system(size: 9.5, weight: .bold, design: .monospaced))
-                                .foregroundStyle(isSelected ? Color.white : Color.secondary)
-                                .padding(.horizontal, 5)
-                                .padding(.vertical, 1.5)
-                                .background(isSelected ? Color.red : Color.primary.opacity(0.08))
-                                .clipShape(Capsule())
+                            // Mini Notification Badges
+                            if tab == .highlights && !currentBookHighlights.isEmpty {
+                                Text("\(currentBookHighlights.count)")
+                                    .font(.system(size: 8.5, weight: .bold, design: .monospaced))
+                                    .foregroundStyle(.white)
+                                    .padding(.horizontal, 4)
+                                    .padding(.vertical, 1)
+                                    .background(Color.purple)
+                                    .clipShape(Capsule())
+                                    .offset(x: 2, y: -2)
+                            } else if tab == .bookmarks && !currentBookBookmarks.isEmpty {
+                                Text("\(currentBookBookmarks.count)")
+                                    .font(.system(size: 8.5, weight: .bold, design: .monospaced))
+                                    .foregroundStyle(.white)
+                                    .padding(.horizontal, 4)
+                                    .padding(.vertical, 1)
+                                    .background(Color.red)
+                                    .clipShape(Capsule())
+                                    .offset(x: 2, y: -2)
+                            }
                         }
+                        .contentShape(Rectangle())
                     }
-                    .foregroundStyle(isSelected ? Color.primary : Color.secondary)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 6)
-                    .background(
-                        RoundedRectangle(cornerRadius: 6, style: .continuous)
-                            .fill(isSelected ? Color.primary.opacity(0.09) : Color.clear)
-                    )
+                    .buttonStyle(.plain)
+                    .help(tab.rawValue)
                 }
-                .buttonStyle(.plain)
             }
+            .padding(3)
+            .background(Color.primary.opacity(0.04))
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .padding(.horizontal, 10)
+            .padding(.top, 8)
+
+            // Current Active Tab Sub-header
+            HStack(spacing: 6) {
+                Text(tabSubheaderText)
+                    .font(.system(size: 11, weight: .medium, design: .serif))
+                    .foregroundStyle(.secondary)
+
+                Spacer()
+            }
+            .padding(.horizontal, 12)
+            .padding(.bottom, 2)
         }
-        .padding(6)
-        .background(Color.primary.opacity(0.03))
-        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .padding(.horizontal, 10)
-        .padding(.vertical, 8)
+    }
+
+    private var tabSubheaderText: String {
+        switch currentTab {
+        case .toc:
+            let count = book?.chapters.count ?? 0
+            return "目录 · 共 \(count) 章节"
+        case .highlights:
+            return "划线与想法 · 共 \(currentBookHighlights.count) 条"
+        case .bookmarks:
+            return "折角书签 · 共 \(currentBookBookmarks.count) 个"
+        case .xray:
+            return "全书透视 · X-Ray 深度解析"
+        case .library:
+            return "私人藏书 · 共 \(books.count) 卷"
+        }
     }
 
     // MARK: - Table of Contents View
@@ -239,7 +302,7 @@ struct SidebarView: View {
                                             .frame(width: 20, alignment: .leading)
 
                                         // Chapter Title
-                                        Text(item.chapter.title)
+                                        Text(ChineseScriptConverter.convert(item.chapter.title, mode: chineseScriptMode))
                                             .font(.system(size: 12.5, weight: isCurrent ? .semibold : .regular))
                                             .foregroundStyle(isCurrent ? Color.purple : Color.primary.opacity(0.88))
                                             .lineLimit(2)
@@ -291,6 +354,39 @@ struct SidebarView: View {
     // MARK: - Highlights & Thoughts View (Apple Books & WeChat Read Style)
     private var highlightsListView: some View {
         VStack(spacing: 0) {
+            // Filter & WeChat Sync Trigger Bar
+            HStack(spacing: 8) {
+                Picker("", selection: $sourceFilter) {
+                    ForEach(HighlightSourceFilter.allCases) { f in
+                        Text(f.rawValue).tag(f)
+                    }
+                }
+                .pickerStyle(.segmented)
+
+                if let onOpenWeChatSync = onOpenWeChatSync {
+                    Button {
+                        onOpenWeChatSync()
+                    } label: {
+                        HStack(spacing: 3) {
+                            Image(systemName: "arrow.triangle.2.circlepath")
+                                .font(.system(size: 9, weight: .bold))
+                            Text("微信读书")
+                                .font(.system(size: 10, weight: .semibold))
+                        }
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 3.5)
+                        .background(Color(hex: "#07C160").opacity(0.15))
+                        .foregroundStyle(Color(hex: "#059648"))
+                        .clipShape(RoundedRectangle(cornerRadius: 5))
+                    }
+                    .buttonStyle(.plain)
+                    .help("打开微信读书同步面板 (⌘+⇧+W)")
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.top, 6)
+            .padding(.bottom, 4)
+
             // Search & Stats Bar
             if !currentBookHighlights.isEmpty {
                 HStack(spacing: 6) {
@@ -318,7 +414,7 @@ struct SidebarView: View {
                 .background(Color.primary.opacity(0.05))
                 .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
                 .padding(.horizontal, 10)
-                .padding(.vertical, 6)
+                .padding(.vertical, 4)
 
                 Divider()
                     .opacity(0.2)
@@ -412,6 +508,20 @@ struct SidebarView: View {
                     .fill(Color(hex: item.colorHex))
                     .frame(width: 7, height: 7)
 
+                if item.isFromWeChatRead {
+                    HStack(spacing: 2.5) {
+                        Image(systemName: "quote.bubble.fill")
+                            .font(.system(size: 7.5))
+                        Text("微信读书")
+                            .font(.system(size: 8.5, weight: .semibold))
+                    }
+                    .padding(.horizontal, 4.5)
+                    .padding(.vertical, 1.5)
+                    .background(Color(hex: "#07C160").opacity(0.14))
+                    .foregroundStyle(Color(hex: "#059648"))
+                    .clipShape(Capsule())
+                }
+
                 Text(item.chapterTitle)
                     .font(.system(size: 10.5, weight: .medium))
                     .foregroundStyle(.secondary)
@@ -461,9 +571,13 @@ struct SidebarView: View {
             .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
             .contentShape(Rectangle())
             .onTapGesture {
-                onSelectChapter(item.chapterIndex)
+                if let onSelectHighlight = onSelectHighlight {
+                    onSelectHighlight(item)
+                } else {
+                    onSelectChapter(item.chapterIndex)
+                }
             }
-            .help("点击跳转到该章节对应内容")
+            .help("点击跳转到该章节并精准高亮定位")
 
             // Thought Box (WeChat Read style)
             if editingHighlightId == item.id {

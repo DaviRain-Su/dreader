@@ -21,6 +21,13 @@ struct EPUBThemeInjector {
         let js = generateJS()
 
         var bodyContent = extractBodyContent(from: resolvedHTML)
+        bodyContent = sanitizeAndElevateLayout(bodyContent)
+
+        // Chinese Script Conversion (繁体一键转简体 / 简体转繁体)
+        if settings.chineseScriptMode != .original {
+            bodyContent = ChineseScriptConverter.convert(bodyContent, mode: settings.chineseScriptMode)
+        }
+
         if !highlights.isEmpty {
             bodyContent = injectHighlights(in: bodyContent, highlights: highlights)
         }
@@ -33,12 +40,16 @@ struct EPUBThemeInjector {
             )
         }
         let headElements = extractHeadElements(from: resolvedHTML)
+        let displayBookTitle = ChineseScriptConverter.convert(bookTitle, mode: settings.chineseScriptMode)
+        let displayChapterTitle = ChineseScriptConverter.convert(chapterTitle, mode: settings.chineseScriptMode)
+        let displayNextChapterTitle = nextChapterTitle.map { ChineseScriptConverter.convert($0, mode: settings.chineseScriptMode) }
+
         let endCard = generateEndCardHTML(
             hasNextChapter: hasNextChapter,
-            nextChapterTitle: nextChapterTitle,
+            nextChapterTitle: displayNextChapterTitle,
             theme: settings.theme,
-            bookTitle: bookTitle,
-            chapterTitle: chapterTitle,
+            bookTitle: displayBookTitle,
+            chapterTitle: displayChapterTitle,
             chapterIndex: chapterIndex
         )
 
@@ -241,6 +252,53 @@ struct EPUBThemeInjector {
         return results
     }
 
+    /// Intelligent Typesetting & Cleansing Engine for Chinese and public domain EPUBs:
+    /// 1. Strips Project Gutenberg legal notices, headers, and footers.
+    /// 2. Merges artificial 70-column hard newlines in CJK text to restore smooth, fluid paragraphs.
+    /// 3. Replaces fullwidth period dots `．` with standard Chinese `。`.
+    /// 4. Replaces long ASCII dashes `————` with typographic dividers.
+    /// 5. Automatically detects and elevates chapter title paragraphs (`第一回...`) into elegant headings.
+    static func sanitizeAndElevateLayout(_ html: String) -> String {
+        var content = html
+
+        // 1. Strip Project Gutenberg boilerplate containers
+        let pgPattern = "(?i)<div[^>]*(?:class=[\"'][^\"']*pg-boilerplate[^\"']*[\"']|id=[\"']pg-(?:header|footer|machine-header|start-separator|end-separator)[\"'])[^>]*>[\\s\\S]*?<\\/div>"
+        if let regex = try? NSRegularExpression(pattern: pgPattern, options: []) {
+            content = regex.stringByReplacingMatches(in: content, options: [], range: NSRange(content.startIndex..., in: content), withTemplate: "")
+        }
+
+        // 2. Strip Project Gutenberg text banners if any left
+        let bannerPattern = "\\*\\*\\*\\s*START OF (?:THE|THIS) PROJECT GUTENBERG[\\s\\S]*?\\*\\*\\*"
+        if let regex = try? NSRegularExpression(pattern: bannerPattern, options: [.caseInsensitive]) {
+            content = regex.stringByReplacingMatches(in: content, options: [], range: NSRange(content.startIndex..., in: content), withTemplate: "")
+        }
+
+        // 3. Remove long raw ASCII dashes (e.g. ————————————————————————————————-)
+        let dashPattern = "[-—_~*]{8,}"
+        if let regex = try? NSRegularExpression(pattern: dashPattern, options: []) {
+            content = regex.stringByReplacingMatches(in: content, options: [], range: NSRange(content.startIndex..., in: content), withTemplate: "<div class=\"dreader-classic-divider\">❦</div>")
+        }
+
+        // 4. Merge artificial CJK linebreaks inside paragraphs
+        // When a Chinese character is followed by a newline and another Chinese character, join them
+        let cjkLinebreakPattern = "([\\u4e00-\\u9fa5\\u3000-\\u303f\\uff00-\\uffef])\\r?\\n\\s*([\\u4e00-\\u9fa5\\u3000-\\u303f\\uff00-\\uffef])"
+        if let regex = try? NSRegularExpression(pattern: cjkLinebreakPattern, options: []) {
+            content = regex.stringByReplacingMatches(in: content, options: [], range: NSRange(content.startIndex..., in: content), withTemplate: "$1$2")
+        }
+
+        // 5. Normalize archaic fullwidth period dot `．` to standard Chinese `。`
+        content = content.replacingOccurrences(of: "．", with: "。")
+
+        // 6. Elevate Chinese chapter headings (e.g. `<p id="...">第一回　甄士隱夢幻識通靈　賈雨村風塵怀閨秀</p>`)
+        let headingPattern = "(?i)<p\\b[^>]*>\\s*(第[0-9一二三四五六七八九十百千]+[回章节卷部][^<]{0,60})\\s*<\\/p>"
+        if let regex = try? NSRegularExpression(pattern: headingPattern, options: []) {
+            let template = "<div class=\"dreader-chapter-title-container\"><h2 class=\"dreader-auto-chapter-heading\">$1</h2><div class=\"dreader-classic-divider\">✦ ❦ ✦</div></div>"
+            content = regex.stringByReplacingMatches(in: content, options: [], range: NSRange(content.startIndex..., in: content), withTemplate: template)
+        }
+
+        return content
+    }
+
     static func extractBodyContent(from rawHTML: String) -> String {
         if let bodyOpenRange = rawHTML.range(of: "<body", options: .caseInsensitive) {
             let rest = rawHTML[bodyOpenRange.lowerBound...]
@@ -371,7 +429,8 @@ struct EPUBThemeInjector {
 
         return """
         html {
-            scroll-behavior: smooth !important;
+            -webkit-overflow-scrolling: touch !important;
+            overflow-y: scroll !important;
         }
 
         html, body {
@@ -389,11 +448,19 @@ struct EPUBThemeInjector {
             margin-left: auto !important;
             margin-right: auto !important;
             padding: \(settings.isZenMode ? "60px 48px 160px 48px" : "48px 32px 140px 32px") !important;
-            text-rendering: optimizeLegibility !important;
+            text-rendering: optimizeSpeed !important;
             -webkit-font-smoothing: antialiased !important;
             word-break: break-word !important;
             hyphens: auto !important;
-            transition: background-color 0.25s ease, color 0.25s ease !important;
+        }
+
+        /* High-Performance Virtualization for Large Chapters */
+        #dreader-chapter-body > p,
+        #dreader-chapter-body > div:not(.dreader-bilingual-trans):not(.dreader-bilingual-slot),
+        #dreader-chapter-body > section,
+        #dreader-chapter-body > blockquote {
+            content-visibility: auto;
+            contain-intrinsic-size: 0 44px;
         }
 
         \(fontOverrideCSS)
@@ -417,6 +484,8 @@ struct EPUBThemeInjector {
         }
 
         #dreader-chapter-body {
+            transform: translateZ(0); /* Hardware accelerated compositing */
+            will-change: scroll-position;
             \(isSpread ? """
             column-count: 2 !important;
             column-gap: 56px !important;
@@ -779,6 +848,56 @@ struct EPUBThemeInjector {
                 box-shadow: 0 0 0 5px rgba(255, 215, 0, 0.8), 0 0 22px rgba(255, 180, 0, 0.6);
             }
         }
+
+        /* Classical Chinese & Clean Typesetting Engine Rules */
+        .dreader-chapter-title-container {
+            text-align: center !important;
+            margin-top: 2.8em !important;
+            margin-bottom: 2em !important;
+        }
+
+        .dreader-auto-chapter-heading {
+            text-align: center !important;
+            font-size: 1.55em !important;
+            font-weight: 700 !important;
+            line-height: 1.45 !important;
+            margin: 0 !important;
+            text-indent: 0 !important;
+            letter-spacing: 0.1em !important;
+            color: \(theme.textColorHex) !important;
+        }
+
+        .dreader-classic-divider {
+            text-align: center !important;
+            color: \(theme.secondaryTextColorHex) !important;
+            opacity: 0.65 !important;
+            margin: 1.2em auto !important;
+            font-size: 1.05em !important;
+            letter-spacing: 0.3em !important;
+            user-select: none !important;
+        }
+
+        .dreader-poem-block {
+            text-align: center !important;
+            margin: 1.8em auto !important;
+            padding: 1.2em 2em !important;
+            background: \(theme.isDark ? "rgba(255,255,255,0.03)" : "rgba(0,0,0,0.02)") !important;
+            border-radius: 8px !important;
+        }
+
+        /* Hide all Project Gutenberg and raw OCR boilerplate disclaimers */
+        .pg-boilerplate,
+        #pg-header,
+        #pg-footer,
+        #pg-start-separator,
+        #pg-end-separator,
+        [id*="pg-header"],
+        [id*="pg-footer"] {
+            display: none !important;
+            visibility: hidden !important;
+            height: 0 !important;
+            overflow: hidden !important;
+        }
         """
     }
 
@@ -906,22 +1025,27 @@ struct EPUBThemeInjector {
                 }
             });
 
-            // Scroll Progress Reporting
-            let scrollThrottleTimer = null;
+            // Scroll Progress Reporting (optimized with requestAnimationFrame and change threshold)
+            let scrollRAF = null;
+            let lastReportedPct = -1.0;
             window.addEventListener('scroll', function() {
-                if (scrollThrottleTimer) return;
-                scrollThrottleTimer = setTimeout(function() {
-                    scrollThrottleTimer = null;
+                if (scrollRAF) return;
+                scrollRAF = requestAnimationFrame(function() {
+                    scrollRAF = null;
                     const currentScroll = window.scrollY || document.documentElement.scrollTop;
                     const maxScroll = Math.max(1, document.documentElement.scrollHeight - window.innerHeight);
                     const pct = Math.min(1.0, Math.max(0.0, currentScroll / maxScroll));
-                    if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.selectionBridge) {
-                        window.webkit.messageHandlers.selectionBridge.postMessage({
-                            type: 'scrollProgress',
-                            progress: pct
-                        });
+                    // Only send IPC bridge message if progress changed by at least 1% (or reached boundaries)
+                    if (Math.abs(pct - lastReportedPct) >= 0.01 || (pct === 0 && lastReportedPct !== 0) || (pct === 1 && lastReportedPct !== 1)) {
+                        lastReportedPct = pct;
+                        if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.selectionBridge) {
+                            window.webkit.messageHandlers.selectionBridge.postMessage({
+                                type: 'scrollProgress',
+                                progress: pct
+                            });
+                        }
                     }
-                }, 50);
+                });
             }, { passive: true });
 
             // Instant Client-Side Highlight Function
@@ -1210,6 +1334,7 @@ struct EPUBThemeInjector {
                 });
 
                 if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.selectionBridge) {
+                    lastReportedPct = 0.0;
                     window.webkit.messageHandlers.selectionBridge.postMessage({ type: 'clear' });
                     window.webkit.messageHandlers.selectionBridge.postMessage({ type: 'scrollProgress', progress: 0.0 });
                 }
@@ -1272,6 +1397,28 @@ struct EPUBThemeInjector {
                         currentMatch++;
                         pos += keyword.length;
                     }
+                }
+                return false;
+            };
+
+            // Scroll directly to a highlight and pulse ripple glow
+            window.dreaderScrollToHighlight = function(id) {
+                if (!id) return false;
+                const el = document.querySelector('mark.dreader-highlight[data-id="' + id + '"]');
+                if (el) {
+                    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    const origBoxShadow = el.style.boxShadow;
+                    const origTransition = el.style.transition;
+                    el.style.transition = 'box-shadow 0.25s ease-out, transform 0.25s ease-out';
+                    el.style.boxShadow = '0 0 0 6px rgba(168, 85, 247, 0.45)';
+                    el.style.borderRadius = '3px';
+                    setTimeout(function() {
+                        el.style.boxShadow = origBoxShadow || 'none';
+                        setTimeout(function() {
+                            el.style.transition = origTransition || '';
+                        }, 300);
+                    }, 1400);
+                    return true;
                 }
                 return false;
             };

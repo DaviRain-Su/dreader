@@ -110,6 +110,18 @@ struct Highlight: Identifiable, Codable, Hashable, Sendable {
     let createdAt: Date
     var note: String?
     var updatedAt: Date?
+    var source: String? // "wechat_read" or nil (local)
+    var wechatBookId: String?
+    var wechatBookmarkId: String?
+    var wechatAuthor: String?
+
+    var isFromWeChatRead: Bool {
+        source == "wechat_read" || wechatBookmarkId != nil
+    }
+
+    var displaySource: String {
+        isFromWeChatRead ? "微信读书" : "DReader"
+    }
 
     init(
         id: UUID = UUID(),
@@ -121,7 +133,11 @@ struct Highlight: Identifiable, Codable, Hashable, Sendable {
         colorHex: String = "#FFE066",
         createdAt: Date = Date(),
         note: String? = nil,
-        updatedAt: Date? = nil
+        updatedAt: Date? = nil,
+        source: String? = nil,
+        wechatBookId: String? = nil,
+        wechatBookmarkId: String? = nil,
+        wechatAuthor: String? = nil
     ) {
         self.id = id
         self.bookId = bookId
@@ -133,10 +149,15 @@ struct Highlight: Identifiable, Codable, Hashable, Sendable {
         self.createdAt = createdAt
         self.note = note
         self.updatedAt = updatedAt
+        self.source = source
+        self.wechatBookId = wechatBookId
+        self.wechatBookmarkId = wechatBookmarkId
+        self.wechatAuthor = wechatAuthor
     }
 
     enum CodingKeys: String, CodingKey {
         case id, bookId, bookTitle, chapterIndex, chapterTitle, text, colorHex, createdAt, note, updatedAt
+        case source, wechatBookId, wechatBookmarkId, wechatAuthor
     }
 
     init(from decoder: Decoder) throws {
@@ -151,5 +172,9 @@ struct Highlight: Identifiable, Codable, Hashable, Sendable {
         self.createdAt = try container.decode(Date.self, forKey: .createdAt)
         self.note = try container.decodeIfPresent(String.self, forKey: .note)
         self.updatedAt = try container.decodeIfPresent(Date.self, forKey: .updatedAt)
+        self.source = try container.decodeIfPresent(String.self, forKey: .source)
+        self.wechatBookId = try container.decodeIfPresent(String.self, forKey: .wechatBookId)
+        self.wechatBookmarkId = try container.decodeIfPresent(String.self, forKey: .wechatBookmarkId)
+        self.wechatAuthor = try container.decodeIfPresent(String.self, forKey: .wechatAuthor)
     }
 }

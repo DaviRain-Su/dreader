@@ -24,6 +24,25 @@ struct ReaderMainView: View {
                         },
                         onOpenOnlineHub: {
                             vm.showOnlineBookHub = true
+                        },
+                        onOpenWeChatSync: {
+                            vm.showWeChatSyncModal = true
+                        },
+                        onDeleteBook: { id in
+                            vm.removeBook(id: id)
+                        },
+                        onResetProgress: { id in
+                            vm.resetBookProgress(id: id)
+                        },
+                        onOpenXRay: { book in
+                            vm.selectBookForReading(book)
+                            vm.sidebarTab = .xray
+                            vm.isSidebarVisible = true
+                        },
+                        onAddClassic: { classic in
+                            Task {
+                                await vm.importClassicDirectly(classic)
+                            }
                         }
                     )
                     .transition(.opacity)
@@ -88,6 +107,59 @@ struct ReaderMainView: View {
                 }
             )
         }
+        .sheet(isPresented: $vm.showWeChatSyncModal) {
+            WeChatReadingSyncModalView(viewModel: vm) {
+                vm.showWeChatSyncModal = false
+            }
+        }
+        .onKeyPress(.space) {
+            if !vm.isViewingBookshelf && !vm.isSearchPresented {
+                vm.scrollPage(direction: 1)
+                return .handled
+            }
+            return .ignored
+        }
+        .onKeyPress(.downArrow) {
+            if !vm.isViewingBookshelf && !vm.isSearchPresented {
+                vm.scrollPage(direction: 1)
+                return .handled
+            }
+            return .ignored
+        }
+        .onKeyPress(.upArrow) {
+            if !vm.isViewingBookshelf && !vm.isSearchPresented {
+                vm.scrollPage(direction: -1)
+                return .handled
+            }
+            return .ignored
+        }
+        .onKeyPress(.escape) {
+            if vm.isSearchPresented {
+                vm.isSearchPresented = false
+                return .handled
+            } else if vm.selectionManager.activeHighlightCard != nil {
+                vm.selectionManager.activeHighlightCard = nil
+                return .handled
+            } else if vm.settings.isZenMode {
+                vm.settings.isZenMode = false
+                return .handled
+            } else if !vm.isViewingBookshelf {
+                vm.returnToBookshelf()
+                return .handled
+            }
+            return .ignored
+        }
+        .onKeyPress(characters: CharacterSet(charactersIn: "jk")) { keyPress in
+            guard !vm.isViewingBookshelf && !vm.isSearchPresented else { return .ignored }
+            if keyPress.characters == "j" && keyPress.modifiers.isEmpty {
+                vm.scrollPage(direction: 1)
+                return .handled
+            } else if keyPress.characters == "k" && keyPress.modifiers.isEmpty {
+                vm.scrollPage(direction: -1)
+                return .handled
+            }
+            return .ignored
+        }
     }
 
     // MARK: - Reading Workspace View
@@ -116,6 +188,9 @@ struct ReaderMainView: View {
                     onUpdateHighlight: { id, note in
                         vm.updateHighlight(id: id, note: note)
                     },
+                    onSelectHighlight: { highlight in
+                        vm.jumpToHighlight(highlight)
+                    },
                     onMakeQuoteCard: { highlight in
                         quoteCardHighlight = highlight
                     },
@@ -134,6 +209,10 @@ struct ReaderMainView: View {
                             vm.isAIPanelVisible = true
                         }
                     },
+                    onOpenWeChatSync: {
+                        vm.showWeChatSyncModal = true
+                    },
+                    chineseScriptMode: vm.settings.chineseScriptMode,
                     onDeleteBook: { id in
                         vm.removeBook(id: id)
                     }
@@ -356,195 +435,141 @@ struct ReaderMainView: View {
         }
     }
 
-    // MARK: - Reader Top Bar (Apple Books Style Translucent Bar)
+    // MARK: - Reader Top Bar (Apple Books Native Translucent Bar)
     private var readerTopBar: some View {
-        HStack(spacing: 12) {
-            // Return to Bookshelf Button (Frosted Glass Capsule)
+        HStack(spacing: 6) {
+            // MARK: Leading Cluster: Bookshelf, Sidebar, Import, Online
             Button {
                 vm.returnToBookshelf()
             } label: {
-                HStack(spacing: 5) {
+                HStack(spacing: 4) {
                     Image(systemName: "chevron.backward")
                         .font(.system(size: 11, weight: .semibold))
-                    Image(systemName: "books.vertical.fill")
-                        .font(.system(size: 11))
                     Text("书架")
                         .font(.system(size: 12, weight: .medium))
                 }
                 .foregroundStyle(Color.primary.opacity(0.85))
-                .padding(.horizontal, 10)
-                .padding(.vertical, 5)
-                .background(.ultraThinMaterial)
+                .padding(.horizontal, 9)
+                .frame(height: 28)
+                .background(Color.primary.opacity(0.05))
                 .clipShape(Capsule())
-                .overlay(
-                    Capsule()
-                        .stroke(Color.white.opacity(0.2), lineWidth: 0.5)
-                )
             }
             .buttonStyle(.plain)
             .help("返回书架大厅 (Esc / ⌘+B)")
 
-            // Sidebar Toggle Glass Pill
-            Button {
-                withAnimation(.easeInOut(duration: 0.2)) {
-                    vm.isSidebarVisible.toggle()
-                }
-            } label: {
-                Image(systemName: "sidebar.leading")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(vm.isSidebarVisible ? Color.purple : Color.primary.opacity(0.75))
-                    .frame(width: 28, height: 28)
-                    .background(.ultraThinMaterial)
-                    .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 7, style: .continuous)
-                            .stroke(vm.isSidebarVisible ? Color.purple.opacity(0.4) : Color.white.opacity(0.2), lineWidth: 0.5)
-                    )
-            }
-            .buttonStyle(.plain)
-            .help("展开/折叠目录与书签")
+            Divider()
+                .frame(height: 16)
+                .padding(.horizontal, 2)
+                .opacity(0.4)
 
-            // Import Button
-            Button {
-                vm.showImportOpenPanel()
-            } label: {
-                Image(systemName: "plus")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(Color.primary.opacity(0.75))
-                    .frame(width: 28, height: 28)
-                    .background(.ultraThinMaterial)
-                    .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 7, style: .continuous)
-                            .stroke(Color.white.opacity(0.2), lineWidth: 0.5)
-                    )
-            }
-            .buttonStyle(.plain)
-            .help("导入新 EPUB 电子书")
+            AppleToolbarButton(
+                icon: "sidebar.leading",
+                isActive: vm.isSidebarVisible,
+                action: {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        vm.isSidebarVisible.toggle()
+                    }
+                },
+                helpText: "展开/折叠侧边栏 (目录、笔记与书签)"
+            )
 
-            // Online Book Hub Button (Z-Lib & Open Library)
-            Button {
-                vm.showOnlineBookHub = true
-            } label: {
-                Image(systemName: "globe.americas.fill")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(Color.purple)
-                    .frame(width: 28, height: 28)
-                    .background(.ultraThinMaterial)
-                    .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 7, style: .continuous)
-                            .stroke(Color.purple.opacity(0.35), lineWidth: 0.5)
-                    )
-            }
-            .buttonStyle(.plain)
-            .help("探索在线数字书库 (⌘ + L)")
+            AppleToolbarButton(
+                icon: "plus",
+                action: {
+                    vm.showImportOpenPanel()
+                },
+                helpText: "导入本地 EPUB 电子书 (⌘+O)"
+            )
+
+            AppleToolbarButton(
+                icon: "globe.asia.australia.fill",
+                action: {
+                    vm.showOnlineBookHub = true
+                },
+                helpText: "探索在线数字书库 (⌘+L)"
+            )
+
+            AppleToolbarButton(
+                icon: "quote.bubble.fill",
+                isActive: vm.showWeChatSyncModal,
+                activeColor: Color(hex: "#07C160"),
+                action: {
+                    vm.showWeChatSyncModal = true
+                },
+                helpText: "微信读书笔记与划线同步 (⌘+⇧+W)"
+            )
 
             Spacer()
 
-            // Book & Chapter Center Floating Header
-            VStack(spacing: 1.5) {
-                Text(vm.currentBook?.title ?? "DReader 阅读器")
-                    .font(.system(size: 13, weight: .semibold, design: .serif))
-                    .lineLimit(1)
-                    .foregroundStyle(vm.settings.theme.swiftUIText.opacity(0.95))
-
-                if let currentChapter = vm.currentBook?.currentChapter {
-                    Text(currentChapter.title)
-                        .font(.system(size: 10.5, weight: .regular))
-                        .foregroundStyle(Color(hex: vm.settings.theme.secondaryTextColorHex).opacity(0.85))
+            // MARK: Center Cluster: Document & Chapter Title
+            Button {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    vm.sidebarTab = .toc
+                    vm.isSidebarVisible = true
+                }
+            } label: {
+                VStack(spacing: 1.5) {
+                    let rawBookTitle = vm.currentBook?.title ?? "DReader 阅读器"
+                    let displayBookTitle = ChineseScriptConverter.convert(rawBookTitle, mode: vm.settings.chineseScriptMode)
+                    Text(displayBookTitle)
+                        .font(.system(size: 12.5, weight: .semibold, design: .serif))
                         .lineLimit(1)
+                        .foregroundStyle(vm.settings.theme.swiftUIText.opacity(0.95))
+
+                    if let currentChapter = vm.currentBook?.currentChapter {
+                        let displayChapterTitle = ChineseScriptConverter.convert(currentChapter.title, mode: vm.settings.chineseScriptMode)
+                        Text(displayChapterTitle)
+                            .font(.system(size: 10.5, weight: .regular))
+                            .foregroundStyle(Color(hex: vm.settings.theme.secondaryTextColorHex).opacity(0.85))
+                            .lineLimit(1)
+                    }
                 }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 3)
+                .background(Color.clear)
+                .contentShape(Rectangle())
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 3)
+            .buttonStyle(.plain)
+            .help("点击快速打开全书目录导航")
 
             Spacer()
 
-            // In-Book Search Button (Apple Books Magnifying Glass ⌘+F)
-            Button {
-                withAnimation(.easeInOut(duration: 0.2)) {
-                    vm.isSearchPresented.toggle()
-                }
-            } label: {
-                Image(systemName: "magnifyingglass")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(vm.isSearchPresented ? Color.purple : Color.primary.opacity(0.8))
-                    .frame(width: 28, height: 28)
-                    .background(.ultraThinMaterial)
-                    .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 7, style: .continuous)
-                            .stroke(vm.isSearchPresented ? Color.purple.opacity(0.4) : Color.white.opacity(0.2), lineWidth: 0.5)
-                    )
-            }
-            .buttonStyle(.plain)
-            .keyboardShortcut("f", modifiers: .command)
-            .help("全书全文检索 (⌘ + F)")
+            // MARK: Trailing Cluster: Reading Tools & AI
+            AppleToolbarButton(
+                icon: "character",
+                title: vm.settings.chineseScriptMode == .simplified ? "简体" : (vm.settings.chineseScriptMode == .traditional ? "繁体" : "简繁"),
+                isActive: vm.settings.chineseScriptMode != .original,
+                activeColor: .purple,
+                action: {
+                    withAnimation {
+                        if vm.settings.chineseScriptMode == .simplified {
+                            vm.settings.chineseScriptMode = .original
+                        } else {
+                            vm.settings.chineseScriptMode = .simplified
+                        }
+                    }
+                },
+                helpText: vm.settings.chineseScriptMode == .simplified ? "当前已转换为简体 (点击恢复原版繁体)" : "一键繁体转简体排版 (⌘+⇧+C)"
+            )
 
-            // Bookmark Toggle Button (Apple Books Bookmark Icon ⌘+D)
-            Button {
-                vm.toggleCurrentChapterBookmark()
-            } label: {
-                Image(systemName: vm.isCurrentChapterBookmarked() ? "bookmark.fill" : "bookmark")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(vm.isCurrentChapterBookmarked() ? Color.red : Color.primary.opacity(0.8))
-                    .frame(width: 28, height: 28)
-                    .background(.ultraThinMaterial)
-                    .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 7, style: .continuous)
-                            .stroke(vm.isCurrentChapterBookmarked() ? Color.red.opacity(0.4) : Color.white.opacity(0.2), lineWidth: 0.5)
-                    )
-            }
-            .buttonStyle(.plain)
-            .keyboardShortcut("d", modifiers: .command)
-            .help(vm.isCurrentChapterBookmarked() ? "移除当前书签 (⌘ + D)" : "添加折角书签 (⌘ + D)")
+            AppleToolbarButton(
+                icon: "character.book.closed.fill",
+                title: "双语",
+                isActive: vm.settings.isBilingualEnabled,
+                action: {
+                    vm.toggleBilingualMode()
+                },
+                helpText: vm.settings.isBilingualEnabled ? "关闭双语对照 (⌘+T)" : "开启段落双语对照 (⌘+T)"
+            )
 
-            // Bilingual Interlinear Reading Toggle Button (⌘ + T)
-            Button {
-                vm.toggleBilingualMode()
-            } label: {
-                HStack(spacing: 3.5) {
-                    Image(systemName: "character.book.closed.fill")
-                        .font(.system(size: 11))
-                    Text("双语")
-                        .font(.system(size: 11, weight: .bold))
-                }
-                .foregroundStyle(vm.settings.isBilingualEnabled ? Color.white : Color.primary.opacity(0.85))
-                .padding(.horizontal, 9)
-                .frame(height: 28)
-                .background(
-                    vm.settings.isBilingualEnabled
-                        ? AnyShapeStyle(LinearGradient(colors: [Color.blue, Color.purple], startPoint: .topLeading, endPoint: .bottomTrailing))
-                        : AnyShapeStyle(.ultraThinMaterial)
-                )
-                .clipShape(Capsule())
-                .overlay(
-                    Capsule().stroke(vm.settings.isBilingualEnabled ? Color.purple.opacity(0.6) : Color.white.opacity(0.2), lineWidth: 0.5)
-                )
-                .shadow(color: vm.settings.isBilingualEnabled ? Color.purple.opacity(0.35) : Color.clear, radius: 4, y: 1.5)
-            }
-            .buttonStyle(.plain)
-            .keyboardShortcut("t", modifiers: .command)
-            .help(vm.settings.isBilingualEnabled ? "关闭双语对照 (⌘ + T)" : "开启段落双语对照 (⌘ + T)")
-
-            // Typography Setting Popover Button (Apple Books "Aa" Icon)
-            Button {
-                showTypographyPopover.toggle()
-            } label: {
-                Image(systemName: "textformat.size")
-                    .font(.system(size: 12.5, weight: .medium))
-                    .foregroundStyle(showTypographyPopover ? Color.purple : Color.primary.opacity(0.8))
-                    .frame(width: 28, height: 28)
-                    .background(.ultraThinMaterial)
-                    .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 7, style: .continuous)
-                            .stroke(showTypographyPopover ? Color.purple.opacity(0.4) : Color.white.opacity(0.2), lineWidth: 0.5)
-                    )
-            }
-            .buttonStyle(.plain)
+            AppleToolbarButton(
+                icon: "textformat.size",
+                isActive: showTypographyPopover,
+                action: {
+                    showTypographyPopover.toggle()
+                },
+                helpText: "排版与字体风格设置"
+            )
             .popover(isPresented: $showTypographyPopover, arrowEdge: .bottom) {
                 ReaderTypographySettingsPopover(
                     settings: vm.settings,
@@ -556,13 +581,33 @@ struct ReaderMainView: View {
                     }
                 )
             }
-            .help("排版设置与主题风格")
 
-            // Reading Insights Pill (Apple Fitness Streak Icon)
+            AppleToolbarButton(
+                icon: "magnifyingglass",
+                isActive: vm.isSearchPresented,
+                action: {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        vm.isSearchPresented.toggle()
+                    }
+                },
+                helpText: "全书全文检索 (⌘+F)"
+            )
+
+            AppleToolbarButton(
+                icon: vm.isCurrentChapterBookmarked() ? "bookmark.fill" : "bookmark",
+                isActive: vm.isCurrentChapterBookmarked(),
+                activeColor: .red,
+                action: {
+                    vm.toggleCurrentChapterBookmark()
+                },
+                helpText: vm.isCurrentChapterBookmarked() ? "移除当前书签 (⌘+D)" : "添加折角书签 (⌘+D)"
+            )
+
+            // Reading Streak Pill
             Button {
                 vm.showReadingInsights = true
             } label: {
-                HStack(spacing: 4) {
+                HStack(spacing: 3) {
                     Image(systemName: "flame.fill")
                         .font(.system(size: 10))
                         .foregroundStyle(.orange)
@@ -570,73 +615,60 @@ struct ReaderMainView: View {
                         .font(.system(size: 11, weight: .bold))
                         .foregroundStyle(Color.primary.opacity(0.85))
                 }
-                .padding(.horizontal, 8)
+                .padding(.horizontal, 7)
                 .frame(height: 28)
-                .background(.ultraThinMaterial)
+                .background(Color.orange.opacity(0.08))
                 .clipShape(Capsule())
-                .overlay(
-                    Capsule().stroke(Color.orange.opacity(0.3), lineWidth: 0.5)
-                )
             }
             .buttonStyle(.plain)
             .help("阅读统计与成就打卡")
 
             // Zen Mode Quick Toggle Button
-            Button {
-                withAnimation(.easeInOut(duration: 0.25)) {
-                    vm.settings.isZenMode.toggle()
-                }
-            } label: {
-                Image(systemName: "sparkles.rectangle.stack")
-                    .font(.system(size: 11.5, weight: .medium))
-                    .foregroundStyle(Color.primary.opacity(0.75))
-                    .frame(width: 28, height: 28)
-                    .background(.ultraThinMaterial)
-                    .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 7, style: .continuous)
-                            .stroke(Color.white.opacity(0.2), lineWidth: 0.5)
-                    )
-            }
-            .buttonStyle(.plain)
-            .help("全屏禅意沉浸模式 (⌘ + Enter)")
+            AppleToolbarButton(
+                icon: "sparkles.rectangle.stack",
+                isActive: vm.settings.isZenMode,
+                action: {
+                    withAnimation(.easeInOut(duration: 0.25)) {
+                        vm.settings.isZenMode.toggle()
+                    }
+                },
+                helpText: "全屏禅意沉浸模式 (⌘+Enter)"
+            )
 
-            // AI Panel Toggle (Luminescent Glass Capsule)
+            // AI Panel Toggle
             Button {
                 withAnimation(.easeInOut(duration: 0.2)) {
                     vm.isAIPanelVisible.toggle()
                 }
             } label: {
-                HStack(spacing: 5) {
+                HStack(spacing: 4.5) {
                     Image(systemName: "sparkles")
                         .font(.system(size: 11, weight: .semibold))
                     Text("AI 伴读")
                         .font(.system(size: 11.5, weight: .semibold))
                 }
                 .foregroundStyle(vm.isAIPanelVisible ? Color.white : Color.purple)
-                .padding(.horizontal, 11)
-                .padding(.vertical, 5)
+                .padding(.horizontal, 10)
+                .frame(height: 28)
                 .background(
-                    vm.isAIPanelVisible
-                        ? AnyShapeStyle(LinearGradient(colors: [Color.purple, Color.indigo], startPoint: .topLeading, endPoint: .bottomTrailing))
-                        : AnyShapeStyle(.ultraThinMaterial)
-                )
-                .clipShape(Capsule())
-                .overlay(
                     Capsule()
-                        .stroke(vm.isAIPanelVisible ? Color.white.opacity(0.3) : Color.purple.opacity(0.3), lineWidth: 0.5)
+                        .fill(
+                            vm.isAIPanelVisible
+                                ? AnyShapeStyle(LinearGradient(colors: [Color.purple, Color.indigo], startPoint: .topLeading, endPoint: .bottomTrailing))
+                                : AnyShapeStyle(Color.purple.opacity(0.12))
+                        )
                 )
-                .shadow(color: vm.isAIPanelVisible ? Color.purple.opacity(0.3) : Color.clear, radius: 6, y: 2)
+                .shadow(color: vm.isAIPanelVisible ? Color.purple.opacity(0.3) : Color.clear, radius: 4, y: 1.5)
             }
             .buttonStyle(.plain)
-            .help("展开/折叠 AI 伴读面板 (⌘ + Shift + K)")
+            .help("展开/折叠 AI 伴读面板 (⌘+Shift+K)")
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 7)
+        .padding(.horizontal, 14)
+        .frame(height: 40)
         .background(.ultraThinMaterial)
         .overlay(
             Rectangle()
-                .fill(Color.primary.opacity(0.06))
+                .fill(Color(nsColor: .separatorColor).opacity(0.3))
                 .frame(height: 0.5),
             alignment: .bottom
         )
@@ -695,6 +727,7 @@ struct ReaderMainView: View {
                         registerUpdateThoughtAction: { action in vm.updateHighlightThoughtAction = action },
                         registerRemoveHighlightAction: { action in vm.removeHighlightAction = action },
                         registerScrollToSearchMatchAction: { action in vm.scrollToSearchMatchAction = action },
+                        registerScrollToHighlightAction: { action in vm.scrollToHighlightAction = action },
                         getCachedHTML: { vm.getCachedHTML(for: $0) },
                         cacheHTML: { vm.cacheHTML($0, for: $1) }
                     )
@@ -878,8 +911,9 @@ struct ReaderMainView: View {
                             in: 0...Double(book.chapters.count - 1),
                             step: 1
                         )
-                        .frame(width: 86)
+                        .frame(width: 130)
                         .tint(Color.purple)
+                        .help("滑动快速跳转章节：当前为第 \(book.currentChapterIndex + 1) 章 · \(book.chapters[book.currentChapterIndex].title)")
                     }
 
                     // Overall Book Progress Percentage
@@ -971,3 +1005,41 @@ struct ReaderMainView: View {
         )
     }
 }
+
+// MARK: - Apple Books Style Native Toolbar Button
+struct AppleToolbarButton: View {
+    let icon: String
+    var title: String? = nil
+    var isActive: Bool = false
+    var activeColor: Color = .purple
+    let action: () -> Void
+    var helpText: String = ""
+
+    @State private var isHovered: Bool = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 4.5) {
+                Image(systemName: icon)
+                    .font(.system(size: 12.5, weight: isActive ? .semibold : .medium))
+
+                if let title = title {
+                    Text(title)
+                        .font(.system(size: 11.5, weight: isActive ? .semibold : .medium))
+                }
+            }
+            .foregroundStyle(isActive ? activeColor : (isHovered ? Color.primary : Color.primary.opacity(0.78)))
+            .padding(.horizontal, title != nil ? 9 : 6)
+            .frame(height: 28)
+            .background(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(isActive ? activeColor.opacity(0.12) : (isHovered ? Color.primary.opacity(0.07) : Color.clear))
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovered = $0 }
+        .help(helpText)
+    }
+}
+

@@ -26,6 +26,11 @@ struct DReaderApp: App {
                 }
                 .keyboardShortcut("l", modifiers: .command)
 
+                Button("微信读书划线与想法同步...") {
+                    viewModel.showWeChatSyncModal = true
+                }
+                .keyboardShortcut("w", modifiers: [.command, .shift])
+
                 Button("返回书架大厅") {
                     viewModel.returnToBookshelf()
                 }
@@ -89,6 +94,13 @@ struct DReaderApp: App {
                 }
                 .keyboardShortcut(.return, modifiers: .command)
 
+                Button("切换白天 / 夜间阅读主题") {
+                    withAnimation {
+                        viewModel.settings.theme = viewModel.settings.theme.isDark ? .white : .dark
+                    }
+                }
+                .keyboardShortcut("l", modifiers: [.command, .shift])
+
                 Divider()
 
                 Button(viewModel.settings.isBilingualEnabled ? "关闭双语段落对照" : "开启双语段落对照") {
@@ -100,6 +112,19 @@ struct DReaderApp: App {
                     viewModel.translateCurrentChapterWithAgent()
                 }
                 .keyboardShortcut("t", modifiers: [.command, .shift])
+
+                Divider()
+
+                Button(viewModel.settings.chineseScriptMode == .simplified ? "恢复原版繁体字形" : "一键将繁体转换为简体") {
+                    withAnimation {
+                        if viewModel.settings.chineseScriptMode == .simplified {
+                            viewModel.settings.chineseScriptMode = .original
+                        } else {
+                            viewModel.settings.chineseScriptMode = .simplified
+                        }
+                    }
+                }
+                .keyboardShortcut("c", modifiers: [.command, .shift])
 
                 Divider()
 

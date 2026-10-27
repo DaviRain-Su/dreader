@@ -18,6 +18,7 @@ final class ReaderViewModel: @unchecked Sendable {
     var isAIPanelVisible: Bool = false
     var showReadingInsights: Bool = false
     var showOnlineBookHub: Bool = false
+    var showWeChatSyncModal: Bool = false
     var isLoadingBook: Bool = false
     var errorMessage: String?
     var chapterRenderID: UUID = UUID()
@@ -71,6 +72,7 @@ final class ReaderViewModel: @unchecked Sendable {
             isSidebarVisible = false
             selectionManager.clear()
         }
+        updateSubsequentChaptersTotalChars()
         preloadAllChapters(for: book)
     }
 
@@ -97,12 +99,58 @@ final class ReaderViewModel: @unchecked Sendable {
         }
     }
 
+    @discardableResult
+    @MainActor
+    func importBookToLibrary(url: URL) async -> EPUBBook? {
+        do {
+            let book = try await EPUBParser.shared.parse(fileURL: url)
+            if let existingIndex = books.firstIndex(where: { $0.title == book.title }) {
+                books[existingIndex] = book
+                preloadAllChapters(for: book)
+                return book
+            } else {
+                withAnimation(.spring(response: 0.35, dampingFraction: 0.75)) {
+                    books.append(book)
+                }
+                preloadAllChapters(for: book)
+                return book
+            }
+        } catch {
+            self.errorMessage = "置入书斋失败: \(error.localizedDescription)"
+            return nil
+        }
+    }
+
+    @MainActor
+    func importClassicDirectly(_ classic: ChineseClassicsRegistry.ClassicBook) async {
+        do {
+            // Remove previous messy Gutenberg version of this classic if already in library
+            let oldMatchingIds = books.filter {
+                $0.title.contains(classic.title) || classic.title.contains($0.title) || $0.title.contains(classic.traditionalTitle)
+            }.map { $0.id }
+            for id in oldMatchingIds {
+                removeBook(id: id)
+            }
+
+            let onlineItem = classic.toOnlineBookItem(source: .gutenberg)
+            let localURL = try await OnlineBookService.shared.downloadEPUB(item: onlineItem)
+            if let newBook = await importBookToLibrary(url: localURL) {
+                if currentBook == nil || oldMatchingIds.contains(where: { $0 == currentBook?.id }) {
+                    currentBook = newBook
+                }
+            }
+        } catch {
+            self.errorMessage = "置入《\(classic.title)》失败: \(error.localizedDescription)"
+        }
+    }
+
     var chapterScrollProgress: Double = 0.0
     var scrollPageAction: ((Int) -> Void)?
     var applyHighlightAction: ((String, String, String?) -> Void)?
     var updateHighlightColorAction: ((String, String) -> Void)?
     var updateHighlightThoughtAction: ((String, String?) -> Void)?
     var removeHighlightAction: ((String) -> Void)?
+    var scrollToHighlightAction: ((String) -> Void)?
     var lastChosenHighlightColor: String = "#FFE066"
 
     // MARK: - Chapter & Page Navigation
@@ -145,22 +193,28 @@ final class ReaderViewModel: @unchecked Sendable {
         let chapters = book.chapters
         Task.detached(priority: .userInitiated) { [weak self] in
             var preloaded: [URL: String] = [:]
+            var counts: [URL: Int] = [:]
             for ch in chapters {
                 if let content = try? String(contentsOf: ch.fileURL, encoding: .utf8) {
                     preloaded[ch.fileURL] = content
+                    counts[ch.fileURL] = stripHTMLTags(from: content).count
                 }
             }
             if let self = self {
-                await self.storePreloadedChapters(preloaded)
+                await self.storePreloadedChapters(preloaded, counts: counts)
             }
         }
     }
 
     @MainActor
-    private func storePreloadedChapters(_ preloaded: [URL: String]) {
+    private func storePreloadedChapters(_ preloaded: [URL: String], counts: [URL: Int]) {
         for (url, content) in preloaded {
             self.htmlContentCache[url] = content
         }
+        for (url, count) in counts {
+            self.chapterCharCountCache[url] = count
+        }
+        updateSubsequentChaptersTotalChars()
     }
 
     func scrollPage(direction: Int) {
@@ -180,6 +234,7 @@ final class ReaderViewModel: @unchecked Sendable {
         book.currentChapterIndex += 1
         currentBook = book
         updateBookInLibrary(book)
+        updateSubsequentChaptersTotalChars()
         chapterScrollProgress = 0.0
         selectionManager.clear()
     }
@@ -189,6 +244,7 @@ final class ReaderViewModel: @unchecked Sendable {
         book.currentChapterIndex -= 1
         currentBook = book
         updateBookInLibrary(book)
+        updateSubsequentChaptersTotalChars()
         chapterScrollProgress = 0.0
         selectionManager.clear()
     }
@@ -203,6 +259,7 @@ final class ReaderViewModel: @unchecked Sendable {
         book.currentChapterIndex = index
         currentBook = book
         updateBookInLibrary(book)
+        updateSubsequentChaptersTotalChars()
         chapterScrollProgress = 0.0
         selectionManager.clear()
     }
@@ -223,6 +280,18 @@ final class ReaderViewModel: @unchecked Sendable {
         guard let book = currentBook else { return [] }
         return highlights.filter {
             ($0.bookTitle == book.title || $0.bookId == book.id) && $0.chapterIndex == book.currentChapterIndex
+        }
+    }
+
+    func jumpToHighlight(_ highlight: Highlight) {
+        guard let book = currentBook else { return }
+        if book.currentChapterIndex == highlight.chapterIndex {
+            scrollToHighlightAction?(highlight.id.uuidString)
+        } else {
+            jumpToChapter(highlight.chapterIndex)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+                self?.scrollToHighlightAction?(highlight.id.uuidString)
+            }
         }
     }
 
@@ -280,6 +349,10 @@ final class ReaderViewModel: @unchecked Sendable {
         savePersistedHighlights()
         selectionManager.activeHighlightCard = nil
         removeHighlightAction?(id.uuidString)
+    }
+
+    func persistHighlightsDirectly() {
+        savePersistedHighlights()
     }
 
     private func savePersistedHighlights() {
@@ -462,11 +535,38 @@ final class ReaderViewModel: @unchecked Sendable {
 
     // MARK: - Reading Time & Speed Estimation
     private let charactersPerMinute: Double = 400.0
+    private var chapterCharCountCache: [URL: Int] = [:]
+    private var subsequentChaptersTotalChars: Int = 0
+
+    func getOrComputeCharCount(for url: URL) -> Int {
+        if let count = chapterCharCountCache[url] {
+            return count
+        }
+        let html = getCachedHTML(for: url) ?? (try? String(contentsOf: url, encoding: .utf8)) ?? ""
+        let count = stripHTMLTags(from: html).count
+        chapterCharCountCache[url] = count
+        return count
+    }
+
+    func updateSubsequentChaptersTotalChars() {
+        guard let book = currentBook else {
+            subsequentChaptersTotalChars = 0
+            return
+        }
+        var total = 0
+        let nextIndex = book.currentChapterIndex + 1
+        if nextIndex < book.chapters.count {
+            for i in nextIndex..<book.chapters.count {
+                let url = book.chapters[i].fileURL
+                total += getOrComputeCharCount(for: url)
+            }
+        }
+        subsequentChaptersTotalChars = total
+    }
 
     func currentChapterCharCount() -> Int {
         guard let book = currentBook, let chapter = book.currentChapter else { return 0 }
-        let html = getCachedHTML(for: chapter.fileURL) ?? (try? String(contentsOf: chapter.fileURL, encoding: .utf8)) ?? ""
-        return stripHTMLTags(from: html).count
+        return getOrComputeCharCount(for: chapter.fileURL)
     }
 
     func currentChapterRemainingMinutes() -> Int {
@@ -478,16 +578,9 @@ final class ReaderViewModel: @unchecked Sendable {
 
     func bookRemainingTimeFormatted() -> String {
         guard let book = currentBook, !book.chapters.isEmpty else { return "" }
-        var totalRemainingChars = 0
-
         let currCount = currentChapterCharCount()
-        totalRemainingChars += Int(Double(currCount) * max(0.02, 1.0 - chapterScrollProgress))
-
-        for i in (book.currentChapterIndex + 1)..<book.chapters.count {
-            let ch = book.chapters[i]
-            let html = getCachedHTML(for: ch.fileURL) ?? (try? String(contentsOf: ch.fileURL, encoding: .utf8)) ?? ""
-            totalRemainingChars += stripHTMLTags(from: html).count
-        }
+        let currentRemaining = Int(Double(currCount) * max(0.02, 1.0 - chapterScrollProgress))
+        let totalRemainingChars = currentRemaining + subsequentChaptersTotalChars
 
         let totalMinutes = max(1, Int(ceil(Double(totalRemainingChars) / charactersPerMinute)))
         if totalMinutes < 60 {
@@ -542,6 +635,19 @@ final class ReaderViewModel: @unchecked Sendable {
                 }
             }
             try? FileManager.default.removeItem(at: removedBook.unzippedDirectory)
+        }
+    }
+
+    func resetBookProgress(id: UUID) {
+        if let idx = books.firstIndex(where: { $0.id == id }) {
+            var b = books[idx]
+            b.currentChapterIndex = 0
+            books[idx] = b
+            if currentBook?.id == id {
+                currentBook = b
+                chapterScrollProgress = 0.0
+                updateSubsequentChaptersTotalChars()
+            }
         }
     }
 
