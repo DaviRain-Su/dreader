@@ -210,6 +210,11 @@ struct RealisticBookshelfView: View {
             }
             .help("同步微信读书划线与想法 (⌘ + ⇧ + W)")
 
+            ShelfTopBarButton(icon: "books.vertical.circle.fill", label: "云端书架") {
+                WeReadShelfWindowController.present()
+            }
+            .help("浏览微信读书云端书架并下载入架")
+
             ShelfTopBarButton(icon: "highlighter", label: "划线笔记") {
                 onOpenGlobalNotebooks?()
             }

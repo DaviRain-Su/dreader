@@ -49,6 +49,31 @@ final class ReaderViewModel: @unchecked Sendable {
         Task {
             await initializeLibrary()
         }
+        // 微信读书云端书架下载完一本书后，重扫本地书架把新书补进来
+        NotificationCenter.default.addObserver(
+            forName: Notification.Name("DReaderReloadShelf"), object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.reloadLibraryFromDisk()
+            }
+        }
+    }
+
+    /// 重新扫描持久化书架目录，补入新增 EPUB（按文件名去重）
+    @MainActor
+    func reloadLibraryFromDisk() {
+        for url in Self.persistedLibraryEPUBs() {
+            guard !books.contains(where: { url.lastPathComponent == $0.fileURL.lastPathComponent }) else { continue }
+            Task {
+                if let book = try? await EPUBParser.shared.parse(fileURL: url) {
+                    if !books.contains(where: { $0.title == book.title }) {
+                        withAnimation(.spring(response: 0.35, dampingFraction: 0.75)) {
+                            books.append(book)
+                        }
+                    }
+                }
+            }
+        }
     }
 
     // MARK: - Library Initialization
