@@ -389,13 +389,13 @@ struct GlobalNotebooksModalView: View {
                                 }
 
                                 VStack(alignment: .leading, spacing: 2) {
-                                    Text(group.title)
+                                    Text(ChineseScriptConverter.convert(group.title, mode: viewModel.settings.chineseScriptMode))
                                         .font(.system(size: 12, weight: isSelected ? .bold : .regular))
                                         .foregroundStyle(isSelected ? Color.purple : Color.primary.opacity(0.9))
                                         .lineLimit(1)
 
                                     if !group.author.isEmpty {
-                                        Text(group.author)
+                                        Text(ChineseScriptConverter.convert(group.author, mode: viewModel.settings.chineseScriptMode))
                                             .font(.system(size: 10))
                                             .foregroundStyle(.secondary)
                                             .lineLimit(1)
@@ -513,14 +513,14 @@ struct GlobalNotebooksModalView: View {
                     .fill(Color(hex: item.colorHex))
                     .frame(width: 8, height: 8)
 
-                Text("《\(item.bookTitle)》")
+                Text("《\(ChineseScriptConverter.convert(item.bookTitle, mode: viewModel.settings.chineseScriptMode))》")
                     .font(.system(size: 12, weight: .bold, design: .serif))
                     .foregroundStyle(Color.primary)
 
                 Text("·")
                     .foregroundStyle(.secondary)
 
-                Text(item.chapterTitle)
+                Text(ChineseScriptConverter.convert(item.chapterTitle, mode: viewModel.settings.chineseScriptMode))
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
@@ -582,7 +582,7 @@ struct GlobalNotebooksModalView: View {
                     .fill(Color(hex: item.colorHex))
                     .frame(width: 3.5)
 
-                Text(item.text)
+                Text(ChineseScriptConverter.convert(item.text, mode: viewModel.settings.chineseScriptMode))
                     .font(.system(size: 12.5, design: .serif))
                     .foregroundStyle(Color.primary.opacity(0.92))
                     .lineSpacing(4)

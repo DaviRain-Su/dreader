@@ -205,7 +205,17 @@ final class ReaderSettings: @unchecked Sendable {
     var bilingualMode: BilingualDisplayMode = .interlinear
 
     // Chinese Script Conversion (繁体转简体)
-    var chineseScriptMode: ChineseScriptMode = .original
+    var chineseScriptMode: ChineseScriptMode = {
+        if let raw = UserDefaults.standard.string(forKey: "dreader.chinese_script_mode"),
+           let mode = ChineseScriptMode(rawValue: raw) {
+            return mode
+        }
+        return .original
+    }() {
+        didSet {
+            UserDefaults.standard.set(chineseScriptMode.rawValue, forKey: "dreader.chinese_script_mode")
+        }
+    }
 
     init() {}
 }

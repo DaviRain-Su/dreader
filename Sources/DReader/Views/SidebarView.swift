@@ -609,13 +609,13 @@ struct SidebarView: View {
                 }
 
                 if highlightScope == .allBooks || (book != nil && item.bookTitle != book?.title) {
-                    Text("《\(item.bookTitle)》")
+                    Text("《\(ChineseScriptConverter.convert(item.bookTitle, mode: chineseScriptMode))》")
                         .font(.system(size: 10, weight: .bold, design: .serif))
                         .foregroundStyle(Color.purple.opacity(0.85))
                         .lineLimit(1)
                 }
 
-                Text(item.chapterTitle)
+                Text(ChineseScriptConverter.convert(item.chapterTitle, mode: chineseScriptMode))
                     .font(.system(size: 10.5, weight: .medium))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
@@ -653,7 +653,7 @@ struct SidebarView: View {
                     .fill(Color(hex: item.colorHex))
                     .frame(width: 3)
 
-                Text(item.text)
+                Text(ChineseScriptConverter.convert(item.text, mode: chineseScriptMode))
                     .font(.system(size: 11.5, design: .serif))
                     .foregroundStyle(Color.primary.opacity(0.9))
                     .lineLimit(4)

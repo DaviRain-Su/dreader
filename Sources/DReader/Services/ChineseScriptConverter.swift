@@ -31,4 +31,52 @@ enum ChineseScriptConverter {
             return toTraditional(text)
         }
     }
+
+    /// Tag-safe conversion for HTML content (preserves all tags, attributes, scripts, styles)
+    static func convertHTML(_ html: String, mode: ChineseScriptMode) -> String {
+        guard mode != .original, !html.isEmpty else { return html }
+
+        var result = ""
+        result.reserveCapacity(html.count)
+        let scanner = Scanner(string: html)
+        scanner.charactersToBeSkipped = nil
+
+        var inSkipBlock = false
+        var skipEndTag = ""
+
+        while !scanner.isAtEnd {
+            if inSkipBlock {
+                if let content = scanner.scanUpToString(skipEndTag) {
+                    result.append(content)
+                    if let endTag = scanner.scanString(skipEndTag) {
+                        result.append(endTag)
+                        inSkipBlock = false
+                        skipEndTag = ""
+                    }
+                } else {
+                    result.append(contentsOf: scanner.string[scanner.currentIndex...])
+                    break
+                }
+            } else {
+                if let text = scanner.scanUpToString("<") {
+                    result.append(convert(text, mode: mode))
+                }
+                if let tag = scanner.scanUpToString(">") {
+                    result.append(tag)
+                    if scanner.scanString(">") != nil {
+                        result.append(">")
+                    }
+                    let lowerTag = tag.lowercased()
+                    if lowerTag.starts(with: "<script") {
+                        inSkipBlock = true
+                        skipEndTag = "</script>"
+                    } else if lowerTag.starts(with: "<style") {
+                        inSkipBlock = true
+                        skipEndTag = "</style>"
+                    }
+                }
+            }
+        }
+        return result
+    }
 }

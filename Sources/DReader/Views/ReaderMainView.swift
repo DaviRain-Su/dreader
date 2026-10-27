@@ -46,7 +46,8 @@ struct ReaderMainView: View {
                             Task {
                                 await vm.importClassicDirectly(classic)
                             }
-                        }
+                        },
+                        chineseScriptMode: vm.settings.chineseScriptMode
                     )
                     .transition(.opacity)
                 } else {

@@ -107,11 +107,18 @@ struct EPUBWebView: NSViewRepresentable {
         let prevScriptMode = context.coordinator.lastScriptMode
         context.coordinator.lastScriptMode = settings.chineseScriptMode
 
-        if context.coordinator.currentURL != chapterURL || prevBilingual != settings.isBilingualEnabled || prevScriptMode != settings.chineseScriptMode {
+        if context.coordinator.currentURL != chapterURL || prevBilingual != settings.isBilingualEnabled {
             context.coordinator.loadChapter(
                 url: chapterURL,
                 opfDir: opfDirectory,
                 unzippedDir: unzippedDirectory,
+                settings: settings,
+                hasNextChapter: hasNextChapter,
+                nextChapterTitle: nextChapterTitle
+            )
+        } else if prevScriptMode != settings.chineseScriptMode {
+            // Instant script mode switch for CURRENT chapter preserving scroll position
+            context.coordinator.updateScriptModeInCurrentChapter(
                 settings: settings,
                 hasNextChapter: hasNextChapter,
                 nextChapterTitle: nextChapterTitle
@@ -282,6 +289,99 @@ struct EPUBWebView: NSViewRepresentable {
             restoreHighlightsInDOM(highlights)
         }
 
+        func updateScriptModeInCurrentChapter(
+            settings: ReaderSettings,
+            hasNextChapter: Bool,
+            nextChapterTitle: String?
+        ) {
+            guard let webView = webView, let url = currentURL, let opfDir = currentOpfDir else { return }
+            lastSettingsSummary = parent.settingsSummary
+            lastScriptMode = settings.chineseScriptMode
+
+            let rawHTML: String
+            if let cached = parent.getCachedHTML(url) {
+                rawHTML = cached
+            } else if let loaded = try? String(contentsOf: url, encoding: .utf8) {
+                rawHTML = loaded
+            } else if let loadedLatin = try? String(contentsOf: url, encoding: .isoLatin1) {
+                rawHTML = loadedLatin
+            } else {
+                return
+            }
+
+            let chapterDir = url.deletingLastPathComponent()
+            let resolvedHTML = EPUBThemeInjector.resolveResourceURLs(in: rawHTML, chapterDir: chapterDir, opfDir: opfDir)
+            var bodyContent = EPUBThemeInjector.extractBodyContent(from: resolvedHTML)
+            bodyContent = EPUBThemeInjector.sanitizeAndElevateLayout(bodyContent)
+
+            // Tag-safe Chinese Script Conversion
+            if settings.chineseScriptMode != .original {
+                bodyContent = ChineseScriptConverter.convertHTML(bodyContent, mode: settings.chineseScriptMode)
+            }
+
+            if !parent.highlights.isEmpty {
+                bodyContent = EPUBThemeInjector.injectHighlights(in: bodyContent, highlights: parent.highlights)
+            }
+            if settings.isBilingualEnabled {
+                bodyContent = EPUBThemeInjector.injectBilingualBlocks(
+                    in: bodyContent,
+                    translations: parent.bilingualTranslations,
+                    agentName: parent.agentName,
+                    theme: settings.theme
+                )
+            }
+            let headElements = EPUBThemeInjector.extractHeadElements(from: resolvedHTML)
+
+            let displayBookTitle = ChineseScriptConverter.convert(parent.bookTitle, mode: settings.chineseScriptMode)
+            let displayChapterTitle = ChineseScriptConverter.convert(parent.chapterTitle, mode: settings.chineseScriptMode)
+            let displayNextChapterTitle = nextChapterTitle.map { ChineseScriptConverter.convert($0, mode: settings.chineseScriptMode) }
+
+            let endCard = EPUBThemeInjector.generateEndCardHTML(
+                hasNextChapter: hasNextChapter,
+                nextChapterTitle: displayNextChapterTitle,
+                theme: settings.theme,
+                bookTitle: displayBookTitle,
+                chapterTitle: displayChapterTitle,
+                chapterIndex: parent.chapterIndex
+            )
+
+            let highlightItems: [[String: Any]] = parent.highlights.map { h in
+                [
+                    "id": h.id.uuidString,
+                    "text": ChineseScriptConverter.convert(h.text, mode: settings.chineseScriptMode),
+                    "colorHex": h.colorHex,
+                    "note": h.note ?? ""
+                ]
+            }
+
+            guard let jsonData = try? JSONSerialization.data(withJSONObject: [
+                "body": bodyContent,
+                "styles": headElements,
+                "endCard": endCard,
+                "highlights": highlightItems
+            ]), let jsonString = String(data: jsonData, encoding: .utf8) else {
+                return
+            }
+
+            let script = "window.dreaderSetChapterContentPreservingScroll ? window.dreaderSetChapterContentPreservingScroll(\(jsonString)) : window.dreaderSetChapterContent(\(jsonString));"
+            webView.evaluateJavaScript(script) { [weak self] result, error in
+                let success = (result as? Bool) ?? false
+                if success {
+                    self?.restoreHighlightsInDOM(self?.parent.highlights ?? [])
+                } else if error != nil {
+                    // Fall back to full reload if needed
+                    self?.loadChapter(
+                        url: url,
+                        opfDir: opfDir,
+                        unzippedDir: self?.parent.unzippedDirectory ?? opfDir,
+                        settings: settings,
+                        hasNextChapter: hasNextChapter,
+                        nextChapterTitle: nextChapterTitle
+                    )
+                }
+            }
+        }
+
         func swapChapterDOM(
             rawHTML: String,
             chapterDir: URL,
@@ -295,6 +395,13 @@ struct EPUBWebView: NSViewRepresentable {
 
             let resolvedHTML = EPUBThemeInjector.resolveResourceURLs(in: rawHTML, chapterDir: chapterDir, opfDir: opfDir)
             var bodyContent = EPUBThemeInjector.extractBodyContent(from: resolvedHTML)
+            bodyContent = EPUBThemeInjector.sanitizeAndElevateLayout(bodyContent)
+
+            // Tag-safe Chinese Script Conversion
+            if settings.chineseScriptMode != .original {
+                bodyContent = ChineseScriptConverter.convertHTML(bodyContent, mode: settings.chineseScriptMode)
+            }
+
             if !highlights.isEmpty {
                 bodyContent = EPUBThemeInjector.injectHighlights(in: bodyContent, highlights: highlights)
             }
@@ -307,19 +414,23 @@ struct EPUBWebView: NSViewRepresentable {
                 )
             }
             let headElements = EPUBThemeInjector.extractHeadElements(from: resolvedHTML)
+            let displayBookTitle = ChineseScriptConverter.convert(parent.bookTitle, mode: settings.chineseScriptMode)
+            let displayChapterTitle = ChineseScriptConverter.convert(parent.chapterTitle, mode: settings.chineseScriptMode)
+            let displayNextChapterTitle = nextChapterTitle.map { ChineseScriptConverter.convert($0, mode: settings.chineseScriptMode) }
+
             let endCard = EPUBThemeInjector.generateEndCardHTML(
                 hasNextChapter: hasNextChapter,
-                nextChapterTitle: nextChapterTitle,
+                nextChapterTitle: displayNextChapterTitle,
                 theme: settings.theme,
-                bookTitle: parent.bookTitle,
-                chapterTitle: parent.chapterTitle,
+                bookTitle: displayBookTitle,
+                chapterTitle: displayChapterTitle,
                 chapterIndex: parent.chapterIndex
             )
 
             let highlightItems: [[String: Any]] = highlights.map { h in
                 [
                     "id": h.id.uuidString,
-                    "text": h.text,
+                    "text": ChineseScriptConverter.convert(h.text, mode: settings.chineseScriptMode),
                     "colorHex": h.colorHex,
                     "note": h.note ?? ""
                 ]

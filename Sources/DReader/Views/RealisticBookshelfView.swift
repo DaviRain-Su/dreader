@@ -12,6 +12,7 @@ struct RealisticBookshelfView: View {
     var onResetProgress: ((UUID) -> Void)? = nil
     var onOpenXRay: ((EPUBBook) -> Void)? = nil
     var onAddClassic: ((ChineseClassicsRegistry.ClassicBook) -> Void)? = nil
+    var chineseScriptMode: ChineseScriptMode = .original
 
     @State private var searchText: String = ""
 
@@ -75,7 +76,8 @@ struct RealisticBookshelfView: View {
                                 onImportEPUB: onImportEPUB,
                                 onOpenXRay: onOpenXRay,
                                 onResetProgress: onResetProgress,
-                                onDeleteBook: onDeleteBook
+                                onDeleteBook: onDeleteBook,
+                                chineseScriptMode: chineseScriptMode
                             )
                         }
 
@@ -504,6 +506,7 @@ private struct SingleShelfRowView: View {
     var onOpenXRay: ((EPUBBook) -> Void)? = nil
     var onResetProgress: ((UUID) -> Void)? = nil
     var onDeleteBook: ((UUID) -> Void)? = nil
+    var chineseScriptMode: ChineseScriptMode = .original
 
     var body: some View {
         VStack(spacing: 0) {
@@ -531,7 +534,8 @@ private struct SingleShelfRowView: View {
                             },
                             onDelete: {
                                 onDeleteBook?(book.id)
-                            }
+                            },
+                            chineseScriptMode: chineseScriptMode
                         )
                     }
 

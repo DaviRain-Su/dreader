@@ -25,7 +25,7 @@ struct EPUBThemeInjector {
 
         // Chinese Script Conversion (繁体一键转简体 / 简体转繁体)
         if settings.chineseScriptMode != .original {
-            bodyContent = ChineseScriptConverter.convert(bodyContent, mode: settings.chineseScriptMode)
+            bodyContent = ChineseScriptConverter.convertHTML(bodyContent, mode: settings.chineseScriptMode)
         }
 
         if !highlights.isEmpty {
@@ -1338,6 +1338,39 @@ struct EPUBThemeInjector {
                     window.webkit.messageHandlers.selectionBridge.postMessage({ type: 'clear' });
                     window.webkit.messageHandlers.selectionBridge.postMessage({ type: 'scrollProgress', progress: 0.0 });
                 }
+
+                return true;
+            };
+
+            // In-place DOM content update preserving exact scroll position (for script mode or theme updates)
+            window.dreaderSetChapterContentPreservingScroll = function(payload) {
+                if (!payload) return false;
+                const bodyEl = document.getElementById('dreader-chapter-body');
+                if (!bodyEl) return false;
+
+                const currentScrollY = window.scrollY || document.documentElement.scrollTop || 0;
+
+                if (payload.styles !== undefined) {
+                    const stylesEl = document.getElementById('dreader-chapter-styles');
+                    if (stylesEl) stylesEl.innerHTML = payload.styles;
+                }
+
+                if (payload.body !== undefined) {
+                    bodyEl.innerHTML = payload.body;
+                }
+
+                if (payload.highlights && Array.isArray(payload.highlights)) {
+                    window.dreaderRestoreHighlights(payload.highlights);
+                }
+
+                if (payload.endCard !== undefined) {
+                    const endEl = document.getElementById('dreader-end-container');
+                    if (endEl) endEl.innerHTML = payload.endCard;
+                }
+
+                window.scrollTo({ top: currentScrollY, behavior: 'instant' });
+                document.body.scrollTop = currentScrollY;
+                document.documentElement.scrollTop = currentScrollY;
 
                 return true;
             };

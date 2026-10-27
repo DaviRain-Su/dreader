@@ -6,6 +6,7 @@ struct RealisticBookItemView: View {
     var onOpenXRay: (() -> Void)? = nil
     var onResetProgress: (() -> Void)? = nil
     var onDelete: (() -> Void)? = nil
+    var chineseScriptMode: ChineseScriptMode = .original
 
     @State private var isHovered: Bool = false
 
@@ -147,7 +148,7 @@ struct RealisticBookItemView: View {
                                     Spacer()
 
                                     // Book Title
-                                    Text(book.title)
+                                    Text(ChineseScriptConverter.convert(book.title, mode: chineseScriptMode))
                                         .font(.system(size: 14, weight: .bold, design: .serif))
                                         .foregroundStyle(Color(hex: coverTheme.gold))
                                         .multilineTextAlignment(.center)
@@ -161,7 +162,7 @@ struct RealisticBookItemView: View {
                                         .frame(width: 36, height: 1)
 
                                     // Author
-                                    Text(book.author)
+                                    Text(ChineseScriptConverter.convert(book.author, mode: chineseScriptMode))
                                         .font(.system(size: 11, weight: .medium, design: .serif))
                                         .foregroundStyle(Color(hex: coverTheme.gold).opacity(0.85))
                                         .lineLimit(1)
