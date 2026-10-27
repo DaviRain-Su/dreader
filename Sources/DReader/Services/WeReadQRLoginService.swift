@@ -74,8 +74,13 @@ final class WeReadQRLoginService: @unchecked Sendable {
         }
     }
 
-    /// 步骤 1+2：立会话并取一次性登录 uid
+    /// 步骤 1+2：立会话并取一次性登录 uid。
+    /// 每次扫码都从干净 jar 开始（仅保留 wr_fp），避免上次登录残留凭据污染本次会话。
     func beginSession() async throws -> String {
+        jarLock.withLock {
+            let fp = jar["wr_fp"]
+            jar = fp.map { ["wr_fp": $0] } ?? [:]
+        }
         let (_, _) = try await get("/r/weread-skills", referer: Self.baseURL + "/", accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
         let (data, resp) = try await get(
             "/api/auth/getLoginUid",

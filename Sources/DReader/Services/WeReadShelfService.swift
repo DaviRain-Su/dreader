@@ -36,7 +36,17 @@ final class WeReadShelfService: @unchecked Sendable {
         }
     }
 
-    private func get(_ path: String, query: [String: String] = [:]) async throws -> Data {
+    private func get(_ path: String, query: [String: String] = [:], allowRenewRetry: Bool = true) async throws -> Data {
+        do {
+            return try await getOnce(path, query: query)
+        } catch let ShelfError.authExpired(code) where allowRenewRetry && WeReadAuthService.isAuthErrorCode(code) {
+            // 登录态失效：先尝试 renewal 续命再重打一次（KOReader 同款语义）
+            try? await WeReadAuthService.renew()
+            return try await getOnce(path, query: query, allowRenewRetry: false)
+        }
+    }
+
+    private func getOnce(_ path: String, query: [String: String], allowRenewRetry: Bool = true) async throws -> Data {
         guard WeReadContentService.shared.hasCookie else { throw ShelfError.notLoggedIn }
         var components = URLComponents(string: Self.apiBase + path)!
         if !query.isEmpty {

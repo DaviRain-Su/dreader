@@ -61,11 +61,21 @@ final class WeReadContentService: @unchecked Sendable {
         get { UserDefaults.standard.string(forKey: cookieKey) ?? "" }
         set {
             let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            // 防御：空值不许覆盖已有登录态（历史 bug 源——清除必须走 clearCookie 显式操作）
+            if trimmed.isEmpty && !cookie.isEmpty {
+                return
+            }
             UserDefaults.standard.set(trimmed, forKey: cookieKey)
             NotificationCenter.default.post(name: Self.cookieDidChangeNotification, object: nil)
         }
     }
     var hasCookie: Bool { !cookie.isEmpty }
+
+    /// 显式清除登录态（唯一合法的置空入口）
+    func clearCookie() {
+        UserDefaults.standard.removeObject(forKey: cookieKey)
+        NotificationCenter.default.post(name: Self.cookieDidChangeNotification, object: nil)
+    }
 
     // MARK: - HTTP
 

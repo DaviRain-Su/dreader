@@ -599,7 +599,7 @@ struct WeChatReadingSyncModalView: View {
                 Spacer()
                 if !WeReadContentService.shared.cookie.isEmpty {
                     Button {
-                        WeReadContentService.shared.cookie = ""
+                        WeReadContentService.shared.clearCookie()
                         importCookieInput = ""
                     } label: {
                         Text("清除")

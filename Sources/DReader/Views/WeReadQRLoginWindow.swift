@@ -50,6 +50,7 @@ final class WeReadQRLoginFlow: ObservableObject {
         case connecting
         case qr(confirmURL: String)
         case otp(message: String)
+        case running(status: String)
         case success
         case failed(message: String)
         case expired
@@ -108,6 +109,16 @@ final class WeReadQRLoginFlow: ObservableObject {
                     if result.succeed {
                         let header = try WeReadQRLoginService.shared.finalize(result)
                         WeReadContentService.shared.cookie = header
+                        phase = .running(status: "正在验证登录态…")
+                        // 验证不过不许假成功：直接把真实原因亮出来
+                        do {
+                            try await WeReadAuthService.validate()
+                        } catch {
+                            phase = .failed(
+                                message: "扫码成功但登录态验证失败：\n\((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)\n\n可点「改用内嵌网页登录」换通道。"
+                            )
+                            return
+                        }
                         phase = .success
                         try? await Task.sleep(nanoseconds: 1_500_000_000)
                         guard !Task.isCancelled else { return }
@@ -247,6 +258,16 @@ private struct WeReadQRLoginView: View {
                             }
                             .buttonStyle(.plain)
                         }
+                    }
+                    .frame(maxWidth: .infinity, minHeight: 380)
+
+                case .running(let status):
+                    VStack(spacing: 12) {
+                        ProgressView()
+                            .scaleEffect(0.9)
+                        Text(status)
+                            .font(.system(size: 12.5))
+                            .foregroundStyle(.secondary)
                     }
                     .frame(maxWidth: .infinity, minHeight: 380)
 
