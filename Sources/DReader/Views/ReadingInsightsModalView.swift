@@ -50,6 +50,15 @@ struct ReadingInsightsModalView: View {
         }
     }
 
+    // MARK: - 阅读目标调节
+
+    private func updateDailyGoal(_ newGoal: Int) {
+        let clamped = min(max(newGoal, 10), 180)
+        guard clamped != stats.dailyGoalMinutes else { return }
+        ReadingStatsManager.shared.stats.dailyGoalMinutes = clamped
+        ReadingStatsManager.shared.save()
+    }
+
     // MARK: - 知识资产区块
 
     private var knowledgeAssetSection: some View {
@@ -177,9 +186,37 @@ struct ReadingInsightsModalView: View {
                 HStack(spacing: 5) {
                     Text("今日阅读目标")
                         .font(.system(size: 13, weight: .bold))
-                    Text("\(stats.todayMinutes) / \(stats.dailyGoalMinutes) 分钟")
-                        .font(.system(size: 12, weight: .semibold, design: .monospaced))
-                        .foregroundStyle(.orange)
+
+                    // 可调目标（10~180 分钟，步进 5）
+                    HStack(spacing: 3) {
+                        Button {
+                            updateDailyGoal(stats.dailyGoalMinutes - 5)
+                        } label: {
+                            Image(systemName: "minus")
+                                .font(.system(size: 8, weight: .bold))
+                                .frame(width: 16, height: 16)
+                                .background(Color.orange.opacity(0.15))
+                                .clipShape(Circle())
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(stats.dailyGoalMinutes <= 10)
+
+                        Text("\(stats.todayMinutes) / \(stats.dailyGoalMinutes) 分钟")
+                            .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                            .foregroundStyle(.orange)
+
+                        Button {
+                            updateDailyGoal(stats.dailyGoalMinutes + 5)
+                        } label: {
+                            Image(systemName: "plus")
+                                .font(.system(size: 8, weight: .bold))
+                                .frame(width: 16, height: 16)
+                                .background(Color.orange.opacity(0.15))
+                                .clipShape(Circle())
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(stats.dailyGoalMinutes >= 180)
+                    }
                 }
 
                 Text(stats.todayMinutes >= stats.dailyGoalMinutes ? "🎉 已达成今日阅读目标！超凡专注" : "还需阅读 \(stats.dailyGoalMinutes - stats.todayMinutes) 分钟以闭合今日圆环")

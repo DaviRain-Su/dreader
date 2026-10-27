@@ -47,6 +47,9 @@ struct ReaderMainView: View {
                                 await vm.importClassicDirectly(classic)
                             }
                         },
+                        onStartReview: {
+                            vm.showReviewSessionModal = true
+                        },
                         chineseScriptMode: vm.settings.chineseScriptMode
                     )
                     .transition(.opacity)

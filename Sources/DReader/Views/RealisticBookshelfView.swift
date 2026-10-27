@@ -12,9 +12,15 @@ struct RealisticBookshelfView: View {
     var onResetProgress: ((UUID) -> Void)? = nil
     var onOpenXRay: ((EPUBBook) -> Void)? = nil
     var onAddClassic: ((ChineseClassicsRegistry.ClassicBook) -> Void)? = nil
+    var onStartReview: (() -> Void)? = nil
     var chineseScriptMode: ChineseScriptMode = .original
 
     @State private var searchText: String = ""
+    @State private var dueReviewCount: Int = 0
+
+    private func refreshDueCount() {
+        dueReviewCount = LibraryDatabase.shared.dueReviewCount()
+    }
 
     private var filteredBooks: [EPUBBook] {
         if searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -99,6 +105,9 @@ struct RealisticBookshelfView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .onAppear {
+            refreshDueCount()
+        }
         .background(
             ZStack {
                 // Dark Mahogany / Espresso Library Wall Texture
@@ -218,6 +227,42 @@ struct RealisticBookshelfView: View {
             }
             .buttonStyle(.plain)
             .help("查看阅读统计与成就殿堂")
+
+            // Mastery Daily Review Button (今日到期卡片数角标)
+            Button {
+                onStartReview?()
+            } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: "brain.head.profile.fill")
+                        .font(.system(size: 11))
+                    Text("今日复习")
+                        .font(.system(size: 12, weight: .semibold, design: .serif))
+
+                    if dueReviewCount > 0 {
+                        Text("\(dueReviewCount)")
+                            .font(.system(size: 9, weight: .bold, design: .monospaced))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 4.5)
+                            .padding(.vertical, 1)
+                            .background(Color(hex: "#E06C4A"))
+                            .clipShape(Capsule())
+                    }
+                }
+                .foregroundStyle(Color.white)
+                .padding(.horizontal, 11)
+                .padding(.vertical, 6)
+                .background(
+                    LinearGradient(
+                        colors: [Color(hex: "#B45309"), Color(hex: "#D97706")],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+                .shadow(color: Color(hex: "#D97706").opacity(0.3), radius: 3, y: 1.5)
+            }
+            .buttonStyle(.plain)
+            .help("开始今日划线 Mastery 记忆复习 (⌘+⇧+R)")
 
             // Online Book Hub Button (Z-Lib & Open Library)
             Button {
