@@ -4,6 +4,7 @@ struct RealisticBookshelfView: View {
     let books: [EPUBBook]
     let onSelectBook: (EPUBBook) -> Void
     let onImportEPUB: () -> Void
+    var onOpenReadingInsights: (() -> Void)? = nil
 
     @State private var searchText: String = ""
 
@@ -139,6 +140,46 @@ struct RealisticBookshelfView: View {
                 RoundedRectangle(cornerRadius: 6)
                     .stroke(Color(hex: "#E5C07B").opacity(0.25), lineWidth: 0.5)
             )
+
+            // Reading Insights & Streak Button (Apple Fitness Ring style)
+            Button {
+                onOpenReadingInsights?()
+            } label: {
+                HStack(spacing: 7) {
+                    ZStack {
+                        Circle()
+                            .stroke(Color.orange.opacity(0.3), lineWidth: 2.2)
+                            .frame(width: 15, height: 15)
+                        Circle()
+                            .trim(from: 0, to: CGFloat(ReadingStatsManager.shared.stats.todayProgressRatio))
+                            .stroke(Color.orange, style: StrokeStyle(lineWidth: 2.2, lineCap: .round))
+                            .frame(width: 15, height: 15)
+                            .rotationEffect(.degrees(-90))
+                    }
+
+                    HStack(spacing: 3) {
+                        Image(systemName: "flame.fill")
+                            .font(.system(size: 9.5))
+                            .foregroundStyle(.orange)
+                        Text("连续 \(ReadingStatsManager.shared.stats.currentStreakDays) 天")
+                            .font(.system(size: 11, weight: .semibold, design: .serif))
+                            .foregroundStyle(Color(hex: "#F5E6C8"))
+                    }
+
+                    Text("· 今日 \(ReadingStatsManager.shared.stats.todayMinutes)/\(ReadingStatsManager.shared.stats.dailyGoalMinutes)m")
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(Color(hex: "#CBB393").opacity(0.85))
+                }
+                .padding(.horizontal, 9)
+                .padding(.vertical, 5)
+                .background(Color.black.opacity(0.35))
+                .clipShape(Capsule())
+                .overlay(
+                    Capsule().stroke(Color.orange.opacity(0.35), lineWidth: 0.6)
+                )
+            }
+            .buttonStyle(.plain)
+            .help("查看阅读统计与成就殿堂")
 
             // Import Button
             Button(action: onImportEPUB) {

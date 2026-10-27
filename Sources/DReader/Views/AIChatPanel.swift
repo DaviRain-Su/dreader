@@ -30,6 +30,7 @@ struct AIChatPanel: View {
     @State private var showSettingsSheet: Bool = false
     @State private var currentStreamingAnswer: String = ""
     @State private var searchScope: AISearchScope = .chapter
+    @State private var isBriefingExpanded: Bool = true
 
     private let quickPrompts: [(title: String, icon: String, prompt: String)] = [
         ("深度解析", "sparkles", "请结合全书语境，深入剖析这段文字的思想内涵与深层寓意"),
@@ -60,7 +61,10 @@ struct AIChatPanel: View {
             // Messages List
             ScrollViewReader { proxy in
                 ScrollView {
-                    LazyVStack(spacing: 16) {
+                    LazyVStack(spacing: 14) {
+                        // Smart Chapter Pre-reading Briefing Card
+                        chapterBriefingCard
+
                         if messages.isEmpty && currentStreamingAnswer.isEmpty && !agentService.isGenerating {
                             emptyStateView
                         }
@@ -310,6 +314,102 @@ struct AIChatPanel: View {
         .clipShape(RoundedRectangle(cornerRadius: 8))
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
+    }
+
+    // MARK: - Chapter Pre-reading Briefing (Smart Background Briefing)
+    private var currentChapterBriefing: ChapterBriefing? {
+        guard let book = book, let chapter = currentChapter else { return nil }
+        return ChapterBriefingService.shared.getBriefing(
+            bookTitle: book.title,
+            chapterTitle: chapter.title,
+            chapterIndex: book.currentChapterIndex
+        )
+    }
+
+    @ViewBuilder
+    private var chapterBriefingCard: some View {
+        if let briefing = currentChapterBriefing {
+            VStack(alignment: .leading, spacing: 8) {
+                // Header toggle
+                Button {
+                    withAnimation(.easeInOut(duration: 0.18)) {
+                        isBriefingExpanded.toggle()
+                    }
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "sparkles")
+                            .font(.system(size: 11, weight: .bold))
+                            .foregroundStyle(.purple)
+
+                        Text("本章导读前瞻 · 背景速览")
+                            .font(.system(size: 11.5, weight: .bold))
+                            .foregroundStyle(Color.primary)
+
+                        Spacer()
+
+                        Image(systemName: isBriefingExpanded ? "chevron.up" : "chevron.down")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .buttonStyle(.plain)
+
+                if isBriefingExpanded {
+                    VStack(alignment: .leading, spacing: 7) {
+                        Text(briefing.overview)
+                            .font(.system(size: 11, design: .serif))
+                            .foregroundStyle(Color.primary.opacity(0.88))
+                            .lineSpacing(2)
+
+                        // 3 Background Points
+                        VStack(alignment: .leading, spacing: 4) {
+                            ForEach(briefing.backgroundPoints, id: \.self) { pt in
+                                HStack(alignment: .top, spacing: 5) {
+                                    Text("•")
+                                        .font(.system(size: 11, weight: .bold))
+                                        .foregroundStyle(.purple)
+                                    Text(pt)
+                                        .font(.system(size: 10))
+                                        .foregroundStyle(.secondary)
+                                        .lineSpacing(1.5)
+                                }
+                            }
+                        }
+                        .padding(7)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Color.primary.opacity(0.03))
+                        .clipShape(RoundedRectangle(cornerRadius: 6))
+
+                        // Action button
+                        Button {
+                            sendCustomPrompt("请为我深度导读当前章节《\(briefing.chapterTitle)》，剖析作者的核心意图与时代背景。")
+                        } label: {
+                            HStack(spacing: 4) {
+                                Image(systemName: "bubble.left.and.text.bubble.right.fill")
+                                    .font(.system(size: 9))
+                                Text("向 AI 探讨本章脉络")
+                                    .font(.system(size: 10.5, weight: .medium))
+                            }
+                            .foregroundStyle(.purple)
+                            .padding(.horizontal, 9)
+                            .padding(.vertical, 4)
+                            .background(Color.purple.opacity(0.08))
+                            .clipShape(Capsule())
+                        }
+                        .buttonStyle(.plain)
+                        .padding(.top, 2)
+                    }
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+                }
+            }
+            .padding(10)
+            .background(Color.purple.opacity(0.05))
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .stroke(Color.purple.opacity(0.18), lineWidth: 0.6)
+            )
+        }
     }
 
     // MARK: - Empty State

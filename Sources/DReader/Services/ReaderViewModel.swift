@@ -16,9 +16,14 @@ final class ReaderViewModel: @unchecked Sendable {
     var sidebarTab: SidebarTab = .toc
     var isSidebarVisible: Bool = false
     var isAIPanelVisible: Bool = false
+    var showReadingInsights: Bool = false
     var isLoadingBook: Bool = false
     var errorMessage: String?
     var chapterRenderID: UUID = UUID()
+
+    var readingStats: ReadingStats {
+        ReadingStatsManager.shared.stats
+    }
 
     init() {
         loadPersistedHighlights()
@@ -50,6 +55,7 @@ final class ReaderViewModel: @unchecked Sendable {
     }
 
     func returnToBookshelf() {
+        ReadingStatsManager.shared.pauseSession()
         withAnimation(.easeInOut(duration: 0.25)) {
             isViewingBookshelf = true
             selectionManager.clear()
@@ -57,6 +63,7 @@ final class ReaderViewModel: @unchecked Sendable {
     }
 
     func selectBookForReading(_ book: EPUBBook) {
+        ReadingStatsManager.shared.startSession()
         withAnimation(.easeInOut(duration: 0.25)) {
             currentBook = book
             isViewingBookshelf = false

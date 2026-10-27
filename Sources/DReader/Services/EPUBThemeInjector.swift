@@ -9,7 +9,10 @@ struct EPUBThemeInjector {
         settings: ReaderSettings,
         highlights: [Highlight] = [],
         hasNextChapter: Bool = false,
-        nextChapterTitle: String? = nil
+        nextChapterTitle: String? = nil,
+        bookTitle: String = "",
+        chapterTitle: String = "",
+        chapterIndex: Int = 0
     ) -> String {
         let resolvedHTML = resolveResourceURLs(in: rawHTML, chapterDir: chapterDir, opfDir: opfDir)
         let css = generateCSS(settings: settings)
@@ -23,7 +26,10 @@ struct EPUBThemeInjector {
         let endCard = generateEndCardHTML(
             hasNextChapter: hasNextChapter,
             nextChapterTitle: nextChapterTitle,
-            theme: settings.theme
+            theme: settings.theme,
+            bookTitle: bookTitle,
+            chapterTitle: chapterTitle,
+            chapterIndex: chapterIndex
         )
 
         return """
@@ -172,12 +178,43 @@ struct EPUBThemeInjector {
     static func generateEndCardHTML(
         hasNextChapter: Bool,
         nextChapterTitle: String?,
-        theme: ReaderTheme
+        theme: ReaderTheme,
+        bookTitle: String = "",
+        chapterTitle: String = "",
+        chapterIndex: Int = 0
     ) -> String {
+        let briefing = ChapterBriefingService.shared.getBriefing(
+            bookTitle: bookTitle,
+            chapterTitle: chapterTitle,
+            chapterIndex: chapterIndex
+        )
+        let socraticQuestion = briefing.socraticQuestions.first ?? "本章作者的核心论述，对你当前的认知带来了怎样的反思与启示？"
+        let escapedQuestion = socraticQuestion
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "&quot;")
+            .replacingOccurrences(of: "'", with: "\\'")
+            .replacingOccurrences(of: "\n", with: " ")
+
+        let socraticBlock = """
+        <div class="dreader-socratic-container">
+            <div class="dreader-socratic-badge">✦ 苏格拉底之问 · 章末启发思辨</div>
+            <p class="dreader-socratic-question">“\(socraticQuestion)”</p>
+            <div class="dreader-socratic-actions">
+                <button class="dreader-socratic-thought-btn" onclick="window.dreaderAskAISocratic('\(escapedQuestion)')">
+                    💬 与 AI 探讨此问题
+                </button>
+                <button class="dreader-socratic-write-btn" onclick="window.dreaderWriteSocraticThought('\(escapedQuestion)')">
+                    ✍️ 记录我的思考与答案
+                </button>
+            </div>
+        </div>
+        """
+
         if hasNextChapter {
             let nextTitle = nextChapterTitle ?? "下一章节"
             return """
             <div class="dreader-chapter-end-container">
+                \(socraticBlock)
                 <div class="dreader-end-ornament">❦ ❦ ❦</div>
                 <p class="dreader-end-title">本章阅读完成</p>
                 <div class="dreader-end-buttons">
@@ -190,6 +227,7 @@ struct EPUBThemeInjector {
         } else {
             return """
             <div class="dreader-chapter-end-container">
+                \(socraticBlock)
                 <div class="dreader-end-ornament">✦ ✦ ✦</div>
                 <p class="dreader-end-title">🎉 全书已阅读完毕</p>
             </div>
@@ -416,10 +454,88 @@ struct EPUBThemeInjector {
 
         /* End of Chapter Transition Card */
         .dreader-chapter-end-container {
-            margin-top: 80px !important;
-            padding: 40px 20px 80px 20px !important;
+            margin-top: 60px !important;
+            padding: 30px 20px 80px 20px !important;
             text-align: center !important;
             border-top: 1px dashed rgba(128, 128, 128, 0.2) !important;
+        }
+
+        /* Socratic Companion Card */
+        .dreader-socratic-container {
+            max-width: 620px !important;
+            margin: 0 auto 36px auto !important;
+            padding: 22px 26px !important;
+            background: rgba(147, 51, 234, 0.05) !important;
+            border: 1px solid rgba(147, 51, 234, 0.22) !important;
+            border-radius: 14px !important;
+            text-align: left !important;
+            box-shadow: 0 4px 18px rgba(0, 0, 0, 0.04) !important;
+        }
+
+        .dreader-socratic-badge {
+            display: inline-block !important;
+            font-size: 11px !important;
+            font-weight: 700 !important;
+            letter-spacing: 0.5px !important;
+            color: #9333ea !important;
+            background: rgba(147, 51, 234, 0.12) !important;
+            padding: 3px 8px !important;
+            border-radius: 6px !important;
+            margin-bottom: 12px !important;
+        }
+
+        .dreader-socratic-question {
+            font-size: 14.5px !important;
+            line-height: 1.6 !important;
+            color: inherit !important;
+            font-style: italic !important;
+            margin: 0 0 16px 0 !important;
+            text-indent: 0 !important;
+        }
+
+        .dreader-socratic-actions {
+            display: flex !important;
+            gap: 10px !important;
+            flex-wrap: wrap !important;
+        }
+
+        .dreader-socratic-thought-btn {
+            display: inline-flex !important;
+            align-items: center !important;
+            gap: 6px !important;
+            padding: 7px 15px !important;
+            font-size: 12px !important;
+            font-weight: 600 !important;
+            color: #ffffff !important;
+            background-color: #9333ea !important;
+            border: none !important;
+            border-radius: 20px !important;
+            cursor: pointer !important;
+            transition: all 0.18s ease !important;
+        }
+
+        .dreader-socratic-thought-btn:hover {
+            transform: translateY(-1px) !important;
+            box-shadow: 0 3px 10px rgba(147, 51, 234, 0.3) !important;
+        }
+
+        .dreader-socratic-write-btn {
+            display: inline-flex !important;
+            align-items: center !important;
+            gap: 6px !important;
+            padding: 7px 15px !important;
+            font-size: 12px !important;
+            font-weight: 500 !important;
+            color: #9333ea !important;
+            background-color: rgba(147, 51, 234, 0.08) !important;
+            border: 1px solid rgba(147, 51, 234, 0.25) !important;
+            border-radius: 20px !important;
+            cursor: pointer !important;
+            transition: all 0.18s ease !important;
+        }
+
+        .dreader-socratic-write-btn:hover {
+            background-color: rgba(147, 51, 234, 0.15) !important;
         }
 
         .dreader-end-ornament {
@@ -566,6 +682,24 @@ struct EPUBThemeInjector {
             window.dreaderGoPrevChapter = function() {
                 if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.selectionBridge) {
                     window.webkit.messageHandlers.selectionBridge.postMessage({ type: 'prevChapter' });
+                }
+            };
+
+            window.dreaderAskAISocratic = function(question) {
+                if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.selectionBridge) {
+                    window.webkit.messageHandlers.selectionBridge.postMessage({
+                        type: 'socraticAI',
+                        question: question
+                    });
+                }
+            };
+
+            window.dreaderWriteSocraticThought = function(question) {
+                if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.selectionBridge) {
+                    window.webkit.messageHandlers.selectionBridge.postMessage({
+                        type: 'socraticThought',
+                        question: question
+                    });
                 }
             };
 

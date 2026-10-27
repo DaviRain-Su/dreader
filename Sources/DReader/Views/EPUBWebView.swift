@@ -6,6 +6,9 @@ struct EPUBWebView: NSViewRepresentable {
     let opfDirectory: URL
     let unzippedDirectory: URL
     let highlights: [Highlight]
+    var bookTitle: String = ""
+    var chapterTitle: String = ""
+    var chapterIndex: Int = 0
     let hasNextChapter: Bool
     let nextChapterTitle: String?
     let settings: ReaderSettings
@@ -13,6 +16,8 @@ struct EPUBWebView: NSViewRepresentable {
     let onHighlightApplied: ((String, String) -> Void)?
     let onNextChapter: () -> Void
     let onPrevChapter: () -> Void
+    var onSocraticAI: ((String) -> Void)? = nil
+    var onSocraticThought: ((String) -> Void)? = nil
     let onScrollProgress: (Double) -> Void
     let registerScrollAction: (@escaping (Int) -> Void) -> Void
     let registerHighlightAction: (@escaping (String, String, String?) -> Void) -> Void
@@ -221,7 +226,10 @@ struct EPUBWebView: NSViewRepresentable {
                     settings: settings,
                     highlights: parent.highlights,
                     hasNextChapter: hasNextChapter,
-                    nextChapterTitle: nextChapterTitle
+                    nextChapterTitle: nextChapterTitle,
+                    bookTitle: parent.bookTitle,
+                    chapterTitle: parent.chapterTitle,
+                    chapterIndex: parent.chapterIndex
                 )
 
                 // Write rendered page to disk as .html inside the book cache directory for HTML5 parsing and full sandbox read access
@@ -259,7 +267,10 @@ struct EPUBWebView: NSViewRepresentable {
             let endCard = EPUBThemeInjector.generateEndCardHTML(
                 hasNextChapter: hasNextChapter,
                 nextChapterTitle: nextChapterTitle,
-                theme: settings.theme
+                theme: settings.theme,
+                bookTitle: parent.bookTitle,
+                chapterTitle: parent.chapterTitle,
+                chapterIndex: parent.chapterIndex
             )
 
             let highlightItems: [[String: Any]] = highlights.map { h in
@@ -392,6 +403,10 @@ struct EPUBWebView: NSViewRepresentable {
                     self.parent.onPrevChapter()
                 } else if type == "scrollProgress", let p = body["progress"] as? Double {
                     self.parent.onScrollProgress(p)
+                } else if type == "socraticAI", let q = body["question"] as? String {
+                    self.parent.onSocraticAI?(q)
+                } else if type == "socraticThought", let q = body["question"] as? String {
+                    self.parent.onSocraticThought?(q)
                 }
             }
         }

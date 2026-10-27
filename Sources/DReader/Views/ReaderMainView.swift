@@ -18,6 +18,9 @@ struct ReaderMainView: View {
                         },
                         onImportEPUB: {
                             vm.showImportOpenPanel()
+                        },
+                        onOpenReadingInsights: {
+                            vm.showReadingInsights = true
                         }
                     )
                     .transition(.opacity)
@@ -64,6 +67,11 @@ struct ReaderMainView: View {
                 }
             )
         }
+        .sheet(isPresented: $vm.showReadingInsights) {
+            ReadingInsightsModalView(stats: vm.readingStats) {
+                vm.showReadingInsights = false
+            }
+        }
     }
 
     // MARK: - Reading Workspace View
@@ -97,6 +105,18 @@ struct ReaderMainView: View {
                     },
                     onDeleteBookmark: { id in
                         vm.deleteBookmark(id: id)
+                    },
+                    onSearchTerm: { term in
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            vm.isSearchPresented = true
+                        }
+                        vm.performSearch(query: term)
+                    },
+                    onAskAIAboutTerm: { term in
+                        vm.selectionManager.quoteForAI = "【X-Ray 核心透视】\(term)"
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            vm.isAIPanelVisible = true
+                        }
                     },
                     onDeleteBook: { id in
                         vm.removeBook(id: id)
@@ -468,6 +488,29 @@ struct ReaderMainView: View {
             }
             .help("排版设置与主题风格")
 
+            // Reading Insights Pill (Apple Fitness Streak Icon)
+            Button {
+                vm.showReadingInsights = true
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "flame.fill")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.orange)
+                    Text("\(vm.readingStats.currentStreakDays)天")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(Color.primary.opacity(0.85))
+                }
+                .padding(.horizontal, 8)
+                .frame(height: 28)
+                .background(.ultraThinMaterial)
+                .clipShape(Capsule())
+                .overlay(
+                    Capsule().stroke(Color.orange.opacity(0.3), lineWidth: 0.5)
+                )
+            }
+            .buttonStyle(.plain)
+            .help("阅读统计与成就打卡")
+
             // Zen Mode Quick Toggle Button
             Button {
                 withAnimation(.easeInOut(duration: 0.25)) {
@@ -548,6 +591,9 @@ struct ReaderMainView: View {
                         opfDirectory: book.opfDirectory,
                         unzippedDirectory: book.unzippedDirectory,
                         highlights: vm.currentChapterHighlights(),
+                        bookTitle: book.title,
+                        chapterTitle: chapter.title,
+                        chapterIndex: book.currentChapterIndex,
                         hasNextChapter: vm.hasNextChapter,
                         nextChapterTitle: vm.nextChapterTitle,
                         settings: vm.settings,
@@ -555,6 +601,15 @@ struct ReaderMainView: View {
                         onHighlightApplied: { color, id in },
                         onNextChapter: { vm.nextChapter() },
                         onPrevChapter: { vm.prevChapter() },
+                        onSocraticAI: { question in
+                            vm.selectionManager.quoteForAI = "【苏格拉底之问】\(question)"
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                vm.isAIPanelVisible = true
+                            }
+                        },
+                        onSocraticThought: { question in
+                            vm.applyHighlight(colorHex: "#FFE066", note: "【针对苏格拉底之问的思考】：\n\(question)")
+                        },
                         onScrollProgress: { pct in vm.chapterScrollProgress = pct },
                         registerScrollAction: { action in vm.scrollPageAction = action },
                         registerHighlightAction: { action in vm.applyHighlightAction = action },

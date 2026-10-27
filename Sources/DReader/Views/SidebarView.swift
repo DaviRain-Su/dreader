@@ -5,6 +5,7 @@ enum SidebarTab: String, CaseIterable, Identifiable {
     case toc = "目录"
     case highlights = "划线笔记"
     case bookmarks = "书签"
+    case xray = "X-Ray"
     case library = "藏书"
 
     var id: String { rawValue }
@@ -14,6 +15,7 @@ enum SidebarTab: String, CaseIterable, Identifiable {
         case .toc: return "list.bullet.indent"
         case .highlights: return "highlighter"
         case .bookmarks: return "bookmark.fill"
+        case .xray: return "atom"
         case .library: return "books.vertical.fill"
         }
     }
@@ -32,6 +34,8 @@ struct SidebarView: View {
     let onUpdateHighlight: ((UUID, String) -> Void)?
     var onMakeQuoteCard: ((Highlight) -> Void)? = nil
     var onDeleteBookmark: ((UUID) -> Void)? = nil
+    var onSearchTerm: ((String) -> Void)? = nil
+    var onAskAIAboutTerm: ((String) -> Void)? = nil
     let onDeleteBook: (UUID) -> Void
 
     @State private var tocSearchText: String = ""
@@ -83,6 +87,30 @@ struct SidebarView: View {
                 highlightsListView
             case .bookmarks:
                 bookmarksListView
+            case .xray:
+                if let currentBook = book {
+                    BookXRayView(
+                        book: currentBook,
+                        onJumpToChapter: onSelectChapter,
+                        onSearchTerm: { term in
+                            onSearchTerm?(term)
+                        },
+                        onAskAIAboutTerm: { term in
+                            onAskAIAboutTerm?(term)
+                        }
+                    )
+                } else {
+                    VStack(spacing: 8) {
+                        Spacer()
+                        Image(systemName: "atom")
+                            .font(.system(size: 28))
+                            .foregroundStyle(.secondary)
+                        Text("请先打开一本书以透视 X-Ray")
+                            .font(.system(size: 12.5))
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                    }
+                }
             case .library:
                 libraryListView
             }
@@ -326,14 +354,38 @@ struct SidebarView: View {
                 Divider()
                     .opacity(0.2)
 
-                // Export Highlights Bar
-                Button {
-                    exportHighlightsAsMarkdown(currentBookHighlights)
+                // Export Highlights Multi-Format Menu
+                Menu {
+                    Button {
+                        exportHighlightsForObsidian(currentBookHighlights)
+                    } label: {
+                        Label("导出为 Obsidian 双链笔记 (.md)", systemImage: "doc.text.fill")
+                    }
+
+                    Button {
+                        exportHighlightsForAnki(currentBookHighlights)
+                    } label: {
+                        Label("导出为 Anki 知识记忆闪卡 (.txt)", systemImage: "rectangle.stack.badge.play.fill")
+                    }
+
+                    Divider()
+
+                    Button {
+                        exportHighlightsAsMarkdown(currentBookHighlights)
+                    } label: {
+                        Label("导出为标准通用 Markdown (.md)", systemImage: "square.and.arrow.up")
+                    }
+
+                    Button {
+                        copyAllHighlightsToClipboard(currentBookHighlights)
+                    } label: {
+                        Label("复制全部笔记内容到剪贴板", systemImage: "doc.on.doc")
+                    }
                 } label: {
                     HStack(spacing: 6) {
                         Image(systemName: "square.and.arrow.up")
                             .font(.system(size: 11))
-                        Text("导出全部笔记与想法 (.md)")
+                        Text("导出知识库笔记 (Obsidian / Anki / MD)...")
                             .font(.system(size: 11.5, weight: .medium))
                     }
                     .frame(maxWidth: .infinity)
@@ -346,7 +398,7 @@ struct SidebarView: View {
                             .stroke(Color.purple.opacity(0.2), lineWidth: 0.5)
                     )
                 }
-                .buttonStyle(.plain)
+                .menuStyle(.borderlessButton)
                 .padding(10)
             }
         }
@@ -601,6 +653,103 @@ struct SidebarView: View {
         savePanel.title = "保存 Markdown 读书笔记"
         if savePanel.runModal() == .OK, let targetURL = savePanel.url {
             try? md.write(to: targetURL, atomically: true, encoding: .utf8)
+        }
+    }
+
+    private func copyAllHighlightsToClipboard(_ items: [Highlight]) {
+        guard let book = book else { return }
+        var text = "《\(book.title)》读书笔记摘录（共 \(items.count) 条）：\n\n"
+        for (idx, h) in items.enumerated() {
+            text += "\(idx + 1). 【\(h.chapterTitle)】\n“\(h.text)”\n"
+            if let note = h.note, !note.isEmpty {
+                text += "💡 我的思考：\(note)\n"
+            }
+            text += "\n"
+        }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+    }
+
+    private func exportHighlightsForObsidian(_ items: [Highlight]) {
+        guard let book = book else { return }
+
+        var md = """
+        ---
+        title: "\(book.title)"
+        author: "\(book.author)"
+        type: literature-notes
+        tags: [reading, dreader, obsidian]
+        total_notes: \(items.count)
+        exported: "\(Date().formatted(date: .numeric, time: .shortened))"
+        ---
+
+        # 📚 《\(book.title)》读书笔记
+
+        > **元数据**
+        > - 原著作者：[[\(book.author)]]
+        > - 划线想法：共 \(items.count) 条
+        > - 知识库来源：DReader Native macOS AI E-Reader
+
+        ---\n\n
+        """
+
+        for (idx, h) in items.enumerated() {
+            md += "## [[\(h.chapterTitle)]] · 重点 \(idx + 1)\n\n"
+            md += "> [!quote] 《\(book.title)》原文摘录\n"
+            for line in h.text.components(separatedBy: "\n") {
+                md += "> \(line)\n"
+            }
+            md += ">\n"
+            md += "> — *章节：\(h.chapterTitle) · \(h.createdAt.formatted(date: .numeric, time: .shortened))*\n\n"
+
+            if let note = h.note, !note.isEmpty {
+                md += "> [!note] 💡 读者深度想法与思辨\n"
+                for line in note.components(separatedBy: "\n") {
+                    md += "> \(line)\n"
+                }
+                md += "\n"
+            }
+            md += "\n"
+        }
+
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(md, forType: .string)
+
+        let savePanel = NSSavePanel()
+        savePanel.allowedContentTypes = [.init(filenameExtension: "md") ?? .plainText]
+        savePanel.nameFieldStringValue = "《\(book.title)》Obsidian双链笔记.md"
+        savePanel.title = "导出到 Obsidian 本地 Vault"
+        if savePanel.runModal() == .OK, let targetURL = savePanel.url {
+            try? md.write(to: targetURL, atomically: true, encoding: .utf8)
+        }
+    }
+
+    private func exportHighlightsForAnki(_ items: [Highlight]) {
+        guard let book = book else { return }
+
+        var ankiTSV = "#separator:tab\n#html:true\n#tags:DReader 《\(book.title)》\n"
+        for h in items {
+            let front: String
+            let back: String
+            if let note = h.note, !note.isEmpty {
+                front = "<b>【思考问题/思辨】</b><br>\(note.replacingOccurrences(of: "\t", with: " "))"
+                back = "<b>《\(book.title)》· \(h.chapterTitle)</b><br><blockquote>\(h.text.replacingOccurrences(of: "\t", with: " "))</blockquote>"
+            } else {
+                front = "<b>【重点回忆】《\(book.title)》</b><br>\(h.chapterTitle)"
+                back = "<blockquote>\(h.text.replacingOccurrences(of: "\t", with: " "))</blockquote>"
+            }
+            ankiTSV += "\(front.replacingOccurrences(of: "\n", with: "<br>"))\t\(back.replacingOccurrences(of: "\n", with: "<br>"))\n"
+        }
+
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(ankiTSV, forType: .string)
+
+        let savePanel = NSSavePanel()
+        savePanel.allowedContentTypes = [.tabSeparatedText, .plainText]
+        savePanel.nameFieldStringValue = "《\(book.title)》Anki闪卡.txt"
+        savePanel.title = "导出 Anki 知识记忆闪卡 (TSV)"
+        if savePanel.runModal() == .OK, let targetURL = savePanel.url {
+            try? ankiTSV.write(to: targetURL, atomically: true, encoding: .utf8)
         }
     }
 
