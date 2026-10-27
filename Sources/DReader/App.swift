@@ -16,10 +16,15 @@ struct DReaderApp: App {
             SidebarCommands()
 
             CommandGroup(replacing: .newItem) {
-                Button("打开 EPUB 电子书...") {
+                Button("打开本地 EPUB 电子书...") {
                     viewModel.showImportOpenPanel()
                 }
                 .keyboardShortcut("o", modifiers: .command)
+
+                Button("在线数字书库探索中心...") {
+                    viewModel.showOnlineBookHub = true
+                }
+                .keyboardShortcut("l", modifiers: .command)
 
                 Button("返回书架大厅") {
                     viewModel.returnToBookshelf()

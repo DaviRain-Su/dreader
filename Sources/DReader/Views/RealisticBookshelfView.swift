@@ -5,6 +5,7 @@ struct RealisticBookshelfView: View {
     let onSelectBook: (EPUBBook) -> Void
     let onImportEPUB: () -> Void
     var onOpenReadingInsights: (() -> Void)? = nil
+    var onOpenOnlineHub: (() -> Void)? = nil
 
     @State private var searchText: String = ""
 
@@ -180,6 +181,32 @@ struct RealisticBookshelfView: View {
             }
             .buttonStyle(.plain)
             .help("查看阅读统计与成就殿堂")
+
+            // Online Book Hub Button (Z-Lib & Open Library)
+            Button {
+                onOpenOnlineHub?()
+            } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: "globe.americas.fill")
+                        .font(.system(size: 11))
+                    Text("在线书库")
+                        .font(.system(size: 12, weight: .semibold, design: .serif))
+                }
+                .foregroundStyle(Color.white)
+                .padding(.horizontal, 11)
+                .padding(.vertical, 6)
+                .background(
+                    LinearGradient(
+                        colors: [Color(hex: "#4F46E5"), Color(hex: "#7C3AED")],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+                .shadow(color: Color.purple.opacity(0.3), radius: 3, y: 1.5)
+            }
+            .buttonStyle(.plain)
+            .help("探索 Open Library、古腾堡与 Z-Library 在线书库 (⌘ + L)")
 
             // Import Button
             Button(action: onImportEPUB) {

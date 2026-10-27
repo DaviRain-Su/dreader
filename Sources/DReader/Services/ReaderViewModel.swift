@@ -17,6 +17,7 @@ final class ReaderViewModel: @unchecked Sendable {
     var isSidebarVisible: Bool = false
     var isAIPanelVisible: Bool = false
     var showReadingInsights: Bool = false
+    var showOnlineBookHub: Bool = false
     var isLoadingBook: Bool = false
     var errorMessage: String?
     var chapterRenderID: UUID = UUID()

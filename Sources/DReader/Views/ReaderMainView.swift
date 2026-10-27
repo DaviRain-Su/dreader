@@ -21,6 +21,9 @@ struct ReaderMainView: View {
                         },
                         onOpenReadingInsights: {
                             vm.showReadingInsights = true
+                        },
+                        onOpenOnlineHub: {
+                            vm.showOnlineBookHub = true
                         }
                     )
                     .transition(.opacity)
@@ -71,6 +74,18 @@ struct ReaderMainView: View {
             ReadingInsightsModalView(stats: vm.readingStats) {
                 vm.showReadingInsights = false
             }
+        }
+        .sheet(isPresented: $vm.showOnlineBookHub) {
+            OnlineBookHubModalView(
+                onBookDownloadedAndImport: { localURL in
+                    Task { @MainActor in
+                        await vm.openEPUB(url: localURL)
+                    }
+                },
+                onClose: {
+                    vm.showOnlineBookHub = false
+                }
+            )
         }
     }
 
@@ -405,6 +420,24 @@ struct ReaderMainView: View {
             }
             .buttonStyle(.plain)
             .help("导入新 EPUB 电子书")
+
+            // Online Book Hub Button (Z-Lib & Open Library)
+            Button {
+                vm.showOnlineBookHub = true
+            } label: {
+                Image(systemName: "globe.americas.fill")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(Color.purple)
+                    .frame(width: 28, height: 28)
+                    .background(.ultraThinMaterial)
+                    .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 7, style: .continuous)
+                            .stroke(Color.purple.opacity(0.35), lineWidth: 0.5)
+                    )
+            }
+            .buttonStyle(.plain)
+            .help("探索在线数字书库 (⌘ + L)")
 
             Spacer()
 
