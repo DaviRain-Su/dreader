@@ -4,6 +4,7 @@ import UniformTypeIdentifiers
 enum SidebarTab: String, CaseIterable, Identifiable {
     case toc = "目录"
     case highlights = "划线笔记"
+    case bookmarks = "书签"
     case library = "藏书"
 
     var id: String { rawValue }
@@ -12,6 +13,7 @@ enum SidebarTab: String, CaseIterable, Identifiable {
         switch self {
         case .toc: return "list.bullet.indent"
         case .highlights: return "highlighter"
+        case .bookmarks: return "bookmark.fill"
         case .library: return "books.vertical.fill"
         }
     }
@@ -22,11 +24,14 @@ struct SidebarView: View {
     let book: EPUBBook?
     let books: [EPUBBook]
     let highlights: [Highlight]
+    var bookmarks: [Bookmark] = []
     let onSelectChapter: (Int) -> Void
     let onSelectBook: (EPUBBook) -> Void
     let onImportEPUB: () -> Void
     let onDeleteHighlight: (UUID) -> Void
     let onUpdateHighlight: ((UUID, String) -> Void)?
+    var onMakeQuoteCard: ((Highlight) -> Void)? = nil
+    var onDeleteBookmark: ((UUID) -> Void)? = nil
     let onDeleteBook: (UUID) -> Void
 
     @State private var tocSearchText: String = ""
@@ -38,6 +43,10 @@ struct SidebarView: View {
 
     private var currentBookHighlights: [Highlight] {
         highlights.filter { $0.bookId == book?.id || $0.bookTitle == book?.title }
+    }
+
+    private var currentBookBookmarks: [Bookmark] {
+        bookmarks.filter { $0.bookId == book?.id || $0.bookTitle == book?.title }
     }
 
     private var filteredChapters: [(index: Int, chapter: EPUBChapter)] {
@@ -72,6 +81,8 @@ struct SidebarView: View {
                 tocListView
             case .highlights:
                 highlightsListView
+            case .bookmarks:
+                bookmarksListView
             case .library:
                 libraryListView
             }
@@ -104,6 +115,16 @@ struct SidebarView: View {
                                 .padding(.horizontal, 5)
                                 .padding(.vertical, 1.5)
                                 .background(isSelected ? Color.purple : Color.primary.opacity(0.08))
+                                .clipShape(Capsule())
+                        }
+
+                        if tab == .bookmarks && !currentBookBookmarks.isEmpty {
+                            Text("\(currentBookBookmarks.count)")
+                                .font(.system(size: 9.5, weight: .bold, design: .monospaced))
+                                .foregroundStyle(isSelected ? Color.white : Color.secondary)
+                                .padding(.horizontal, 5)
+                                .padding(.vertical, 1.5)
+                                .background(isSelected ? Color.red : Color.primary.opacity(0.08))
                                 .clipShape(Capsule())
                         }
                     }
@@ -351,6 +372,16 @@ struct SidebarView: View {
                     .foregroundStyle(.secondary.opacity(0.8))
 
                 Button {
+                    onMakeQuoteCard?(item)
+                } label: {
+                    Image(systemName: "photo.artframe")
+                        .font(.system(size: 9.5))
+                        .foregroundStyle(.purple)
+                }
+                .buttonStyle(.plain)
+                .help("制作精美金句书摘卡片")
+
+                Button {
                     onDeleteHighlight(item.id)
                 } label: {
                     Image(systemName: "trash")
@@ -467,6 +498,80 @@ struct SidebarView: View {
             RoundedRectangle(cornerRadius: 7, style: .continuous)
                 .stroke(Color.primary.opacity(0.06), lineWidth: 0.5)
         )
+    }
+
+    // MARK: - Bookmarks List View (折角书签)
+    private var bookmarksListView: some View {
+        VStack(spacing: 0) {
+            if currentBookBookmarks.isEmpty {
+                VStack(spacing: 10) {
+                    Spacer()
+                    Image(systemName: "bookmark")
+                        .font(.system(size: 28))
+                        .foregroundStyle(.secondary.opacity(0.8))
+                    Text("暂无折角书签")
+                        .font(.system(size: 13, weight: .medium))
+                    Text("阅读时按 ⌘+D 或点击右上角书签缎带，即可在此处快速标记重要页码。")
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 24)
+                    Spacer()
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 8) {
+                        ForEach(currentBookBookmarks) { bm in
+                            bookmarkCard(bm)
+                        }
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 8)
+                }
+            }
+        }
+    }
+
+    private func bookmarkCard(_ bm: Bookmark) -> some View {
+        HStack(alignment: .top, spacing: 9) {
+            // Crimson Silk Ribbon Tag
+            Rectangle()
+                .fill(LinearGradient(colors: [Color(hex: "#C92A2A"), Color(hex: "#E03131")], startPoint: .top, endPoint: .bottom))
+                .frame(width: 3.5, height: 36)
+                .clipShape(Capsule())
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(bm.chapterTitle)
+                    .font(.system(size: 12, weight: .semibold, design: .serif))
+                    .foregroundStyle(Color.primary.opacity(0.9))
+                    .lineLimit(1)
+
+                Text("标记于 \(bm.createdAt.formatted(date: .numeric, time: .shortened))")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer()
+
+            Button {
+                onDeleteBookmark?(bm.id)
+            } label: {
+                Image(systemName: "trash")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .help("删除此书签")
+        }
+        .padding(9)
+        .background(Color.primary.opacity(0.035))
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .contentShape(Rectangle())
+        .onTapGesture {
+            onSelectChapter(bm.chapterIndex)
+        }
+        .help("点击跳转至该书签章节")
     }
 
     private func exportHighlightsAsMarkdown(_ items: [Highlight]) {

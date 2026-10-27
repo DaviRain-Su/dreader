@@ -7,6 +7,8 @@ struct SelectionFloatingToolbar: View {
     let onQuickPrompt: (String, String) -> Void // (promptType, selectedText)
     let onHighlight: (String) -> Void // colorHex
     let onWriteThought: () -> Void
+    let onMakeQuoteCard: () -> Void
+    var onLookUp: ((String) -> Void)? = nil
     let onDismiss: () -> Void
 
     @State private var showColorPicker = false
@@ -32,6 +34,28 @@ struct SelectionFloatingToolbar: View {
             }
             .buttonStyle(ToolbarButtonStyle())
             .help("划线并记录读书思考与笔记")
+
+            // Quote Card button (WeChat Read aesthetic card)
+            Button {
+                onMakeQuoteCard()
+            } label: {
+                Label("卡片", systemImage: "photo.artframe")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.purple)
+            }
+            .buttonStyle(ToolbarButtonStyle())
+            .help("制作精美金句书摘卡片")
+
+            // Dictionary / Lexical Look Up button
+            Button {
+                onLookUp?(selection.text)
+            } label: {
+                Label("查词", systemImage: "character.book.closed")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.teal)
+            }
+            .buttonStyle(ToolbarButtonStyle())
+            .help("系统朗读发音并调用 AI 展开词典深度释义")
 
             // Ask AI button
             Button {

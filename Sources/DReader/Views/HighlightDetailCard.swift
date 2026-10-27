@@ -8,6 +8,7 @@ struct HighlightDetailCard: View {
     let onSaveThought: (String) -> Void
     let onDelete: () -> Void
     let onAskAI: (String) -> Void
+    let onMakeQuoteCard: () -> Void
     let onDismiss: () -> Void
 
     @State private var isEditingThought: Bool = false
@@ -71,6 +72,25 @@ struct HighlightDetailCard: View {
                 }
                 .buttonStyle(.plain)
                 .help("结合划线向 AI 深度请教")
+
+                // Quote Card Button
+                Button {
+                    onMakeQuoteCard()
+                } label: {
+                    HStack(spacing: 3) {
+                        Image(systemName: "photo.artframe")
+                            .font(.system(size: 10, weight: .bold))
+                        Text("卡片")
+                            .font(.system(size: 11, weight: .semibold))
+                    }
+                    .foregroundStyle(.indigo)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 3.5)
+                    .background(Color.indigo.opacity(0.12))
+                    .clipShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .help("制作微信读书风格精美金句卡片")
 
                 // Copy Button
                 Button {

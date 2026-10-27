@@ -19,6 +19,7 @@ struct EPUBWebView: NSViewRepresentable {
     let registerUpdateColorAction: (@escaping (String, String) -> Void) -> Void
     let registerUpdateThoughtAction: (@escaping (String, String?) -> Void) -> Void
     let registerRemoveHighlightAction: (@escaping (String) -> Void) -> Void
+    var registerScrollToSearchMatchAction: ((@escaping (String, Int) -> Void) -> Void)? = nil
     let getCachedHTML: (URL) -> String?
     let cacheHTML: (String, URL) -> Void
 
@@ -63,6 +64,9 @@ struct EPUBWebView: NSViewRepresentable {
         }
         registerRemoveHighlightAction { [weak coordinator = context.coordinator] id in
             coordinator?.removeHighlightFromDOM(id: id)
+        }
+        registerScrollToSearchMatchAction? { [weak coordinator = context.coordinator] keyword, matchIdx in
+            coordinator?.scrollToSearchMatch(keyword: keyword, matchIndex: matchIdx)
         }
 
         context.coordinator.loadChapter(
@@ -330,6 +334,15 @@ struct EPUBWebView: NSViewRepresentable {
                     self?.parent.onHighlightApplied?(colorHex, id)
                 }
             }
+        }
+
+        func scrollToSearchMatch(keyword: String, matchIndex: Int) {
+            let kwEscaped = keyword
+                .replacingOccurrences(of: "\\", with: "\\\\")
+                .replacingOccurrences(of: "\"", with: "\\\"")
+                .replacingOccurrences(of: "\n", with: " ")
+            let js = "window.dreaderScrollToSearchMatch && window.dreaderScrollToSearchMatch(\"\(kwEscaped)\", \(matchIndex));"
+            webView?.evaluateJavaScript(js, completionHandler: nil)
         }
 
         // MARK: - WKScriptMessageHandler

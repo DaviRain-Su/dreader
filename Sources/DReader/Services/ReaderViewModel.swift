@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import AVFoundation
 import UniformTypeIdentifiers
 
 @Observable
@@ -21,6 +22,7 @@ final class ReaderViewModel: @unchecked Sendable {
 
     init() {
         loadPersistedHighlights()
+        loadPersistedBookmarks()
         Task {
             await initializeLibrary()
         }
@@ -282,6 +284,224 @@ final class ReaderViewModel: @unchecked Sendable {
            let decoded = try? JSONDecoder().decode([Highlight].self, from: data) {
             self.highlights = decoded
         }
+    }
+
+    // MARK: - In-Book Full-Text Search (Apple Books style)
+    var isSearchPresented: Bool = false
+    var searchQuery: String = ""
+    var searchResults: [SearchResultItem] = []
+    var currentSearchIndex: Int = 0
+    var isSearching: Bool = false
+    var scrollToSearchMatchAction: ((String, Int) -> Void)?
+    private var searchTask: Task<Void, Never>?
+
+    func performSearch(query: String) {
+        searchQuery = query
+        searchTask?.cancel()
+
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, let book = currentBook else {
+            searchResults = []
+            currentSearchIndex = 0
+            isSearching = false
+            return
+        }
+
+        isSearching = true
+        let chapters = book.chapters
+        let cache = self.htmlContentCache
+
+        searchTask = Task {
+            try? await Task.sleep(nanoseconds: 120_000_000) // 120ms debounce
+            if Task.isCancelled { return }
+
+            let results = await Task.detached(priority: .userInitiated) { () -> [SearchResultItem] in
+                var items: [SearchResultItem] = []
+                let lowerQuery = trimmed.lowercased()
+
+                for (chIdx, ch) in chapters.enumerated() {
+                    let html: String
+                    if let cached = cache[ch.fileURL] {
+                        html = cached
+                    } else if let disk = try? String(contentsOf: ch.fileURL, encoding: .utf8) {
+                        html = disk
+                    } else {
+                        continue
+                    }
+
+                    let plainText = stripHTMLTags(from: html)
+                    let lowerText = plainText.lowercased()
+                    var searchStart = lowerText.startIndex
+                    var matchIdxInChapter = 0
+
+                    while let range = lowerText.range(of: lowerQuery, range: searchStart..<lowerText.endIndex) {
+                        let matchStart = range.lowerBound
+                        let matchEnd = range.upperBound
+
+                        let beforeStart = lowerText.index(matchStart, offsetBy: -30, limitedBy: lowerText.startIndex) ?? lowerText.startIndex
+                        let afterEnd = lowerText.index(matchEnd, offsetBy: 34, limitedBy: lowerText.endIndex) ?? lowerText.endIndex
+
+                        let beforeStr = String(plainText[beforeStart..<matchStart])
+                            .replacingOccurrences(of: "\n", with: " ")
+                            .trimmingCharacters(in: .whitespaces)
+
+                        let kwStr = String(plainText[matchStart..<matchEnd])
+
+                        let afterStr = String(plainText[matchEnd..<afterEnd])
+                            .replacingOccurrences(of: "\n", with: " ")
+                            .trimmingCharacters(in: .whitespaces)
+
+                        items.append(
+                            SearchResultItem(
+                                chapterIndex: chIdx,
+                                chapterTitle: ch.title,
+                                snippetBefore: beforeStr,
+                                keyword: kwStr,
+                                snippetAfter: afterStr,
+                                matchIndexInChapter: matchIdxInChapter
+                            )
+                        )
+
+                        matchIdxInChapter += 1
+                        searchStart = matchEnd
+                    }
+                }
+                return items
+            }.value
+
+            if !Task.isCancelled {
+                self.searchResults = results
+                self.isSearching = false
+                self.currentSearchIndex = 0
+                if let first = results.first {
+                    self.jumpToSearchResult(first)
+                }
+            }
+        }
+    }
+
+    func jumpToSearchResult(_ item: SearchResultItem) {
+        guard let book = currentBook else { return }
+        if let idx = searchResults.firstIndex(where: { $0.id == item.id }) {
+            currentSearchIndex = idx
+        }
+
+        if book.currentChapterIndex != item.chapterIndex {
+            jumpToChapter(item.chapterIndex)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { [weak self] in
+                self?.scrollToSearchMatchAction?(item.keyword, item.matchIndexInChapter)
+            }
+        } else {
+            scrollToSearchMatchAction?(item.keyword, item.matchIndexInChapter)
+        }
+    }
+
+    func nextSearchResult() {
+        guard !searchResults.isEmpty else { return }
+        currentSearchIndex = (currentSearchIndex + 1) % searchResults.count
+        jumpToSearchResult(searchResults[currentSearchIndex])
+    }
+
+    func prevSearchResult() {
+        guard !searchResults.isEmpty else { return }
+        currentSearchIndex = (currentSearchIndex - 1 + searchResults.count) % searchResults.count
+        jumpToSearchResult(searchResults[currentSearchIndex])
+    }
+
+    // MARK: - Dog-Ear Bookmarks (折角书签 ⌘+D)
+    var bookmarks: [Bookmark] = []
+
+    func isCurrentChapterBookmarked() -> Bool {
+        guard let book = currentBook else { return false }
+        return bookmarks.contains { $0.bookId == book.id && $0.chapterIndex == book.currentChapterIndex }
+    }
+
+    func toggleCurrentChapterBookmark() {
+        guard let book = currentBook, let chapter = book.currentChapter else { return }
+        if let idx = bookmarks.firstIndex(where: { $0.bookId == book.id && $0.chapterIndex == book.currentChapterIndex }) {
+            bookmarks.remove(at: idx)
+        } else {
+            let bm = Bookmark(
+                bookId: book.id,
+                bookTitle: book.title,
+                chapterIndex: book.currentChapterIndex,
+                chapterTitle: chapter.title,
+                scrollProgress: chapterScrollProgress
+            )
+            bookmarks.insert(bm, at: 0)
+        }
+        savePersistedBookmarks()
+    }
+
+    func deleteBookmark(id: UUID) {
+        bookmarks.removeAll { $0.id == id }
+        savePersistedBookmarks()
+    }
+
+    private func savePersistedBookmarks() {
+        if let encoded = try? JSONEncoder().encode(bookmarks) {
+            UserDefaults.standard.set(encoded, forKey: "dreader.bookmarks")
+        }
+    }
+
+    private func loadPersistedBookmarks() {
+        if let data = UserDefaults.standard.data(forKey: "dreader.bookmarks"),
+           let decoded = try? JSONDecoder().decode([Bookmark].self, from: data) {
+            self.bookmarks = decoded
+        }
+    }
+
+    // MARK: - Reading Time & Speed Estimation
+    private let charactersPerMinute: Double = 400.0
+
+    func currentChapterCharCount() -> Int {
+        guard let book = currentBook, let chapter = book.currentChapter else { return 0 }
+        let html = getCachedHTML(for: chapter.fileURL) ?? (try? String(contentsOf: chapter.fileURL, encoding: .utf8)) ?? ""
+        return stripHTMLTags(from: html).count
+    }
+
+    func currentChapterRemainingMinutes() -> Int {
+        let count = currentChapterCharCount()
+        guard count > 0 else { return 1 }
+        let remaining = Double(count) * max(0.02, 1.0 - chapterScrollProgress)
+        return max(1, Int(ceil(remaining / charactersPerMinute)))
+    }
+
+    func bookRemainingTimeFormatted() -> String {
+        guard let book = currentBook, !book.chapters.isEmpty else { return "" }
+        var totalRemainingChars = 0
+
+        let currCount = currentChapterCharCount()
+        totalRemainingChars += Int(Double(currCount) * max(0.02, 1.0 - chapterScrollProgress))
+
+        for i in (book.currentChapterIndex + 1)..<book.chapters.count {
+            let ch = book.chapters[i]
+            let html = getCachedHTML(for: ch.fileURL) ?? (try? String(contentsOf: ch.fileURL, encoding: .utf8)) ?? ""
+            totalRemainingChars += stripHTMLTags(from: html).count
+        }
+
+        let totalMinutes = max(1, Int(ceil(Double(totalRemainingChars) / charactersPerMinute)))
+        if totalMinutes < 60 {
+            return "全书剩约 \(totalMinutes) 分钟"
+        } else {
+            let hours = totalMinutes / 60
+            let mins = totalMinutes % 60
+            if mins == 0 {
+                return "全书剩约 \(hours) 小时"
+            } else {
+                return "全书剩约 \(hours) 时 \(mins) 分"
+            }
+        }
+    }
+
+    // MARK: - Speech Synthesis (Native Pronunciation)
+    private let speechSynthesizer = AVSpeechSynthesizer()
+
+    func speakText(_ text: String) {
+        speechSynthesizer.stopSpeaking(at: .immediate)
+        let utterance = AVSpeechUtterance(string: text)
+        utterance.rate = 0.5
+        speechSynthesizer.speak(utterance)
     }
 
     // MARK: - Import File Panel

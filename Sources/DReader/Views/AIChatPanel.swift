@@ -1,9 +1,26 @@
 import SwiftUI
 import AppKit
 
+enum AISearchScope: String, CaseIterable, Identifiable {
+    case chapter = "本章"
+    case book = "全书"
+    case library = "书架脑库"
+
+    var id: String { rawValue }
+
+    var icon: String {
+        switch self {
+        case .chapter: return "book.pages"
+        case .book: return "book"
+        case .library: return "books.vertical.fill"
+        }
+    }
+}
+
 struct AIChatPanel: View {
     let book: EPUBBook?
     let currentChapter: EPUBChapter?
+    var allBooks: [EPUBBook] = []
     @Binding var activeQuote: String?
     @Bindable var agentService: AIAgentService
     let onClose: () -> Void
@@ -12,6 +29,7 @@ struct AIChatPanel: View {
     @State private var inputText: String = ""
     @State private var showSettingsSheet: Bool = false
     @State private var currentStreamingAnswer: String = ""
+    @State private var searchScope: AISearchScope = .chapter
 
     private let quickPrompts: [(title: String, icon: String, prompt: String)] = [
         ("深度解析", "sparkles", "请结合全书语境，深入剖析这段文字的思想内涵与深层寓意"),
@@ -27,6 +45,12 @@ struct AIChatPanel: View {
             headerBar
 
             Divider()
+
+            // Scope Selector Bar (Chapter / Full Book / Library RAG)
+            scopeSelectorBar
+
+            Divider()
+                .opacity(0.3)
 
             // Active Quote Context Banner (if any)
             if let quote = activeQuote, !quote.isEmpty {
@@ -194,6 +218,41 @@ struct AIChatPanel: View {
         }
     }
 
+    // MARK: - Scope Selector Bar
+    private var scopeSelectorBar: some View {
+        HStack(spacing: 5) {
+            Text("语境:")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.secondary)
+
+            ForEach(AISearchScope.allCases) { scope in
+                Button {
+                    withAnimation(.easeInOut(duration: 0.14)) {
+                        searchScope = scope
+                    }
+                } label: {
+                    HStack(spacing: 3) {
+                        Image(systemName: scope.icon)
+                            .font(.system(size: 9))
+                        Text(scope.rawValue)
+                            .font(.system(size: 10.5, weight: searchScope == scope ? .semibold : .regular))
+                    }
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 3.5)
+                    .background(searchScope == scope ? Color.purple.opacity(0.15) : Color.primary.opacity(0.04))
+                    .foregroundStyle(searchScope == scope ? Color.purple : Color.secondary)
+                    .clipShape(Capsule())
+                }
+                .buttonStyle(.plain)
+            }
+
+            Spacer()
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 6)
+        .background(Color.primary.opacity(0.02))
+    }
+
     // MARK: - Active Quote Banner
     private func activeQuoteBanner(_ quote: String) -> some View {
         HStack(alignment: .top, spacing: 8) {
@@ -352,13 +411,28 @@ struct AIChatPanel: View {
         inputText = ""
         currentStreamingAnswer = ""
 
+        var resolvedPrompt = prompt
+        var resolvedChapterTitle = currentChapter?.title ?? "当前章节"
+
+        if searchScope == .library {
+            resolvedChapterTitle = "【全书架跨书智能脑库检索】"
+            var libContext = "\n\n【用户书架藏书目录】：\n"
+            for b in allBooks {
+                libContext += "- 《\(b.title)》 作者：\(b.author)，共 \(b.chapters.count) 章\n"
+            }
+            libContext += "请站在全书架全局宏观视角，融会贯通书架中各名著的思想脉络，进行跨文本深度对照与综合剖析。"
+            resolvedPrompt = prompt + libContext
+        } else if searchScope == .book {
+            resolvedChapterTitle = "【全书全局视角】" + (currentChapter?.title ?? "")
+        }
+
         agentService.sendMessage(
             history: messages,
             bookTitle: book?.title ?? "未知书名",
             author: book?.author ?? "未知作者",
-            chapterTitle: currentChapter?.title ?? "当前章节",
+            chapterTitle: resolvedChapterTitle,
             activeQuote: actualQuote,
-            userPrompt: prompt,
+            userPrompt: resolvedPrompt,
             onToken: { token in
                 currentStreamingAnswer += token
             },

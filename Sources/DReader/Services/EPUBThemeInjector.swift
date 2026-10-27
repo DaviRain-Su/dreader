@@ -463,6 +463,25 @@ struct EPUBThemeInjector {
         .dreader-end-btn:active {
             transform: translateY(0) scale(0.98) !important;
         }
+
+        /* Apple Books Style Search Match Glowing Halo */
+        .dreader-search-halo {
+            background-color: #FFE066 !important;
+            color: #1a1a1a !important;
+            padding: 2px 4px !important;
+            border-radius: 4px !important;
+            box-shadow: 0 0 0 3px rgba(255, 215, 0, 0.65), 0 0 16px rgba(255, 180, 0, 0.5) !important;
+            animation: dreader-search-pulse 1.6s infinite alternate ease-in-out !important;
+        }
+
+        @keyframes dreader-search-pulse {
+            0% {
+                box-shadow: 0 0 0 2px rgba(255, 215, 0, 0.4), 0 0 8px rgba(255, 180, 0, 0.3);
+            }
+            100% {
+                box-shadow: 0 0 0 5px rgba(255, 215, 0, 0.8), 0 0 22px rgba(255, 180, 0, 0.6);
+            }
+        }
         """
     }
 
@@ -881,6 +900,65 @@ struct EPUBThemeInjector {
                 }
 
                 return true;
+            };
+
+            // Scroll to and pulse highlight a search match (Apple Books style)
+            window.dreaderScrollToSearchMatch = function(keyword, matchIndex) {
+                if (!keyword) return false;
+
+                // 1. Remove previous halos
+                document.querySelectorAll('.dreader-search-halo').forEach(function(el) {
+                    const p = el.parentNode;
+                    if (p) {
+                        while (el.firstChild) {
+                            p.insertBefore(el.firstChild, el);
+                        }
+                        p.removeChild(el);
+                        p.normalize();
+                    }
+                });
+
+                const bodyEl = document.getElementById('dreader-chapter-body') || document.body;
+                const walker = document.createTreeWalker(bodyEl, NodeFilter.SHOW_TEXT, null, false);
+                let node;
+                const textNodes = [];
+                while (node = walker.nextNode()) {
+                    const p = node.parentElement;
+                    if (p && (p.tagName === 'SCRIPT' || p.tagName === 'STYLE' || p.closest('mark.dreader-highlight'))) continue;
+                    textNodes.push(node);
+                }
+
+                let currentMatch = 0;
+                const lowerKw = keyword.toLowerCase();
+
+                for (let i = 0; i < textNodes.length; i++) {
+                    const tn = textNodes[i];
+                    const val = tn.nodeValue || '';
+                    const lowerVal = val.toLowerCase();
+                    let pos = 0;
+
+                    while ((pos = lowerVal.indexOf(lowerKw, pos)) !== -1) {
+                        if (currentMatch === matchIndex) {
+                            try {
+                                const range = document.createRange();
+                                range.setStart(tn, pos);
+                                range.setEnd(tn, pos + keyword.length);
+                                const halo = document.createElement('mark');
+                                halo.className = 'dreader-search-halo';
+                                halo.appendChild(range.extractContents());
+                                range.insertNode(halo);
+
+                                halo.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                                return true;
+                            } catch(err) {
+                                console.error('Error highlighting search match:', err);
+                            }
+                        }
+                        currentMatch++;
+                        pos += keyword.length;
+                    }
+                }
+                return false;
             };
         })();
         """

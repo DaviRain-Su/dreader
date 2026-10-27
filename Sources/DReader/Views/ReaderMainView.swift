@@ -5,6 +5,7 @@ struct ReaderMainView: View {
     @State private var showTypographyPopover: Bool = false
     @State private var isHoveringPrev: Bool = false
     @State private var isHoveringNext: Bool = false
+    @State private var quoteCardHighlight: Highlight? = nil
 
     var body: some View {
         ZStack(alignment: .top) {
@@ -54,6 +55,15 @@ struct ReaderMainView: View {
                 .transition(.move(edge: .top).combined(with: .opacity))
             }
         }
+        .sheet(item: $quoteCardHighlight) { highlight in
+            QuoteCardView(
+                highlight: highlight,
+                book: vm.currentBook,
+                onClose: {
+                    quoteCardHighlight = nil
+                }
+            )
+        }
     }
 
     // MARK: - Reading Workspace View
@@ -66,6 +76,7 @@ struct ReaderMainView: View {
                     book: vm.currentBook,
                     books: vm.books,
                     highlights: vm.highlights,
+                    bookmarks: vm.bookmarks,
                     onSelectChapter: { index in
                         vm.jumpToChapter(index)
                     },
@@ -80,6 +91,12 @@ struct ReaderMainView: View {
                     },
                     onUpdateHighlight: { id, note in
                         vm.updateHighlight(id: id, note: note)
+                    },
+                    onMakeQuoteCard: { highlight in
+                        quoteCardHighlight = highlight
+                    },
+                    onDeleteBookmark: { id in
+                        vm.deleteBookmark(id: id)
                     },
                     onDeleteBook: { id in
                         vm.removeBook(id: id)
@@ -177,6 +194,34 @@ struct ReaderMainView: View {
                                         )
                                     }
                                 },
+                                onMakeQuoteCard: {
+                                    if let h = vm.applyHighlight(colorHex: vm.lastChosenHighlightColor) {
+                                        quoteCardHighlight = h
+                                    } else if let chapter = vm.currentBook?.currentChapter {
+                                        let temp = Highlight(
+                                            bookId: vm.currentBook?.id ?? UUID(),
+                                            bookTitle: vm.currentBook?.title ?? "",
+                                            chapterIndex: vm.currentBook?.currentChapterIndex ?? 0,
+                                            chapterTitle: chapter.title,
+                                            text: selection.text,
+                                            colorHex: vm.lastChosenHighlightColor,
+                                            createdAt: Date()
+                                        )
+                                        quoteCardHighlight = temp
+                                    }
+                                },
+                                onLookUp: { text in
+                                    vm.speakText(text)
+                                    vm.selectionManager.quoteForAI = text
+                                    vm.isAIPanelVisible = true
+                                    let prompt = "请为词汇/短语「\(text)」提供权威深度词典解析：包含【标准发音/拼音】、【词性与基本释义】、【在本书语境中的微言大义与深层寓意】及【近义词与典故词源】。"
+                                    NotificationCenter.default.post(
+                                        name: NSNotification.Name("DReaderTriggerAIPrompt"),
+                                        object: nil,
+                                        userInfo: ["prompt": prompt, "quote": text]
+                                    )
+                                    vm.selectionManager.clear()
+                                },
                                 onDismiss: {
                                     vm.selectionManager.clear()
                                 }
@@ -212,6 +257,9 @@ struct ReaderMainView: View {
                                         userInfo: ["prompt": prompt, "quote": quote]
                                     )
                                 },
+                                onMakeQuoteCard: {
+                                    quoteCardHighlight = highlight
+                                },
                                 onDismiss: {
                                     vm.selectionManager.activeHighlightCard = nil
                                 }
@@ -243,6 +291,7 @@ struct ReaderMainView: View {
                 AIChatPanel(
                     book: vm.currentBook,
                     currentChapter: vm.currentBook?.currentChapter,
+                    allBooks: vm.books,
                     activeQuote: $vm.selectionManager.quoteForAI,
                     agentService: vm.agentService,
                     onClose: {
@@ -342,6 +391,46 @@ struct ReaderMainView: View {
             .padding(.vertical, 3)
 
             Spacer()
+
+            // In-Book Search Button (Apple Books Magnifying Glass ⌘+F)
+            Button {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    vm.isSearchPresented.toggle()
+                }
+            } label: {
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(vm.isSearchPresented ? Color.purple : Color.primary.opacity(0.8))
+                    .frame(width: 28, height: 28)
+                    .background(.ultraThinMaterial)
+                    .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 7, style: .continuous)
+                            .stroke(vm.isSearchPresented ? Color.purple.opacity(0.4) : Color.white.opacity(0.2), lineWidth: 0.5)
+                    )
+            }
+            .buttonStyle(.plain)
+            .keyboardShortcut("f", modifiers: .command)
+            .help("全书全文检索 (⌘ + F)")
+
+            // Bookmark Toggle Button (Apple Books Bookmark Icon ⌘+D)
+            Button {
+                vm.toggleCurrentChapterBookmark()
+            } label: {
+                Image(systemName: vm.isCurrentChapterBookmarked() ? "bookmark.fill" : "bookmark")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(vm.isCurrentChapterBookmarked() ? Color.red : Color.primary.opacity(0.8))
+                    .frame(width: 28, height: 28)
+                    .background(.ultraThinMaterial)
+                    .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 7, style: .continuous)
+                            .stroke(vm.isCurrentChapterBookmarked() ? Color.red.opacity(0.4) : Color.white.opacity(0.2), lineWidth: 0.5)
+                    )
+            }
+            .buttonStyle(.plain)
+            .keyboardShortcut("d", modifiers: .command)
+            .help(vm.isCurrentChapterBookmarked() ? "移除当前书签 (⌘ + D)" : "添加折角书签 (⌘ + D)")
 
             // Typography Setting Popover Button (Apple Books "Aa" Icon)
             Button {
@@ -457,9 +546,40 @@ struct ReaderMainView: View {
                         registerUpdateColorAction: { action in vm.updateHighlightColorAction = action },
                         registerUpdateThoughtAction: { action in vm.updateHighlightThoughtAction = action },
                         registerRemoveHighlightAction: { action in vm.removeHighlightAction = action },
+                        registerScrollToSearchMatchAction: { action in vm.scrollToSearchMatchAction = action },
                         getCachedHTML: { vm.getCachedHTML(for: $0) },
                         cacheHTML: { vm.cacheHTML($0, for: $1) }
                     )
+
+                    // Top-Right Physical Dog-Ear Bookmark Ribbon
+                    VStack {
+                        HStack {
+                            Spacer()
+                            DogEarBookmarkRibbonView(
+                                isBookmarked: vm.isCurrentChapterBookmarked(),
+                                onToggle: {
+                                    vm.toggleCurrentChapterBookmark()
+                                }
+                            )
+                            .padding(.trailing, 26)
+                        }
+                        Spacer()
+                    }
+
+                    // Floating In-Book Full-Text Search Panel (⌘+F)
+                    if vm.isSearchPresented {
+                        VStack {
+                            HStack {
+                                Spacer()
+                                InBookSearchPanel(vm: vm)
+                                    .padding(.top, 10)
+                                    .padding(.trailing, 22)
+                            }
+                            Spacer()
+                        }
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                        .zIndex(200)
+                    }
 
                     // Floating Edge Page-Turning Arrows (Left & Right)
                     HStack {
@@ -618,6 +738,20 @@ struct ReaderMainView: View {
                     Text("\(Int(vm.overallBookProgress * 100))%")
                         .font(.system(size: 11, weight: .semibold, design: .monospaced))
                         .foregroundStyle(.secondary)
+
+                    Divider()
+                        .frame(height: 12)
+                        .opacity(0.2)
+
+                    // Apple Books Reading Time Remaining
+                    HStack(spacing: 4) {
+                        Image(systemName: "clock")
+                            .font(.system(size: 9))
+                            .foregroundStyle(.secondary)
+                        Text("本章剩约\(vm.currentChapterRemainingMinutes())分钟 · \(vm.bookRemainingTimeFormatted())")
+                            .font(.system(size: 10.5, weight: .regular))
+                            .foregroundStyle(Color.secondary.opacity(0.9))
+                    }
                 }
             }
 
