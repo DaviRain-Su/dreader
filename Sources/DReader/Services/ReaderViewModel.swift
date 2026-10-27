@@ -117,6 +117,22 @@ final class ReaderViewModel: @unchecked Sendable {
             isSidebarVisible = false
             selectionManager.clear()
         }
+        // 竖排偏好：已设置按书记忆 → 恢复；未设置 → 古籍默认竖排（仅首开时写入偏好）
+        if settings.storedVertical(for: book.id) {
+            settings.isVertical = true
+        } else if !UserDefaults.standard.bool(forKey: "dreader.vertical.seen.\(book.id.uuidString)") {
+            UserDefaults.standard.set(true, forKey: "dreader.vertical.seen.\(book.id.uuidString)")
+            if ReaderSettings.looksLikeClassicalChinese(title: book.title, author: book.author) {
+                settings.isVertical = true
+                var prefs = UserDefaults.standard.string(forKey: "dreader.vertical_by_book").flatMap {
+                    $0.data(using: .utf8).flatMap { try? JSONDecoder().decode([String: String].self, from: $0) }
+                } ?? [:]
+                prefs[book.id.uuidString] = "1"
+                if let data = try? JSONEncoder().encode(prefs) {
+                    UserDefaults.standard.set(String(data: data, encoding: .utf8), forKey: "dreader.vertical_by_book")
+                }
+            }
+        }
         updateSubsequentChaptersTotalChars()
         preloadAllChapters(for: book)
     }

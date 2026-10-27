@@ -464,6 +464,90 @@ struct EPUBThemeInjector {
             """
         }
 
+        // 竖排（中文古籍）与横排共用主题色与字体，但排版轴整个旋转：
+        // writing-mode: vertical-rl — 文字竖走、列从右到左、滚动变横向。
+        let verticalCSS: String
+        if settings.isVertical {
+            let columnWidth = min(settings.maxWidth, 640.0)
+            verticalCSS = """
+            html {
+                overflow-y: hidden !important;
+                overflow-x: auto !important;
+            }
+
+            body {
+                writing-mode: vertical-rl !important;
+                -webkit-writing-mode: vertical-rl !important;
+                height: 100vh !important;
+                max-height: none !important;
+                max-width: none !important;
+                width: auto !important;
+                margin: 0 !important;
+                padding: \(settings.isZenMode ? "60px 48px 60px 120px" : "40px 32px 40px 96px") !important;
+                box-sizing: border-box !important;
+                word-break: normal !important;
+            }
+
+            /* 每列（即横排意义的"行"）宽度 = 版心高度感；行距 = 列间距 */
+            #dreader-chapter-body {
+                column-width: auto !important;
+                line-height: \(max(settings.lineHeight, 1.7)) !important;
+                height: 100% !important;
+            }
+
+            #dreader-chapter-body p,
+            p {
+                margin-top: 0 !important;
+                margin-right: \(settings.paragraphSpacing)em !important;
+                margin-bottom: 0 !important;
+                text-indent: 2em !important;
+                text-align: \(align == "justify" ? "justify" : "start") !important;
+            }
+
+            /* 标题：竖排下也保持右侧起始、纵向居中感 */
+            #dreader-chapter-body h1, #dreader-chapter-body h2, #dreader-chapter-body h3,
+            #dreader-chapter-body h4, #dreader-chapter-body h5, #dreader-chapter-body h6 {
+                margin-top: 0 !important;
+                margin-right: 1.2em !important;
+                margin-bottom: 0 !important;
+                text-align: start !important;
+                letter-spacing: 0.18em !important;
+            }
+
+            /* 划线与脚注标点在竖排下的方向适配 */
+            mark.dreader-highlight {
+                border-bottom: none !important;
+                border-left: 2.5px solid var(--dreader-hl-color, #FFE066) !important;
+            }
+
+            blockquote {
+                border-left: none !important;
+                border-right: 3px solid \(theme.accentColorHex) !important;
+                padding-left: 0 !important;
+                padding-right: 1.2em !important;
+            }
+
+            img, svg {
+                max-height: 60vh !important;
+                max-width: none !important;
+            }
+
+            /* 注入的章末卡片与脚注弹层保持横排可读 */
+            .dreader-chapter-end-container,
+            .dreader-socratic-container {
+                writing-mode: horizontal-tb !important;
+                -webkit-writing-mode: horizontal-tb !important;
+                position: relative !important;
+                margin-top: 3em !important;
+            }
+
+            ::-webkit-scrollbar { height: 10px; width: 10px; }
+            ::-webkit-scrollbar-thumb { background: rgba(127,127,127,0.35); border-radius: 5px; }
+            """
+        } else {
+            verticalCSS = ""
+        }
+
         return """
         html {
             -webkit-overflow-scrolling: touch !important;
@@ -491,13 +575,17 @@ struct EPUBThemeInjector {
             hyphens: auto !important;
         }
 
-        /* High-Performance Virtualization for Large Chapters */
+        \(verticalCSS)
+
+        /* High-Performance Virtualization for Large Chapters (竖排下禁用：横向分栏与 content-visibility 冲突) */
         #dreader-chapter-body > p,
         #dreader-chapter-body > div:not(.dreader-bilingual-trans):not(.dreader-bilingual-slot),
         #dreader-chapter-body > section,
         #dreader-chapter-body > blockquote {
+            \(settings.isVertical ? "content-visibility: visible;" : """
             content-visibility: auto;
             contain-intrinsic-size: 0 44px;
+            """)
         }
 
         \(fontOverrideCSS)
@@ -985,11 +1073,20 @@ struct EPUBThemeInjector {
                 setTimeout(notifySelection, 50);
             });
 
-            // Smooth Page Scrolling Function
+            // Smooth Page Scrolling Function (vertical-rl 古籍竖排时滚动轴为横向 scrollLeft)
+            window.dreaderIsVertical = function() {
+                return document.body && (getComputedStyle(document.body).writingMode || '').startsWith('vertical');
+            };
+
             window.dreaderScrollPage = function(direction) {
-                const pageHeight = window.innerHeight * 0.82;
-                const currentScroll = window.scrollY || document.documentElement.scrollTop;
-                const maxScroll = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
+                const vertical = window.dreaderIsVertical();
+                const pageAdvance = (vertical ? window.innerWidth : window.innerHeight) * 0.82;
+                const currentScroll = vertical
+                    ? (window.scrollX || document.documentElement.scrollLeft)
+                    : (window.scrollY || document.documentElement.scrollTop);
+                const maxScroll = vertical
+                    ? Math.max(0, document.documentElement.scrollWidth - window.innerWidth)
+                    : Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
 
                 if (direction > 0) {
                     if (currentScroll >= maxScroll - 30) {
@@ -998,7 +1095,12 @@ struct EPUBThemeInjector {
                         }
                         return;
                     }
-                    window.scrollBy({ top: pageHeight, behavior: 'smooth' });
+                    if (vertical) {
+                        // 竖排从右向左读：前进 = 向左滚动
+                        window.scrollBy({ left: -pageAdvance, behavior: 'smooth' });
+                    } else {
+                        window.scrollBy({ top: pageAdvance, behavior: 'smooth' });
+                    }
                 } else {
                     if (currentScroll <= 30) {
                         if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.selectionBridge) {
@@ -1006,7 +1108,11 @@ struct EPUBThemeInjector {
                         }
                         return;
                     }
-                    window.scrollBy({ top: -pageHeight, behavior: 'smooth' });
+                    if (vertical) {
+                        window.scrollBy({ left: pageAdvance, behavior: 'smooth' });
+                    } else {
+                        window.scrollBy({ top: -pageAdvance, behavior: 'smooth' });
+                    }
                 }
             };
 
@@ -1055,10 +1161,27 @@ struct EPUBThemeInjector {
                     window.dreaderScrollPage(-1);
                 } else if (e.key === 'ArrowRight') {
                     e.preventDefault();
-                    window.dreaderGoNextChapter();
+                    // 竖排（vertical-rl）下向左是前进，向右是后退；横排相反
+                    const vertical = window.dreaderIsVertical ? window.dreaderIsVertical() : false;
+                    if (vertical) {
+                        window.dreaderScrollPage(-1);
+                    } else {
+                        window.dreaderGoNextChapter();
+                    }
                 } else if (e.key === 'ArrowLeft') {
                     e.preventDefault();
-                    window.dreaderGoPrevChapter();
+                    const vertical = window.dreaderIsVertical ? window.dreaderIsVertical() : false;
+                    if (vertical) {
+                        window.dreaderScrollPage(1);
+                    } else {
+                        window.dreaderGoPrevChapter();
+                    }
+                } else if (e.key === 'ArrowDown') {
+                    const vertical = window.dreaderIsVertical ? window.dreaderIsVertical() : false;
+                    if (vertical) { e.preventDefault(); window.dreaderScrollPage(1); }
+                } else if (e.key === 'ArrowUp') {
+                    const vertical = window.dreaderIsVertical ? window.dreaderIsVertical() : false;
+                    if (vertical) { e.preventDefault(); window.dreaderScrollPage(-1); }
                 }
             });
 
@@ -1069,8 +1192,13 @@ struct EPUBThemeInjector {
                 if (scrollRAF) return;
                 scrollRAF = requestAnimationFrame(function() {
                     scrollRAF = null;
-                    const currentScroll = window.scrollY || document.documentElement.scrollTop;
-                    const maxScroll = Math.max(1, document.documentElement.scrollHeight - window.innerHeight);
+                    const vertical = window.dreaderIsVertical ? window.dreaderIsVertical() : false;
+                    const currentScroll = vertical
+                        ? (window.scrollX || document.documentElement.scrollLeft)
+                        : (window.scrollY || document.documentElement.scrollTop);
+                    const maxScroll = vertical
+                        ? Math.max(1, document.documentElement.scrollWidth - window.innerWidth)
+                        : Math.max(1, document.documentElement.scrollHeight - window.innerHeight);
                     const pct = Math.min(1.0, Math.max(0.0, currentScroll / maxScroll));
                     // Only send IPC bridge message if progress changed by at least 1% (or reached boundaries)
                     if (Math.abs(pct - lastReportedPct) >= 0.01 || (pct === 0 && lastReportedPct !== 0) || (pct === 1 && lastReportedPct !== 1)) {
@@ -1390,10 +1518,11 @@ struct EPUBThemeInjector {
                     if (endEl) endEl.innerHTML = payload.endCard;
                 }
 
-                // Instant scroll to top
+                // Instant scroll to top (horizontal for vertical-rl typesetting: origin is rightmost column)
                 window.scrollTo(0, 0);
                 document.body.scrollTop = 0;
                 document.documentElement.scrollTop = 0;
+                document.documentElement.scrollLeft = document.documentElement.scrollWidth;
 
                 // Clear any leftover selection
                 const sel = window.getSelection();

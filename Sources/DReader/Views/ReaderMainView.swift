@@ -641,6 +641,7 @@ struct ReaderMainView: View {
             .popover(isPresented: $showTypographyPopover, arrowEdge: .bottom) {
                 ReaderTypographySettingsPopover(
                     settings: vm.settings,
+                    currentBookId: vm.currentBook?.id,
                     agentName: vm.agentService.currentPreset.name,
                     isTranslating: vm.isTranslatingChapter,
                     translationProgress: vm.chapterTranslationProgress,

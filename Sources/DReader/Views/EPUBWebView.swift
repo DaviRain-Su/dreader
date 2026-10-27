@@ -135,7 +135,7 @@ struct EPUBWebView: NSViewRepresentable {
     }
 
     private var settingsSummary: String {
-        "\(settings.theme.rawValue)-\(settings.fontFamily.rawValue)-\(settings.fontSize)-\(settings.lineHeight)-\(settings.maxWidth)-\(settings.paragraphSpacing)-\(settings.isJustified)-\(settings.pageLayout.rawValue)-\(settings.isBilingualEnabled)-\(settings.chineseScriptMode.rawValue)-\(highlightsSummary)"
+        "\(settings.theme.rawValue)-\(settings.fontFamily.rawValue)-\(settings.fontSize)-\(settings.lineHeight)-\(settings.maxWidth)-\(settings.paragraphSpacing)-\(settings.isJustified)-\(settings.pageLayout.rawValue)-\(settings.isBilingualEnabled)-\(settings.chineseScriptMode.rawValue)-\(settings.isVertical ? "V" : "H")-\(highlightsSummary)"
     }
 
     // MARK: - Coordinator

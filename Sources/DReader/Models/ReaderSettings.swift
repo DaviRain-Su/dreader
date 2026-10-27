@@ -217,7 +217,61 @@ final class ReaderSettings: @unchecked Sendable {
         }
     }
 
+    // Vertical Typesetting (中文古籍竖排 right-to-left)
+    var isVertical: Bool = false
+    /// 记住每本书的竖排偏好（bookId → "1"/"0"），切书时恢复
+    private static let verticalPrefsKey = "dreader.vertical_by_book"
+
     init() {}
+
+    // MARK: - Vertical Preference (per-book persistence)
+
+    private static var verticalPrefs: [String: String] {
+        get {
+            UserDefaults.standard.string(forKey: verticalPrefsKey)?
+                .data(using: .utf8)
+                .flatMap { try? JSONDecoder().decode([String: String].self, from: $0) } ?? [:]
+        }
+        set {
+            if let data = try? JSONEncoder().encode(newValue) {
+                UserDefaults.standard.set(String(data: data, encoding: .utf8), forKey: verticalPrefsKey)
+            }
+        }
+    }
+
+    /// 读取某本书的竖排偏好（未设置时默认 false）
+    func storedVertical(for bookId: UUID) -> Bool {
+        Self.verticalPrefs[bookId.uuidString] == "1"
+    }
+
+    /// 应用某本书的竖排偏好（切书时调用）
+    func applyStoredVertical(for bookId: UUID) {
+        isVertical = storedVertical(for: bookId)
+    }
+
+    /// 切换竖排并记住（按书）
+    func toggleVertical(for bookId: UUID?) {
+        isVertical.toggle()
+        if let bookId {
+            var prefs = Self.verticalPrefs
+            prefs[bookId.uuidString] = isVertical ? "1" : "0"
+            Self.verticalPrefs = prefs
+        }
+    }
+
+    /// 古籍自动竖排：书名或作者命中古典关键词时默认开竖排（仅首次打开该书时应用）
+    static func looksLikeClassicalChinese(title: String, author: String = "") -> Bool {
+        let combined = title + author
+        let markers = [
+            "紅樓夢", "红楼梦", "三國", "三国", "水滸", "水浒", "西遊", "西游",
+            "道德經", "道德经", "論語", "论语", "孟子", "莊子", "庄子", "老子",
+            "易經", "易经", "詩經", "诗经", "左傳", "左传", "史記", "史记",
+            "資治通鑑", "资治通鉴", "唐詩", "唐诗", "宋詞", "宋词", "古文觀止", "古文观止",
+            "聊齋", "聊斋", "儒林外史", "鏡花緣", "镜花缘", "封神", "金瓶梅",
+            "演義", "演义", "志異", "志异", "傳", "禮記", "礼记", "尚書", "书经"
+        ]
+        return markers.contains { combined.contains($0) }
+    }
 }
 
 extension Color {

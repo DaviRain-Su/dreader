@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ReaderTypographySettingsPopover: View {
     @Bindable var settings: ReaderSettings
+    var currentBookId: UUID? = nil
     var agentName: String = "AI 伴读"
     var isTranslating: Bool = false
     var translationProgress: Double = 0.0
@@ -204,6 +205,21 @@ struct ReaderTypographySettingsPopover: View {
                 Text("两端对齐排版 (优质齐头齐尾排印)")
                     .font(.system(size: 11.5))
             }
+
+            // Vertical Typesetting (中文古籍竖排)
+            Toggle(isOn: Binding(
+                get: { settings.isVertical },
+                set: { _ in settings.toggleVertical(for: currentBookId) }
+            )) {
+                HStack(spacing: 4) {
+                    Image(systemName: "text.alignright")
+                        .foregroundStyle(.purple)
+                    Text("竖排排版 (中文古籍传统版式)")
+                        .font(.system(size: 11.5))
+                }
+            }
+            .disabled(currentBookId == nil)
+            .help(currentBookId == nil ? "打开一本书后可用" : "切换竖排/横排，按书记忆")
 
             // Zen Mode
             Toggle(isOn: $settings.isZenMode) {
