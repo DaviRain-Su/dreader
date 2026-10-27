@@ -79,6 +79,7 @@ struct ReaderMainView: View {
             OnlineBookHubModalView(
                 onBookDownloadedAndImport: { localURL in
                     Task { @MainActor in
+                        vm.showOnlineBookHub = false
                         await vm.openEPUB(url: localURL)
                     }
                 },

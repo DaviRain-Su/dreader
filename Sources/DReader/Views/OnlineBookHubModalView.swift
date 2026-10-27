@@ -41,6 +41,27 @@ struct OnlineBookHubModalView: View {
                 }
 
                 searchAndFilterBar
+
+                if let err = errorMessage {
+                    HStack(spacing: 8) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.orange)
+                        Text(err)
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(.primary)
+                        Spacer()
+                        Button {
+                            errorMessage = nil
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 7)
+                    .background(Color.orange.opacity(0.12))
+                }
             }
 
             Divider()

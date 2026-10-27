@@ -178,7 +178,7 @@ final class SampleBookGenerator: Sendable {
     }
 
     // MARK: - Cover Image Renderer
-    private static func renderCoverImage(
+    static func renderCoverImage(
         mainTitle: String,
         subTitle: String,
         author: String,
@@ -276,7 +276,7 @@ final class SampleBookGenerator: Sendable {
     }
 
     // MARK: - Builder
-    private func buildEPUB(
+    func buildEPUB(
         targetURL: URL,
         bookId: String,
         title: String,

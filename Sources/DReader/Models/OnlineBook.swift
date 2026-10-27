@@ -40,6 +40,9 @@ struct OnlineBookItem: Identifiable, Sendable {
     var source: OnlineBookSource
     var coverURL: URL?
     var downloadURL: URL?
+    var candidateURLs: [URL]
+    var gutenbergID: String?
+    var internetArchiveID: String?
     var fileExtension: String       // e.g. "epub"
     var fileSizeFormatted: String?  // e.g. "1.8 MB"
     var publishYear: String?        // e.g. "1854"
@@ -54,6 +57,9 @@ struct OnlineBookItem: Identifiable, Sendable {
         source: OnlineBookSource,
         coverURL: URL? = nil,
         downloadURL: URL? = nil,
+        candidateURLs: [URL] = [],
+        gutenbergID: String? = nil,
+        internetArchiveID: String? = nil,
         fileExtension: String = "epub",
         fileSizeFormatted: String? = nil,
         publishYear: String? = nil,
@@ -67,6 +73,9 @@ struct OnlineBookItem: Identifiable, Sendable {
         self.source = source
         self.coverURL = coverURL
         self.downloadURL = downloadURL
+        self.candidateURLs = candidateURLs.isEmpty ? (downloadURL.map { [$0] } ?? []) : candidateURLs
+        self.gutenbergID = gutenbergID
+        self.internetArchiveID = internetArchiveID
         self.fileExtension = fileExtension
         self.fileSizeFormatted = fileSizeFormatted
         self.publishYear = publishYear
