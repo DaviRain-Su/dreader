@@ -113,6 +113,7 @@ struct ReviewSessionModalView: View {
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
+                    sourceBadge(for: highlight)
                     Spacer()
                     HStack(spacing: 3) {
                         Image(systemName: lane.symbol)
@@ -236,6 +237,32 @@ struct ReviewSessionModalView: View {
         }
         .buttonStyle(.plain)
         .help(scoreOf == 1 ? "遗忘：降回复习队列（间隔重置）" : scoreOf == 3 ? "模糊：留在当前半衰期通道" : "记住：进入更长半衰期通道")
+    }
+
+    // MARK: - 来源徽章（本地划线 / 微信读书 / AI 伴读解读）
+
+    @ViewBuilder
+    private func sourceBadge(for highlight: Highlight) -> some View {
+        let (icon, label, color): (String, String, Color) = {
+            if highlight.isFromWeChatRead {
+                return ("quote.bubble.fill", "微信读书", Color(hex: "#07C160"))
+            } else if highlight.source == "ai_companion" {
+                return ("sparkles", "AI 伴读", .purple)
+            } else {
+                return ("hand.draw", "本地划线", .orange)
+            }
+        }()
+        HStack(spacing: 2.5) {
+            Image(systemName: icon)
+                .font(.system(size: 8))
+            Text(label)
+                .font(.system(size: 9, weight: .medium))
+        }
+        .foregroundStyle(color)
+        .padding(.horizontal, 5)
+        .padding(.vertical, 2)
+        .background(color.opacity(0.1))
+        .clipShape(Capsule())
     }
 
     private func recallPrompt(for highlight: Highlight) -> String {

@@ -678,25 +678,34 @@ struct ReaderMainView: View {
                 helpText: vm.isCurrentChapterBookmarked() ? "移除当前书签 (⌘+D)" : "添加折角书签 (⌘+D)"
             )
 
-            // Reading Streak Pill
+            // Reading Streak Pill（目标接近达成变橙红、达成变绿打勾）
             Button {
                 vm.showReadingInsights = true
             } label: {
                 HStack(spacing: 3) {
-                    Image(systemName: "flame.fill")
-                        .font(.system(size: 10))
-                        .foregroundStyle(.orange)
+                    if vm.readingStats.todayMinutes >= vm.readingStats.dailyGoalMinutes {
+                        Image(systemName: "checkmark.circle.fill")
+                            .font(.system(size: 10))
+                            .foregroundStyle(.green)
+                    } else {
+                        Image(systemName: "flame.fill")
+                            .font(.system(size: 10))
+                            .foregroundStyle(.orange)
+                    }
                     Text("\(vm.readingStats.currentStreakDays)天")
                         .font(.system(size: 11, weight: .bold))
                         .foregroundStyle(Color.primary.opacity(0.85))
                 }
                 .padding(.horizontal, 7)
                 .frame(height: 28)
-                .background(Color.orange.opacity(0.08))
+                .background(goalPillColor.opacity(0.1))
                 .clipShape(Capsule())
+                .overlay(
+                    Capsule().stroke(goalPillColor.opacity(0.35), lineWidth: 0.6)
+                )
             }
             .buttonStyle(.plain)
-            .help("阅读统计与成就打卡")
+            .help(vm.readingStats.todayMinutes >= vm.readingStats.dailyGoalMinutes ? "今日目标已达成！查看阅读统计" : "阅读统计与成就打卡")
 
             // Zen Mode Quick Toggle Button
             AppleToolbarButton(
@@ -750,6 +759,15 @@ struct ReaderMainView: View {
     }
 
     // MARK: - Reader Content Area
+
+    /// 顶栏连续天数胶囊的状态色：<70% 目标为橙、≥70% 为橙红、达成变绿
+    private var goalPillColor: Color {
+        let stats = vm.readingStats
+        if stats.todayMinutes >= stats.dailyGoalMinutes { return .green }
+        let ratio = stats.dailyGoalMinutes > 0 ? Double(stats.todayMinutes) / Double(stats.dailyGoalMinutes) : 0
+        return ratio >= 0.7 ? Color(hex: "#E06C4A") : .orange
+    }
+
     private var readerContentArea: some View {
         Group {
             if vm.isLoadingBook {

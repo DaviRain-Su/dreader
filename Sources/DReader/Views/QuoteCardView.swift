@@ -7,6 +7,7 @@ enum QuoteCardTheme: String, CaseIterable, Identifiable {
     case gray = "极简亚麻灰"
     case dark = "暖夜深褐"
     case oled = "黑曜极夜"
+    case classicalVertical = "古典竖排"
 
     var id: String { rawValue }
 
@@ -22,6 +23,8 @@ enum QuoteCardTheme: String, CaseIterable, Identifiable {
             return [Color(hex: "#23211F"), Color(hex: "#1A1918")]
         case .oled:
             return [Color(hex: "#161617"), Color(hex: "#0E0E0F")]
+        case .classicalVertical:
+            return [Color(hex: "#F6EFDF"), Color(hex: "#EFE6D0")]
         }
     }
 
@@ -32,6 +35,7 @@ enum QuoteCardTheme: String, CaseIterable, Identifiable {
         case .gray: return Color(hex: "#222120")
         case .dark: return Color(hex: "#E5DFD5")
         case .oled: return Color(hex: "#EAEAEB")
+        case .classicalVertical: return Color(hex: "#33261C")
         }
     }
 
@@ -42,6 +46,7 @@ enum QuoteCardTheme: String, CaseIterable, Identifiable {
         case .gray: return Color(hex: "#68686D")
         case .dark: return Color(hex: "#998F84")
         case .oled: return Color(hex: "#8E8E93")
+        case .classicalVertical: return Color(hex: "#8A7358")
         }
     }
 
@@ -52,11 +57,16 @@ enum QuoteCardTheme: String, CaseIterable, Identifiable {
         case .gray: return Color(hex: "#2563EB")
         case .dark: return Color(hex: "#D4AF37")
         case .oled: return Color(hex: "#A78BFA")
+        case .classicalVertical: return Color(hex: "#A83226")
         }
     }
 
     var isDark: Bool {
         self == .dark || self == .oled
+    }
+
+    var isVertical: Bool {
+        self == .classicalVertical
     }
 }
 
@@ -179,7 +189,108 @@ struct QuoteCardView: View {
     }
 
     // MARK: - Core Aesthetic Quote Card Content
+    @ViewBuilder
     private var cardContent: some View {
+        if selectedTheme.isVertical {
+            classicalVerticalCard
+        } else {
+            horizontalCard
+        }
+    }
+
+    // MARK: 古典竖排卡（右起竖文 · 朱砂印章落款）
+
+    private var classicalVerticalCard: some View {
+        HStack(alignment: .top, spacing: 14) {
+            // 最左：印章与出处（竖排卡落款在左下）
+            VStack(spacing: 8) {
+                Spacer()
+
+                // 朱砂印章式 DReader 落款
+                Text("读\u{3000}书")
+                    .font(.system(size: 12, weight: .bold, design: .serif))
+                    .foregroundStyle(.white)
+                    .frame(width: 26, height: 52)
+                    .background(
+                        RoundedRectangle(cornerRadius: 4, style: .continuous)
+                            .fill(Color(hex: "#A83226").opacity(0.88))
+                    )
+                    .shadow(color: Color(hex: "#A83226").opacity(0.3), radius: 3, x: 0, y: 1.5)
+
+                Text("《\(highlight.bookTitle.isEmpty ? (book?.title ?? "未知书目") : highlight.bookTitle)》")
+                    .font(.system(size: 10.5, weight: .semibold, design: .serif))
+                    .foregroundStyle(selectedTheme.secondaryColor)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                Text(book?.author ?? "未知作者")
+                    .font(.system(size: 9, design: .serif))
+                    .foregroundStyle(selectedTheme.secondaryColor.opacity(0.75))
+                    .lineLimit(1)
+            }
+            .frame(width: 86)
+
+            // 正文：竖排从右向左
+            VStack(spacing: 10) {
+                Text(highlight.text)
+                    .font(.system(size: 15.5, weight: .regular, design: .serif))
+                    .foregroundStyle(selectedTheme.textColor)
+                    .lineSpacing(8)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxHeight: .infinity, alignment: .top)
+
+                if includeThought, let note = highlight.note, !note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    Text("💭 \(note)")
+                        .font(.system(size: 11.5, design: .serif))
+                        .foregroundStyle(selectedTheme.textColor.opacity(0.85))
+                        .lineSpacing(4)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                Text(highlight.chapterTitle)
+                    .font(.system(size: 10, design: .serif))
+                    .foregroundStyle(selectedTheme.secondaryColor.opacity(0.85))
+                    .lineLimit(1)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .environment(\.layoutDirection, .rightToLeft) // 视觉上从右往左排列
+
+            // 最右：开卷语与装饰（右起首列）
+            VStack(spacing: 6) {
+                Text("“")
+                    .font(.system(size: 30, weight: .bold, design: .serif))
+                    .foregroundStyle(selectedTheme.accentColor.opacity(0.55))
+
+                Rectangle()
+                    .fill(selectedTheme.accentColor.opacity(0.35))
+                    .frame(width: 1.2, height: 46)
+
+                Text("書")
+                    .font(.system(size: 13, weight: .medium, design: .serif))
+                    .foregroundStyle(selectedTheme.accentColor.opacity(0.7))
+            }
+        }
+        .padding(20)
+        .frame(width: 380, height: 300)
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(
+                    LinearGradient(
+                        colors: selectedTheme.bgColors,
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+                .shadow(color: Color.black.opacity(0.22), radius: 18, x: 0, y: 8)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .stroke(Color(hex: "#A83226").opacity(0.22), lineWidth: 0.8)
+                )
+        )
+    }
+
+    private var horizontalCard: some View {
         VStack(alignment: .leading, spacing: 14) {
             // Top Ornament & Chapter Header
             HStack(alignment: .top) {
