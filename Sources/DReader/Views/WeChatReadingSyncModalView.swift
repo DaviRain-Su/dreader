@@ -482,7 +482,7 @@ struct WeChatReadingSyncModalView: View {
                     }
 
                     Button {
-                        showQRLogin = true
+                        WeReadLoginWindowController.present()
                     } label: {
                         HStack(spacing: 4) {
                             Image(systemName: "qrcode")
@@ -535,15 +535,10 @@ struct WeChatReadingSyncModalView: View {
         .sheet(isPresented: $showCookieEditor) {
             cookieEditorSheet
         }
-        .sheet(isPresented: $showQRLogin) {
-            qrLoginSheet
-        }
     }
 
     @State private var showCookieEditor: Bool = false
     @State private var importCookieInput: String = ""
-    @State private var showQRLogin: Bool = false
-    @State private var loginSucceeded: Bool = false
 
     private var cookieHint: (hasKey: Bool, label: String, current: String)? {
         let ck = WeReadContentService.shared.cookie
@@ -610,63 +605,6 @@ struct WeChatReadingSyncModalView: View {
         }
         .padding(18)
         .frame(width: 520)
-    }
-
-    /// 内嵌扫码登录大窗口：独立 sheet 展开完整 weread 网页，扫码后自动捕获 Cookie 关闭
-    private var qrLoginSheet: some View {
-        VStack(spacing: 12) {
-            HStack {
-                Text("微信读书 · 扫码登录")
-                    .font(.system(size: 14, weight: .bold))
-                Spacer()
-                if loginSucceeded {
-                    HStack(spacing: 5) {
-                        Image(systemName: "checkmark.circle.fill")
-                            .font(.system(size: 13))
-                            .foregroundStyle(Color.green)
-                        Text("登录成功，Cookie 已自动保存")
-                            .font(.system(size: 12, weight: .medium))
-                            .foregroundStyle(.primary)
-                    }
-                }
-                Button {
-                    showQRLogin = false
-                } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .font(.system(size: 17))
-                        .foregroundStyle(.secondary)
-                }
-                .buttonStyle(.plain)
-            }
-            .padding(.horizontal, 18)
-
-            WeReadLoginWebView { _ in
-                loginSucceeded = true
-                // 稍作停留让用户看到成功提示，再自动收起
-                Task { @MainActor in
-                    try? await Task.sleep(nanoseconds: 1_200_000_000)
-                    guard !Task.isCancelled else { return }
-                    showQRLogin = false
-                }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .clipShape(RoundedRectangle(cornerRadius: 8))
-            .overlay(
-                RoundedRectangle(cornerRadius: 8)
-                    .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
-            )
-            .padding(.horizontal, 18)
-
-            Text("用微信扫码，或点击页面上的「微信授权」按钮。登录成功后 Cookie 自动保存，此窗口会自动关闭。")
-                .font(.system(size: 10.5))
-                .foregroundStyle(.secondary.opacity(0.85))
-                .padding(.bottom, 12)
-        }
-        .frame(width: 780, height: 660)
-        .onDisappear {
-            // 用户中途手动关闭：下次打开时重置成功标记
-            loginSucceeded = false
-        }
     }
 
     // MARK: - Search and Filter Bar
@@ -1107,7 +1045,7 @@ struct WeChatReadingSyncModalView: View {
         guard !bookId.isEmpty else { return }
         if !WeReadContentService.shared.hasCookie {
             errorMessage = "尚未登录：请先扫码登录微信读书"
-            showQRLogin = true
+            WeReadLoginWindowController.present()
             return
         }
 
