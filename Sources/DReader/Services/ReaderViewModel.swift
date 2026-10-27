@@ -51,18 +51,8 @@ final class ReaderViewModel: @unchecked Sendable {
             }
         }
 
-        // 2. Sample books
-        let sampleURLs = await SampleBookGenerator.shared.generateAllSampleBooksIfNeeded()
-        for url in sampleURLs {
-            if let book = try? await EPUBParser.shared.parse(fileURL: url) {
-                if let idx = books.firstIndex(where: { $0.title == book.title }) {
-                    books[idx] = book
-                } else {
-                    books.append(book)
-                }
-                preloadAllChapters(for: book)
-            }
-        }
+        // 内置 demo 书（Walden/Little_Prince/LuXun）已按用户要求停用：书架只保留真实藏书。
+        // SampleBookGenerator 保留在代码库中，需要时手动调用。
 
         isLoadingBook = false
         // Keep isViewingBookshelf = true so the user starts at the bookshelf!
