@@ -195,6 +195,10 @@ struct WeChatReadingSyncModalView: View {
                 refreshNotebooksList()
             }
         }
+        // 扫码登录成功后立即把 Cookie 状态点刷成绿色（Cookie 存取发 cookieDidChangeNotification）
+        .onReceive(NotificationCenter.default.publisher(for: WeReadContentService.cookieDidChangeNotification)) { _ in
+            cookieStateTick += 1
+        }
     }
 
     // MARK: - Header Bar
@@ -539,13 +543,16 @@ struct WeChatReadingSyncModalView: View {
 
     @State private var showCookieEditor: Bool = false
     @State private var importCookieInput: String = ""
+    /// Cookie 变更信号量：cookieHint 读取它触发 SwiftUI 重算状态点
+    @State private var cookieStateTick: Int = 0
 
     private var cookieHint: (hasKey: Bool, label: String, current: String)? {
+        _ = cookieStateTick // 订阅变更信号：扫码登录成功后状态点立即转绿
         let ck = WeReadContentService.shared.cookie
         let hasKey = !ck.isEmpty
         let label = hasKey
             ? "Cookie 已配置 (\(ck.count) 字符)"
-            : "Cookie 未配置 — 导入正文需要网页版登录态"
+            : "Cookie 未配置 — 点「扫码登录」即可完成网页版登录"
         return (hasKey, label, ck)
     }
 

@@ -54,11 +54,15 @@ final class WeReadContentService: @unchecked Sendable {
 
     // MARK: - Cookie
 
+    /// Cookie 变更通知（object 不携带数据）：同步面板据此实时刷新登录状态点
+    static let cookieDidChangeNotification = Notification.Name("dreader.weread.cookieDidChange")
+
     var cookie: String {
         get { UserDefaults.standard.string(forKey: cookieKey) ?? "" }
         set {
             let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
             UserDefaults.standard.set(trimmed, forKey: cookieKey)
+            NotificationCenter.default.post(name: Self.cookieDidChangeNotification, object: nil)
         }
     }
     var hasCookie: Bool { !cookie.isEmpty }
