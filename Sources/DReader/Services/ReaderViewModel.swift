@@ -14,8 +14,8 @@ final class ReaderViewModel: @unchecked Sendable {
 
     var isViewingBookshelf: Bool = true // Default to showing Bookshelf on launch
     var sidebarTab: SidebarTab = .toc
-    var isSidebarVisible: Bool = true
-    var isAIPanelVisible: Bool = true
+    var isSidebarVisible: Bool = false
+    var isAIPanelVisible: Bool = false
     var isLoadingBook: Bool = false
     var errorMessage: String?
     var chapterRenderID: UUID = UUID()
@@ -60,6 +60,7 @@ final class ReaderViewModel: @unchecked Sendable {
         withAnimation(.easeInOut(duration: 0.25)) {
             currentBook = book
             isViewingBookshelf = false
+            isSidebarVisible = false
             selectionManager.clear()
         }
         preloadAllChapters(for: book)

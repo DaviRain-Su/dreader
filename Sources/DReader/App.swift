@@ -7,8 +7,9 @@ struct DReaderApp: App {
     var body: some Scene {
         WindowGroup {
             ReaderMainView(vm: viewModel)
-                .frame(minWidth: 960, minHeight: 640)
+                .frame(minWidth: 980, idealWidth: 1260, minHeight: 680, idealHeight: 820)
         }
+        .defaultSize(width: 1260, height: 820)
         .windowStyle(.titleBar)
         .windowToolbarStyle(.unified(showsTitle: false))
         .commands {

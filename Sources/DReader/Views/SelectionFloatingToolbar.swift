@@ -1,6 +1,7 @@
 import SwiftUI
 import AppKit
 
+/// WeChat Read & Apple Books Style Ultra-Compact Floating Selection Toolbar
 struct SelectionFloatingToolbar: View {
     let selection: SelectionInfo
     let onAskAI: (String) -> Void
@@ -11,7 +12,6 @@ struct SelectionFloatingToolbar: View {
     var onLookUp: ((String) -> Void)? = nil
     let onDismiss: () -> Void
 
-    @State private var showColorPicker = false
     @State private var copyFeedback = false
 
     private let highlightColors: [(name: String, hex: String, color: Color)] = [
@@ -23,132 +23,140 @@ struct SelectionFloatingToolbar: View {
     ]
 
     var body: some View {
-        HStack(spacing: 4) {
-            // Write Thought button (WeChat Read style)
-            Button {
-                onWriteThought()
-            } label: {
-                Label("写想法", systemImage: "square.and.pencil")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(.indigo)
-            }
-            .buttonStyle(ToolbarButtonStyle())
-            .help("划线并记录读书思考与笔记")
-
-            // Quote Card button (WeChat Read aesthetic card)
-            Button {
-                onMakeQuoteCard()
-            } label: {
-                Label("卡片", systemImage: "photo.artframe")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(.purple)
-            }
-            .buttonStyle(ToolbarButtonStyle())
-            .help("制作精美金句书摘卡片")
-
-            // Dictionary / Lexical Look Up button
-            Button {
-                onLookUp?(selection.text)
-            } label: {
-                Label("查词", systemImage: "character.book.closed")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(.teal)
-            }
-            .buttonStyle(ToolbarButtonStyle())
-            .help("系统朗读发音并调用 AI 展开词典深度释义")
-
-            // Ask AI button
-            Button {
-                onAskAI(selection.text)
-            } label: {
-                Label("问 AI", systemImage: "sparkles")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(.purple)
-            }
-            .buttonStyle(ToolbarButtonStyle())
-            .help("将选中文本发送给 AI 深度讨论")
-
-            Divider()
-                .frame(height: 14)
-                .opacity(0.3)
-
-            // AI Explain
-            Button {
-                onQuickPrompt("explain", selection.text)
-            } label: {
-                Label("解释", systemImage: "lightbulb.fill")
-                    .font(.system(size: 12))
-            }
-            .buttonStyle(ToolbarButtonStyle())
-            .help("让 AI 深入解释选中文本与背景")
-
-            // AI Summarize
-            Button {
-                onQuickPrompt("summarize", selection.text)
-            } label: {
-                Label("总结", systemImage: "text.quote")
-                    .font(.system(size: 12))
-            }
-            .buttonStyle(ToolbarButtonStyle())
-            .help("提炼核心观点与关键信息")
-
-            // AI Translate
-            Button {
-                onQuickPrompt("translate", selection.text)
-            } label: {
-                Label("翻译", systemImage: "character.book.closed.fill")
-                    .font(.system(size: 12))
-            }
-            .buttonStyle(ToolbarButtonStyle())
-            .help("精准优雅的上下文对照翻译")
-
-            Divider()
-                .frame(height: 14)
-                .opacity(0.3)
-
-            // Highlighting Color Palette
-            HStack(spacing: 5) {
+        HStack(spacing: 5) {
+            // 1. Color Palette Dots (Click to instant highlight)
+            HStack(spacing: 4) {
                 ForEach(highlightColors, id: \.hex) { item in
                     Circle()
                         .fill(item.color)
-                        .frame(width: 16, height: 16)
-                        .overlay(Circle().stroke(Color.primary.opacity(0.25), lineWidth: 0.8))
-                        .shadow(color: item.color.opacity(0.35), radius: 2, x: 0, y: 1)
+                        .frame(width: 14, height: 14)
+                        .overlay(Circle().stroke(Color.primary.opacity(0.2), lineWidth: 0.6))
+                        .shadow(color: item.color.opacity(0.3), radius: 1.5, y: 0.5)
                         .contentShape(Circle())
                         .onTapGesture {
                             onHighlight(item.hex)
                         }
-                        .help("使用\(item.name)划线高亮")
+                        .help("划线 (\(item.name))")
                 }
             }
-            .padding(.horizontal, 4)
+            .padding(.horizontal, 2)
 
             Divider()
-                .frame(height: 14)
+                .frame(height: 12)
                 .opacity(0.3)
 
-            // Copy button
+            // 2. Write Thought Button
             Button {
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(selection.text, forType: .string)
-                copyFeedback = true
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
-                    copyFeedback = false
+                onWriteThought()
+            } label: {
+                HStack(spacing: 3) {
+                    Image(systemName: "square.and.pencil")
+                        .font(.system(size: 11))
+                    Text("想法")
+                        .font(.system(size: 11.5, weight: .medium))
+                }
+                .foregroundStyle(.indigo)
+            }
+            .buttonStyle(ToolbarCompactButtonStyle())
+            .help("划线并记录读书思考与笔记")
+
+            // 3. Quote Card Button
+            Button {
+                onMakeQuoteCard()
+            } label: {
+                HStack(spacing: 3) {
+                    Image(systemName: "photo.artframe")
+                        .font(.system(size: 11))
+                    Text("卡片")
+                        .font(.system(size: 11.5, weight: .medium))
+                }
+                .foregroundStyle(.purple)
+            }
+            .buttonStyle(ToolbarCompactButtonStyle())
+            .help("制作精美金句书摘卡片")
+
+            // 4. Dictionary Look Up Button
+            Button {
+                onLookUp?(selection.text)
+            } label: {
+                HStack(spacing: 3) {
+                    Image(systemName: "character.book.closed")
+                        .font(.system(size: 11))
+                    Text("查词")
+                        .font(.system(size: 11.5, weight: .medium))
+                }
+                .foregroundStyle(.teal)
+            }
+            .buttonStyle(ToolbarCompactButtonStyle())
+            .help("发音朗读并调用 AI 展开权威词典深度释义")
+
+            // 5. Ask AI Button
+            Button {
+                onAskAI(selection.text)
+            } label: {
+                HStack(spacing: 3) {
+                    Image(systemName: "sparkles")
+                        .font(.system(size: 11, weight: .bold))
+                    Text("问AI")
+                        .font(.system(size: 11.5, weight: .semibold))
+                }
+                .foregroundStyle(.purple)
+            }
+            .buttonStyle(ToolbarCompactButtonStyle())
+            .help("将选中文本发送给伴读 Agent 深度讨论")
+
+            Divider()
+                .frame(height: 12)
+                .opacity(0.3)
+
+            // 6. More Actions Menu (Copy, Explain, Summarize, Translate)
+            Menu {
+                Button {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(selection.text, forType: .string)
+                    copyFeedback = true
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+                        copyFeedback = false
+                    }
+                } label: {
+                    Label("复制文本", systemImage: "doc.on.doc")
+                }
+
+                Divider()
+
+                Button {
+                    onQuickPrompt("explain", selection.text)
+                } label: {
+                    Label("AI 深度解释", systemImage: "lightbulb.fill")
+                }
+
+                Button {
+                    onQuickPrompt("summarize", selection.text)
+                } label: {
+                    Label("AI 提炼观点", systemImage: "text.quote")
+                }
+
+                Button {
+                    onQuickPrompt("translate", selection.text)
+                } label: {
+                    Label("AI 上下文精译", systemImage: "character.book.closed.fill")
                 }
             } label: {
-                Image(systemName: copyFeedback ? "checkmark" : "doc.on.doc")
-                    .font(.system(size: 11.5))
+                Image(systemName: copyFeedback ? "checkmark" : "ellipsis")
+                    .font(.system(size: 11, weight: .bold))
                     .foregroundStyle(copyFeedback ? .green : .secondary)
+                    .frame(width: 20, height: 20)
+                    .contentShape(Rectangle())
             }
-            .buttonStyle(ToolbarButtonStyle())
-            .help("复制文本")
+            .menuStyle(.borderlessButton)
+            .help("更多操作 (复制 / AI解释 / 总结 / 翻译)")
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
+        .padding(.horizontal, 9)
+        .padding(.vertical, 5)
         .background(
             Capsule()
                 .fill(.ultraThinMaterial)
-                .shadow(color: .black.opacity(0.22), radius: 14, x: 0, y: 5)
+                .shadow(color: .black.opacity(0.2), radius: 12, x: 0, y: 4)
                 .overlay(
                     Capsule()
                         .stroke(Color.white.opacity(0.28), lineWidth: 0.6)
@@ -157,15 +165,15 @@ struct SelectionFloatingToolbar: View {
     }
 }
 
-private struct ToolbarButtonStyle: ButtonStyle {
+private struct ToolbarCompactButtonStyle: ButtonStyle {
     @State private var isHovering = false
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .padding(.horizontal, 6)
-            .padding(.vertical, 4)
+            .padding(.horizontal, 5)
+            .padding(.vertical, 3.5)
             .background(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                RoundedRectangle(cornerRadius: 5, style: .continuous)
                     .fill(isHovering ? Color.primary.opacity(0.08) : Color.clear)
             )
             .scaleEffect(configuration.isPressed ? 0.96 : 1.0)

@@ -113,7 +113,7 @@ struct AIChatPanel: View {
             // Input Bar
             inputBar
         }
-        .frame(minWidth: 320, idealWidth: 360, maxWidth: 460)
+        .frame(minWidth: 280, idealWidth: 320, maxWidth: 360)
         .background(.ultraThinMaterial)
         .sheet(isPresented: $showSettingsSheet) {
             AIAgentSettingsSheet(agentService: agentService)
@@ -129,84 +129,103 @@ struct AIChatPanel: View {
 
     // MARK: - Header
     private var headerBar: some View {
-        HStack(spacing: 8) {
-            // Role Picker Dropdown
-            Menu {
-                ForEach(AIAgentRole.allCases) { role in
-                    Button {
-                        agentService.role = role
-                    } label: {
-                        Label(role.rawValue, systemImage: role.icon)
+        HStack(spacing: 6) {
+            // Title & Role Chip
+            HStack(spacing: 5) {
+                Image(systemName: "sparkles")
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(.purple)
+
+                Text("AI 伴读")
+                    .font(.system(size: 13, weight: .bold))
+
+                Menu {
+                    ForEach(AIAgentRole.allCases) { role in
+                        Button {
+                            agentService.role = role
+                        } label: {
+                            Label(role.rawValue, systemImage: role.icon)
+                        }
                     }
+                } label: {
+                    HStack(spacing: 2) {
+                        Text(agentService.role.rawValue)
+                            .font(.system(size: 10.5, weight: .medium))
+                            .foregroundStyle(.purple)
+                        Image(systemName: "chevron.down")
+                            .font(.system(size: 8))
+                            .foregroundStyle(.purple.opacity(0.8))
+                    }
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2.5)
+                    .background(Color.purple.opacity(0.1))
+                    .clipShape(Capsule())
                 }
-            } label: {
-                HStack(spacing: 5) {
-                    Image(systemName: agentService.role.icon)
-                        .foregroundStyle(.purple)
-                    Text(agentService.role.rawValue)
-                        .font(.system(size: 13, weight: .semibold))
-                    Image(systemName: "chevron.down")
-                        .font(.system(size: 9, weight: .semibold))
-                        .foregroundStyle(.secondary)
-                }
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .background(Color.primary.opacity(0.06))
-                .clipShape(RoundedRectangle(cornerRadius: 6))
+                .buttonStyle(.plain)
             }
-            .buttonStyle(.plain)
 
             Spacer()
 
-            // Provider / Model Status indicator
+            // Agent Status Badge
             Button {
                 showSettingsSheet = true
             } label: {
-                HStack(spacing: 5) {
+                HStack(spacing: 4) {
                     Circle()
                         .fill(connectionStatusColor)
-                        .frame(width: 7, height: 7)
-
-                    Text(agentService.selectedModel)
-                        .font(.system(size: 11))
+                        .frame(width: 6, height: 6)
+                    Text(agentService.currentPreset.name)
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(.secondary)
                         .lineLimit(1)
-                        .foregroundStyle(.secondary)
-
-                    Image(systemName: "slider.horizontal.3")
-                        .font(.system(size: 10))
-                        .foregroundStyle(.secondary)
                 }
                 .padding(.horizontal, 6)
-                .padding(.vertical, 3)
+                .padding(.vertical, 2.5)
                 .background(Color.primary.opacity(0.04))
-                .clipShape(RoundedRectangle(cornerRadius: 4))
+                .clipShape(Capsule())
             }
             .buttonStyle(.plain)
-            .help("配置本地 AI Agent 与模型")
+            .help("切换伴读 Agent 与模型配置")
 
-            // Clear conversation
-            Button {
-                messages.removeAll()
-                currentStreamingAnswer = ""
+            // More Options Menu (Clear, Settings)
+            Menu {
+                Button {
+                    showSettingsSheet = true
+                } label: {
+                    Label("Agent 服务设置...", systemImage: "slider.horizontal.3")
+                }
+
+                Divider()
+
+                Button {
+                    messages.removeAll()
+                    currentStreamingAnswer = ""
+                } label: {
+                    Label("清空当前对话", systemImage: "trash")
+                }
             } label: {
-                Image(systemName: "arrow.counterclockwise")
+                Image(systemName: "ellipsis.circle")
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
+                    .frame(width: 20, height: 20)
             }
-            .buttonStyle(.plain)
-            .help("清空当前对话")
+            .menuStyle(.borderlessButton)
+            .help("更多伴读选项")
 
-            // Close
+            // Close Button
             Button(action: onClose) {
-                Image(systemName: "sidebar.right")
-                    .font(.system(size: 12))
+                Image(systemName: "xmark")
+                    .font(.system(size: 10, weight: .bold))
                     .foregroundStyle(.secondary)
+                    .frame(width: 20, height: 20)
+                    .background(Color.primary.opacity(0.04))
+                    .clipShape(Circle())
             }
             .buttonStyle(.plain)
-            .help("折叠 AI 讨论面板")
+            .help("折叠 AI 伴读面板")
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
     }
 
     private var connectionStatusColor: Color {
@@ -220,37 +239,37 @@ struct AIChatPanel: View {
 
     // MARK: - Scope Selector Bar
     private var scopeSelectorBar: some View {
-        HStack(spacing: 5) {
-            Text("语境:")
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(.secondary)
-
-            ForEach(AISearchScope.allCases) { scope in
-                Button {
-                    withAnimation(.easeInOut(duration: 0.14)) {
-                        searchScope = scope
+        HStack {
+            HStack(spacing: 2) {
+                ForEach(AISearchScope.allCases) { scope in
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.14)) {
+                            searchScope = scope
+                        }
+                    } label: {
+                        HStack(spacing: 3) {
+                            Image(systemName: scope.icon)
+                                .font(.system(size: 8.5))
+                            Text(scope.rawValue)
+                                .font(.system(size: 10, weight: searchScope == scope ? .semibold : .regular))
+                        }
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .background(searchScope == scope ? Color.purple.opacity(0.18) : Color.clear)
+                        .foregroundStyle(searchScope == scope ? Color.purple : Color.secondary)
+                        .clipShape(Capsule())
                     }
-                } label: {
-                    HStack(spacing: 3) {
-                        Image(systemName: scope.icon)
-                            .font(.system(size: 9))
-                        Text(scope.rawValue)
-                            .font(.system(size: 10.5, weight: searchScope == scope ? .semibold : .regular))
-                    }
-                    .padding(.horizontal, 7)
-                    .padding(.vertical, 3.5)
-                    .background(searchScope == scope ? Color.purple.opacity(0.15) : Color.primary.opacity(0.04))
-                    .foregroundStyle(searchScope == scope ? Color.purple : Color.secondary)
-                    .clipShape(Capsule())
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
             }
+            .padding(2)
+            .background(Color.primary.opacity(0.04))
+            .clipShape(Capsule())
 
             Spacer()
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 6)
-        .background(Color.primary.opacity(0.02))
+        .padding(.horizontal, 12)
+        .padding(.vertical, 4)
     }
 
     // MARK: - Active Quote Banner

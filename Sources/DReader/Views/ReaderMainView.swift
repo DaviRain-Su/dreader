@@ -147,129 +147,144 @@ struct ReaderMainView: View {
                             .frame(maxWidth: .infinity, alignment: .topTrailing)
                         }
 
-                        // Floating Selection Toolbar
-                        if let selection = vm.selectionManager.activeSelection {
-                            SelectionFloatingToolbar(
-                                selection: selection,
-                                onAskAI: { text in
-                                    vm.selectionManager.quoteForAI = text
-                                    vm.isAIPanelVisible = true
-                                    let prompt = "请结合当前书本语境，对选中的这段内容进行深度导读与提炼，剖析其微言大义、作者意图与核心思想："
-                                    NotificationCenter.default.post(
-                                        name: NSNotification.Name("DReaderTriggerAIPrompt"),
-                                        object: nil,
-                                        userInfo: ["prompt": prompt, "quote": text]
-                                    )
-                                },
-                                onQuickPrompt: { type, text in
-                                    vm.selectionManager.quoteForAI = text
-                                    vm.isAIPanelVisible = true
-                                    let prompt: String
-                                    switch type {
-                                    case "explain":
-                                        prompt = "请深入解析以下选中文本的思想内涵与深层寓意："
-                                    case "summarize":
-                                        prompt = "请提炼以下选中文本的核心论点与3个关键要点："
-                                    case "translate":
-                                        prompt = "请对以下选中文本进行原汁原味的文学精译并解析关键词："
-                                    default:
-                                        prompt = "请对选中文本进行深度剖析："
-                                    }
-                                    NotificationCenter.default.post(
-                                        name: NSNotification.Name("DReaderTriggerAIPrompt"),
-                                        object: nil,
-                                        userInfo: ["prompt": prompt, "quote": text]
-                                    )
-                                },
-                                onHighlight: { colorHex in
-                                    vm.applyHighlight(colorHex: colorHex)
-                                },
-                                onWriteThought: {
-                                    if let h = vm.applyHighlight(colorHex: vm.lastChosenHighlightColor) {
-                                        vm.selectionManager.activeHighlightCard = HighlightCardInfo(
-                                            highlightId: h.id,
-                                            x: selection.x,
-                                            y: selection.y,
-                                            bottomY: selection.bottomY
-                                        )
-                                    }
-                                },
-                                onMakeQuoteCard: {
-                                    if let h = vm.applyHighlight(colorHex: vm.lastChosenHighlightColor) {
-                                        quoteCardHighlight = h
-                                    } else if let chapter = vm.currentBook?.currentChapter {
-                                        let temp = Highlight(
-                                            bookId: vm.currentBook?.id ?? UUID(),
-                                            bookTitle: vm.currentBook?.title ?? "",
-                                            chapterIndex: vm.currentBook?.currentChapterIndex ?? 0,
-                                            chapterTitle: chapter.title,
-                                            text: selection.text,
-                                            colorHex: vm.lastChosenHighlightColor,
-                                            createdAt: Date()
-                                        )
-                                        quoteCardHighlight = temp
-                                    }
-                                },
-                                onLookUp: { text in
-                                    vm.speakText(text)
-                                    vm.selectionManager.quoteForAI = text
-                                    vm.isAIPanelVisible = true
-                                    let prompt = "请为词汇/短语「\(text)」提供权威深度词典解析：包含【标准发音/拼音】、【词性与基本释义】、【在本书语境中的微言大义与深层寓意】及【近义词与典故词源】。"
-                                    NotificationCenter.default.post(
-                                        name: NSNotification.Name("DReaderTriggerAIPrompt"),
-                                        object: nil,
-                                        userInfo: ["prompt": prompt, "quote": text]
-                                    )
-                                    vm.selectionManager.clear()
-                                },
-                                onDismiss: {
-                                    vm.selectionManager.clear()
-                                }
-                            )
-                            .position(
-                                x: min(max(selection.x, 180), 600),
-                                y: max(selection.y - 32, 28)
-                            )
-                            .transition(.scale(scale: 0.95).combined(with: .opacity))
-                        }
+                        // Floating Toolbars & Cards Geometry-Constrained Overlay
+                        GeometryReader { geo in
+                            let areaW = geo.size.width
+                            let areaH = geo.size.height
 
-                        // Floating Highlight & Thought Interaction Card (WeChat Read style)
-                        if let cardInfo = vm.selectionManager.activeHighlightCard,
-                           let highlight = vm.highlights.first(where: { $0.id == cardInfo.highlightId }) {
-                            HighlightDetailCard(
-                                highlight: highlight,
-                                onUpdateColor: { newColor in
-                                    vm.updateHighlight(id: highlight.id, colorHex: newColor)
-                                },
-                                onSaveThought: { newThought in
-                                    vm.updateHighlight(id: highlight.id, note: newThought)
-                                },
-                                onDelete: {
-                                    vm.deleteHighlight(highlight.id)
-                                },
-                                onAskAI: { quote in
-                                    vm.selectionManager.quoteForAI = quote
-                                    vm.isAIPanelVisible = true
-                                    let prompt = "请结合当前书本语境，对这段划线内容及思考展开深度解读："
-                                    NotificationCenter.default.post(
-                                        name: NSNotification.Name("DReaderTriggerAIPrompt"),
-                                        object: nil,
-                                        userInfo: ["prompt": prompt, "quote": quote]
-                                    )
-                                },
-                                onMakeQuoteCard: {
-                                    quoteCardHighlight = highlight
-                                },
-                                onDismiss: {
-                                    vm.selectionManager.activeHighlightCard = nil
-                                }
-                            )
-                            .position(
-                                x: min(max(cardInfo.x, 190), 620),
-                                y: max(cardInfo.bottomY + 110, 150)
-                            )
-                            .transition(.scale(scale: 0.95).combined(with: .opacity))
-                            .zIndex(100)
+                            // 1. Floating Selection Toolbar
+                            if let selection = vm.selectionManager.activeSelection {
+                                let barW: CGFloat = 340
+                                let posX = min(max(selection.x, barW / 2 + 12), max(barW / 2 + 12, areaW - barW / 2 - 12))
+                                let posY = max(selection.y - 32, 28)
+
+                                SelectionFloatingToolbar(
+                                    selection: selection,
+                                    onAskAI: { text in
+                                        vm.selectionManager.quoteForAI = text
+                                        vm.isAIPanelVisible = true
+                                        let prompt = "请结合当前书本语境，对选中的这段内容进行深度导读与提炼，剖析其微言大义、作者意图与核心思想："
+                                        NotificationCenter.default.post(
+                                            name: NSNotification.Name("DReaderTriggerAIPrompt"),
+                                            object: nil,
+                                            userInfo: ["prompt": prompt, "quote": text]
+                                        )
+                                    },
+                                    onQuickPrompt: { type, text in
+                                        vm.selectionManager.quoteForAI = text
+                                        vm.isAIPanelVisible = true
+                                        let prompt: String
+                                        switch type {
+                                        case "explain":
+                                            prompt = "请深入解析以下选中文本的思想内涵与深层寓意："
+                                        case "summarize":
+                                            prompt = "请提炼以下选中文本的核心论点与3个关键要点："
+                                        case "translate":
+                                            prompt = "请对以下选中文本进行原汁原味的文学精译并解析关键词："
+                                        default:
+                                            prompt = "请对选中文本进行深度剖析："
+                                        }
+                                        NotificationCenter.default.post(
+                                            name: NSNotification.Name("DReaderTriggerAIPrompt"),
+                                            object: nil,
+                                            userInfo: ["prompt": prompt, "quote": text]
+                                        )
+                                    },
+                                    onHighlight: { colorHex in
+                                        vm.applyHighlight(colorHex: colorHex)
+                                    },
+                                    onWriteThought: {
+                                        if let h = vm.applyHighlight(colorHex: vm.lastChosenHighlightColor) {
+                                            vm.selectionManager.activeHighlightCard = HighlightCardInfo(
+                                                highlightId: h.id,
+                                                x: selection.x,
+                                                y: selection.y,
+                                                bottomY: selection.bottomY
+                                            )
+                                        }
+                                    },
+                                    onMakeQuoteCard: {
+                                        if let h = vm.applyHighlight(colorHex: vm.lastChosenHighlightColor) {
+                                            quoteCardHighlight = h
+                                        } else if let chapter = vm.currentBook?.currentChapter {
+                                            let temp = Highlight(
+                                                bookId: vm.currentBook?.id ?? UUID(),
+                                                bookTitle: vm.currentBook?.title ?? "",
+                                                chapterIndex: vm.currentBook?.currentChapterIndex ?? 0,
+                                                chapterTitle: chapter.title,
+                                                text: selection.text,
+                                                colorHex: vm.lastChosenHighlightColor,
+                                                createdAt: Date()
+                                            )
+                                            quoteCardHighlight = temp
+                                        }
+                                    },
+                                    onLookUp: { text in
+                                        vm.speakText(text)
+                                        vm.selectionManager.quoteForAI = text
+                                        vm.isAIPanelVisible = true
+                                        let prompt = "请为词汇/短语「\(text)」提供权威深度词典解析：包含【标准发音/拼音】、【词性与基本释义】、【在本书语境中的微言大义与深层寓意】及【近义词与典故词源】。"
+                                        NotificationCenter.default.post(
+                                            name: NSNotification.Name("DReaderTriggerAIPrompt"),
+                                            object: nil,
+                                            userInfo: ["prompt": prompt, "quote": text]
+                                        )
+                                        vm.selectionManager.clear()
+                                    },
+                                    onDismiss: {
+                                        vm.selectionManager.clear()
+                                    }
+                                )
+                                .position(x: posX, y: posY)
+                                .transition(.scale(scale: 0.95).combined(with: .opacity))
+                            }
+
+                            // 2. Floating Highlight & Thought Interaction Card
+                            if let cardInfo = vm.selectionManager.activeHighlightCard,
+                               let highlight = vm.highlights.first(where: { $0.id == cardInfo.highlightId }) {
+                                let cardW: CGFloat = 280
+                                let cardH: CGFloat = 175
+                                let posX = min(max(cardInfo.x, cardW / 2 + 12), max(cardW / 2 + 12, areaW - cardW / 2 - 12))
+
+                                // Smart vertical placement: above if near bottom, else below
+                                let posY: CGFloat = (cardInfo.bottomY + cardH + 20 < areaH)
+                                    ? (cardInfo.bottomY + cardH / 2 + 8)
+                                    : max(cardH / 2 + 8, cardInfo.y - cardH / 2 - 8)
+
+                                HighlightDetailCard(
+                                    highlight: highlight,
+                                    onUpdateColor: { newColor in
+                                        vm.updateHighlight(id: highlight.id, colorHex: newColor)
+                                    },
+                                    onSaveThought: { newThought in
+                                        vm.updateHighlight(id: highlight.id, note: newThought)
+                                    },
+                                    onDelete: {
+                                        vm.deleteHighlight(highlight.id)
+                                    },
+                                    onAskAI: { quote in
+                                        vm.selectionManager.activeHighlightCard = nil
+                                        vm.selectionManager.quoteForAI = quote
+                                        vm.isAIPanelVisible = true
+                                        let prompt = "请结合当前书本语境，对这段划线内容及思考展开深度解读："
+                                        NotificationCenter.default.post(
+                                            name: NSNotification.Name("DReaderTriggerAIPrompt"),
+                                            object: nil,
+                                            userInfo: ["prompt": prompt, "quote": quote]
+                                        )
+                                    },
+                                    onMakeQuoteCard: {
+                                        vm.selectionManager.activeHighlightCard = nil
+                                        quoteCardHighlight = highlight
+                                    },
+                                    onDismiss: {
+                                        vm.selectionManager.activeHighlightCard = nil
+                                    }
+                                )
+                                .position(x: posX, y: posY)
+                                .transition(.scale(scale: 0.95).combined(with: .opacity))
+                                .zIndex(100)
+                            }
                         }
                     }
 

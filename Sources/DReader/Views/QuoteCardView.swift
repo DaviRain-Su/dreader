@@ -91,12 +91,12 @@ struct QuoteCardView: View {
 
                     // The Renderable Quote Card Preview
                     cardContent
-                        .padding(.vertical, 8)
+                        .padding(.vertical, 4)
 
-                    Spacer(minLength: 16)
+                    Spacer(minLength: 12)
                 }
-                .padding(.horizontal, 28)
-                .padding(.vertical, 20)
+                .padding(.horizontal, 20)
+                .padding(.vertical, 14)
             }
 
             Divider()
@@ -105,7 +105,7 @@ struct QuoteCardView: View {
             // Bottom Action Bar
             actionBar
         }
-        .frame(minWidth: 540, idealWidth: 580, maxWidth: 640, minHeight: 620, idealHeight: 700)
+        .frame(minWidth: 460, idealWidth: 500, maxWidth: 540, minHeight: 460, idealHeight: 520, maxHeight: 600)
         .background(.ultraThinMaterial)
     }
 
@@ -180,52 +180,52 @@ struct QuoteCardView: View {
 
     // MARK: - Core Aesthetic Quote Card Content
     private var cardContent: some View {
-        VStack(alignment: .leading, spacing: 18) {
+        VStack(alignment: .leading, spacing: 14) {
             // Top Ornament & Chapter Header
             HStack(alignment: .top) {
                 Text("“")
-                    .font(.system(size: 54, weight: .bold, design: .serif))
+                    .font(.system(size: 38, weight: .bold, design: .serif))
                     .foregroundStyle(selectedTheme.accentColor.opacity(0.55))
-                    .frame(height: 32)
-                    .offset(y: 8)
+                    .frame(height: 24)
+                    .offset(y: 4)
 
                 Spacer()
 
                 Text(highlight.chapterTitle)
-                    .font(.system(size: 11, weight: .medium, design: .serif))
+                    .font(.system(size: 10.5, weight: .medium, design: .serif))
                     .foregroundStyle(selectedTheme.secondaryColor.opacity(0.85))
                     .lineLimit(1)
             }
 
             // Main Quoted Text
             Text(highlight.text)
-                .font(.system(size: 16, weight: .regular, design: .serif))
+                .font(.system(size: 14.5, weight: .regular, design: .serif))
                 .foregroundStyle(selectedTheme.textColor)
-                .lineSpacing(6)
+                .lineSpacing(5)
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
             // Attached Thought Box
             if includeThought, let note = highlight.note, !note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                VStack(alignment: .leading, spacing: 4) {
+                VStack(alignment: .leading, spacing: 3) {
                     HStack(spacing: 4) {
                         Text("💭 读者思考")
-                            .font(.system(size: 10, weight: .bold))
+                            .font(.system(size: 9.5, weight: .bold))
                             .foregroundStyle(selectedTheme.accentColor)
 
                         Spacer()
 
                         Text(highlight.createdAt.formatted(date: .numeric, time: .omitted))
-                            .font(.system(size: 9))
+                            .font(.system(size: 8.5))
                             .foregroundStyle(selectedTheme.secondaryColor.opacity(0.7))
                     }
 
                     Text(note)
-                        .font(.system(size: 12.5, weight: .regular))
+                        .font(.system(size: 11.5, weight: .regular))
                         .foregroundStyle(selectedTheme.textColor.opacity(0.92))
                         .lineSpacing(2)
                 }
-                .padding(10)
+                .padding(8)
                 .background(selectedTheme.accentColor.opacity(0.08))
                 .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                 .overlay(
@@ -302,8 +302,8 @@ struct QuoteCardView: View {
                 }
             }
         }
-        .padding(24)
-        .frame(width: 460)
+        .padding(20)
+        .frame(width: 360)
         .background(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .fill(
