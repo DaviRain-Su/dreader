@@ -135,6 +135,14 @@ struct ReaderMainView: View {
                 vm.showReviewSessionModal = false
             }
         }
+        // 读完复盘：合上最后一页后的一次性庆祝卡
+        .sheet(item: $vm.pendingFinishSnapshot) { snapshot in
+            FinishCardView(
+                snapshot: snapshot,
+                onClose: { vm.dismissFinishCard() },
+                onStartReview: { vm.showReviewSessionModal = true }
+            )
+        }
         .onKeyPress(.space) {
             if !vm.isViewingBookshelf && !vm.isSearchPresented {
                 vm.scrollPage(direction: 1)
@@ -873,7 +881,7 @@ struct ReaderMainView: View {
                             }
                             return false
                         },
-                        onScrollProgress: { pct in vm.chapterScrollProgress = pct },
+                        onScrollProgress: { pct in vm.noteChapterScrollProgress(pct) },
                         registerScrollAction: { action in vm.scrollPageAction = action },
                         registerHighlightAction: { action in vm.applyHighlightAction = action },
                         registerUpdateColorAction: { action in vm.updateHighlightColorAction = action },

@@ -167,6 +167,9 @@ final class ReaderViewModel: @unchecked Sendable {
         preloadAllChapters(for: book)
     }
 
+    // MARK: - 读完复盘状态
+    var pendingFinishSnapshot: FinishSnapshot?
+
     // MARK: - 前情回顾（Kindle Recaps 范式）
 
     /// 开书后判定是否值得给出前情回顾：本书最近印记 ≥ 3 天前、位置不在第一章，且本会话未关过提示。
@@ -198,6 +201,38 @@ final class ReaderViewModel: @unchecked Sendable {
         }
         withAnimation(.easeOut(duration: 0.2)) {
             pendingRecap = nil
+        }
+    }
+
+    // MARK: - 读完复盘（Finish Card）
+
+    /// 读完判定：最后一章滚动过 85% 即视为读完（尾页常有版权页噪声，85% 已过正文）。
+    /// 每本书只庆祝一次（UserDefaults 记账）；再次打开不重复打扰。
+    func noteChapterScrollProgress(_ progress: Double) {
+        chapterScrollProgress = progress
+        guard let book = currentBook,
+              book.currentChapterIndex == book.chapters.count - 1,
+              progress >= 0.85
+        else { return }
+        let finishKey = "dreader.finish_card_shown.\(book.id.uuidString)"
+        guard !UserDefaults.standard.bool(forKey: finishKey) else { return }
+        UserDefaults.standard.set(true, forKey: finishKey)
+        ReadingStatsManager.shared.pauseSession()
+        Task { @MainActor in
+            // 让滚动停下再浮卡，避免抢最后一下滚动
+            try? await Task.sleep(nanoseconds: 900_000_000)
+            guard !Task.isCancelled, currentBook?.id == book.id else { return }
+            if let snapshot = FinishSnapshot.build(book: book) {
+                withAnimation(.spring(response: 0.45, dampingFraction: 0.85)) {
+                    pendingFinishSnapshot = snapshot
+                }
+            }
+        }
+    }
+
+    func dismissFinishCard() {
+        withAnimation(.easeOut(duration: 0.25)) {
+            pendingFinishSnapshot = nil
         }
     }
 
