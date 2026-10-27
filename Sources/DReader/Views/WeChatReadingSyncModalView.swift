@@ -521,6 +521,7 @@ struct WeChatReadingSyncModalView: View {
 
     @State private var showCookieEditor: Bool = false
     @State private var importCookieInput: String = ""
+    @State private var showEmbedLogin: Bool = false
 
     private var cookieHint: (hasKey: Bool, label: String, current: String)? {
         let ck = WeReadContentService.shared.cookie
@@ -534,7 +535,7 @@ struct WeChatReadingSyncModalView: View {
     private var cookieEditorSheet: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text("微信读书网页版 Cookie")
+                Text("微信读书登录")
                     .font(.system(size: 13, weight: .bold))
                 Spacer()
                 Button {
@@ -546,11 +547,66 @@ struct WeChatReadingSyncModalView: View {
                 }
                 .buttonStyle(.plain)
             }
-            Text("登录 weread.qq.com → 浏览器 DevTools → Application/存储 → Cookies → 复制整段（须含 wr_vid 与 wr_skey）")
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-            TextEditor(text: $importCookieInput)
+            if showEmbedLogin {
+                WeReadLoginWebView { _ in
+                    showEmbedLogin = false
+                    showCookieEditor = false
+                }
+                .frame(width: 440, height: 520)
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8)
+                        .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
+                )
+                Text("扫码或微信授权登录后自动保存 Cookie，无需手动复制。登录态失效时重新打开此面板即可续登。")
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(.secondary.opacity(0.85))
+                HStack {
+                    Text("检测不到登录态？改用手动粘贴。")
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(.secondary.opacity(0.7))
+                    Spacer()
+                    Button {
+                        showEmbedLogin = false
+                    } label: {
+                        Text("手动粘贴 Cookie")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(Color.primary.opacity(0.75))
+                    }
+                    .buttonStyle(.plain)
+                }
+            } else {
+                if let ck = cookieHint, ck.hasKey {
+                    HStack(spacing: 5) {
+                        Image(systemName: "checkmark.circle.fill")
+                            .font(.system(size: 11))
+                            .foregroundStyle(Color.green)
+                        Text("Cookie 已配置 (\(ck.current.count) 字符) — 内嵌登录可随时刷新")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                Button {
+                    showEmbedLogin = true
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "qrcode")
+                            .font(.system(size: 12))
+                        Text("内嵌浏览器扫码登录（推荐）")
+                            .font(.system(size: 12, weight: .semibold))
+                    }
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 7)
+                    .background(Color.primary.opacity(0.8))
+                    .clipShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                Text("或手动粘贴：登录 weread.qq.com → DevTools → Application/Cookies → 复制整段（须含 wr_vid 与 wr_skey）")
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                TextEditor(text: $importCookieInput)
                 .font(.system(size: 11, design: .monospaced))
                 .frame(minHeight: 110)
                 .overlay(
@@ -583,6 +639,7 @@ struct WeChatReadingSyncModalView: View {
                     }
                     .buttonStyle(.plain)
                 }
+            }
             }
         }
         .padding(18)
