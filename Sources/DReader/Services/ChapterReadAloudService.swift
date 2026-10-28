@@ -214,59 +214,22 @@ final class ChapterReadAloudService: NSObject, @unchecked Sendable, AVAudioPlaye
         }
     }
 
-    /// 调 piper 进程合成一段 wav。length_scale 越小语速越快（rate 0.3~0.8 → 1.5~0.7）。
+    /// 经 PiperBridge（常驻 venv Python 进程）合成一段 wav。
+    /// length_scale 越小语速越快（rate 0.3~0.8 → 1.63~0.68）。
     static func piperSynthesize(text: String, rate: Double) async throws -> Data {
-        guard FileManager.default.isExecutableFile(atPath: PiperInstaller.piperBinary.path) else {
+        guard piperFilesPresent() else {
             throw ReadAloudError.piperNotInstalled
         }
-        guard FileManager.default.fileExists(atPath: PiperInstaller.modelURL.path) else {
-            throw ReadAloudError.piperNotInstalled
-        }
-        let lengthScale = String(format: "%.2f", 2.2 - rate * 1.9) // 0.3→1.63, 0.52→1.21, 0.8→0.68
-        let proc = Process()
-        proc.executableURL = PiperInstaller.piperBinary
-        proc.arguments = [
-            "--model", PiperInstaller.modelURL.path,
-            "--espeak_data", PiperInstaller.piperBinDir.appendingPathComponent("espeak-ng-data").path,
-            "--length_scale", lengthScale,
-            "--output-raw"
-        ]
-        // espeak-ng-data 与二进制同目录（官方 tarball 布局）；--espeak_data 显式指定避免 cwd 歧义
-        let stdinPipe = Pipe()
-        let stdoutPipe = Pipe()
-        let stderrPipe = Pipe()
-        proc.standardInput = stdinPipe
-        proc.standardOutput = stdoutPipe
-        proc.standardError = stderrPipe
-
-        try proc.run()
-        // 文本写完即关 stdin，piper 处理完输出 wav 并退出
-        let inputData = Data((text + "\n").utf8)
-        try stdinPipe.fileHandleForWriting.write(contentsOf: inputData)
-        try? stdinPipe.fileHandleForWriting.close()
-
-        // 异步等 stdout 收全（大段落 wav 可达数 MB）
-        let data = try await stdinStdoutDrain(stdoutPipe.fileHandleForReading, process: proc)
-
-        guard proc.terminationStatus == 0 || !data.isEmpty else {
-            let err = String(data: stderrPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-            throw ReadAloudError.piperFailed(err)
-        }
+        let lengthScale = 2.2 - rate * 1.9 // 0.3→1.63, 0.52→1.21, 0.8→0.68
+        let data = try await PiperBridge.shared.synthesize(text: text, lengthScale: lengthScale)
         guard !data.isEmpty else { throw ReadAloudError.emptyResponse }
         return data
     }
 
-    /// 后台读完整个 pipe（避免死锁：stdout 缓冲满会卡住进程）
-    private static func stdinStdoutDrain(_ handle: FileHandle, process: Process) async throws -> Data {
-        try await withCheckedThrowingContinuation { cont in
-            DispatchQueue.global().async {
-                let data = handle.readDataToEndOfFile()
-                if process.isRunning {
-                    process.waitUntilExit()
-                }
-                cont.resume(returning: data)
-            }
-        }
+    nonisolated private static func piperFilesPresent() -> Bool {
+        FileManager.default.fileExists(atPath: PiperInstaller.modelURL.path)
+            && FileManager.default.isExecutableFile(atPath: PiperInstaller.venvPython.path)
+            && PiperInstaller.pythonPackageReady
     }
 
     // MARK: AI 在线引擎（OpenAI 兼容 /v1/audio/speech）
@@ -357,28 +320,6 @@ final class ChapterReadAloudService: NSObject, @unchecked Sendable, AVAudioPlaye
         return data
     }
 
-    enum ReadAloudError: LocalizedError {
-        case missingKey
-        case badEndpoint
-        case network
-        case http(Int)
-        case emptyResponse
-        case piperNotInstalled
-        case piperFailed(String)
-
-        var errorDescription: String? {
-            switch self {
-            case .missingKey: return "未配置 AI 语音 API Key"
-            case .badEndpoint: return "TTS 端点地址无效"
-            case .network: return "网络错误"
-            case .http(let code): return "TTS 服务返回 HTTP \(code)"
-            case .emptyResponse: return "TTS 服务返回空音频"
-            case .piperNotInstalled: return "Piper 引擎未安装"
-            case .piperFailed(let detail): return "Piper 合成失败 \(detail.prefix(160))"
-            }
-        }
-    }
-
     // MARK: - AVAudioPlayerDelegate（段落播完 → 下一段）
 
     func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
@@ -388,6 +329,29 @@ final class ChapterReadAloudService: NSObject, @unchecked Sendable, AVAudioPlaye
             speakCurrentParagraph()
         } else {
             stop()
+        }
+    }
+}
+
+/// 听书引擎共享错误（PiperBridge 也用）
+enum ReadAloudError: LocalizedError {
+    case missingKey
+    case badEndpoint
+    case network
+    case http(Int)
+    case emptyResponse
+    case piperNotInstalled
+    case piperFailed(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .missingKey: return "未配置 AI 语音 API Key"
+        case .badEndpoint: return "TTS 端点地址无效"
+        case .network: return "网络错误"
+        case .http(let code): return "TTS 服务返回 HTTP \(code)"
+        case .emptyResponse: return "TTS 服务返回空音频"
+        case .piperNotInstalled: return "Piper 引擎未安装"
+        case .piperFailed(let detail): return "Piper 合成失败 \(detail.prefix(160))"
         }
     }
 }
