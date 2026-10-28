@@ -605,6 +605,11 @@ struct ReaderMainView: View {
                     },
                     retrieveBookPassages: { question in
                         guard let book = vm.currentBook else { return [] }
+                        // 索引懒构建：首次提问触发后台建索引，本次返回空（仅失全书检索，单章上下文不受影响）
+                        BookIndexService.shared.ensureIndexLazily(for: book) { url in
+                            vm.getCachedHTML(for: url)
+                                ?? (try? String(contentsOf: url, encoding: .utf8))
+                        }
                         return BookIndexService.shared.retrieve(
                             question: question,
                             bookId: book.id,

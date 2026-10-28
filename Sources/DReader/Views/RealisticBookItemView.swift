@@ -9,12 +9,19 @@ struct RealisticBookItemView: View {
     var chineseScriptMode: ChineseScriptMode = .original
 
     @State private var isHovered: Bool = false
+    /// 后台解码完成后的封面（滚动时直接走 NSCache，不在 body 里同步读盘）
+    @State private var loadedCover: NSImage? = nil
 
     private var coverImage: NSImage? {
-        guard let url = book.coverImageURL, FileManager.default.fileExists(atPath: url.path) else {
-            return nil
+        guard let url = book.coverImageURL else { return nil }
+        if let hit = CoverImageCache.shared.cachedImage(for: url) {
+            return hit
         }
-        return NSImage(contentsOf: url)
+        // 未命中：触发一次后台解码（inflight 去重），完成后进缓存并更新视图
+        CoverImageCache.shared.loadImage(for: url) { image in
+            self.loadedCover = image
+        }
+        return loadedCover
     }
 
     // Color theme per book for fallback

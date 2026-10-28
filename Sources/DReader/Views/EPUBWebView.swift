@@ -380,16 +380,40 @@ struct EPUBWebView: NSViewRepresentable {
             currentURL = url
             lastSettingsSummary = parent.settingsSummary
 
-            let rawHTML: String
+            // 读盘 + 编码探测移出主线程：合订本单章可达数 MB，同步 readTextSmart
+            // 会冻住 UI（章间切换卡死的直接元凶之一）。缓存命中时走快路径。
             if let cached = parent.getCachedHTML(url) {
-                rawHTML = cached
-            } else if let loaded = Self.readTextSmart(url) {
-                rawHTML = loaded
-                parent.cacheHTML(loaded, url)
-            } else {
-                webView.loadFileURL(url, allowingReadAccessTo: unzippedDir)
+                proceedWithRawHTML(rawHTML: cached, url: url, opfDir: opfDir, unzippedDir: unzippedDir,
+                                   settings: settings, hasNextChapter: hasNextChapter, nextChapterTitle: nextChapterTitle)
                 return
             }
+            let readTask = Task.detached(priority: .userInitiated) { () -> String? in
+                Self.readTextSmart(url)
+            }
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                guard let loaded = await readTask.value, !loaded.isEmpty else {
+                    webView.loadFileURL(url, allowingReadAccessTo: unzippedDir)
+                    return
+                }
+                self.parent.cacheHTML(loaded, url)
+                self.proceedWithRawHTML(rawHTML: loaded, url: url, opfDir: opfDir, unzippedDir: unzippedDir,
+                                        settings: settings, hasNextChapter: hasNextChapter, nextChapterTitle: nextChapterTitle)
+            }
+        }
+
+        private func proceedWithRawHTML(
+            rawHTML: String,
+            url: URL,
+            opfDir: URL,
+            unzippedDir: URL,
+            settings: ReaderSettings,
+            hasNextChapter: Bool,
+            nextChapterTitle: String?
+        ) {
+            guard let webView = webView else { return }
+            // 章节可能已被快速连续切换：只有仍是目标章才继续渲染
+            guard currentURL == url else { return }
 
             let chapterDir = url.deletingLastPathComponent()
 
@@ -440,7 +464,8 @@ struct EPUBWebView: NSViewRepresentable {
         /// 智能读文本：UTF-8 → 声明编码 → GBK → Latin-1。
         /// Kindle 等来源的章节文件可能没有 charset 声明，或声明 GBK 实际 UTF-8，
         /// 直接 String(contentsOf:encoding:) 会产生 mojibake 乱码。
-        static func readTextSmart(_ url: URL) -> String? {
+        /// nonisolated：后台线程调用（loadChapter 的异步读盘路径）。
+        nonisolated static func readTextSmart(_ url: URL) -> String? {
             guard let data = try? Data(contentsOf: url) else { return nil }
             // 1. UTF-8 优先（严格校验，避免半 UTF-8 被误读）
             if let s = String(data: data, encoding: .utf8) { return s }
@@ -542,7 +567,7 @@ struct EPUBWebView: NSViewRepresentable {
             webView.evaluateJavaScript(script) { [weak self] result, error in
                 let success = (result as? Bool) ?? false
                 if success {
-                    self?.restoreHighlightsInDOM(self?.parent.highlights ?? [])
+                    // body 里的 <mark> 已由 Swift 端 injectHighlights 打好（本路径的 bodyContent 同样过 injectHighlights）
                 } else if error != nil {
                     // Fall back to full reload if needed
                     self?.loadChapter(
@@ -624,7 +649,8 @@ struct EPUBWebView: NSViewRepresentable {
             webView.evaluateJavaScript(script) { [weak self] result, error in
                 let success = (result as? Bool) ?? false
                 if success {
-                    self?.restoreHighlightsInDOM(highlights)
+                    // body 里的 <mark> 已由 Swift 端 injectHighlights 打好，无需再走 DOM 恢复
+                    // （每条划线一次全 DOM TreeWalker，大章多划线时是双倍浪费）
                     // 换章后同步行引导线（DOM 重挂会移除引导元素）
                     let guideScript = settings.isLineGuide
                         ? "window.dreaderSetLineGuide && window.dreaderSetLineGuide(true, '\(settings.theme.textColorHex)');"

@@ -92,6 +92,12 @@ final class BookIndexService: @unchecked Sendable {
 
     // MARK: - Retrieval
 
+    /// 懒构建入口：AI 伴读检索时若索引未就绪，先异步建一次（下次提问即可用）。
+    /// 开书时不再全量建索引——大合订本全书段落 bigram 会占数百 MB。
+    func ensureIndexLazily(for book: EPUBBook, htmlProvider: @escaping @Sendable (URL) -> String?) {
+        ensureIndexBuilt(for: book, htmlProvider: htmlProvider)
+    }
+
     /// Retrieves the most relevant whole-book paragraphs for a question,
     /// preferring passages outside the current chapter (which is provided in full anyway).
     func retrieve(question: String, bookId: UUID, currentChapterIndex: Int, topK: Int = 6) -> [IndexedParagraph] {
