@@ -1,4 +1,141 @@
 import Foundation
+import CryptoKit
+
+/// On-disk protocol also read by dreader-mcp. Keep the record/marker schema and
+/// cache directory naming in sync with LibraryLocations in its separate target.
+enum EPUBIdentity {
+    static let markerName = ".dreader-cache.json"
+    static let version = 1
+
+    struct Record: Codable {
+        let version: Int
+        let fileName: String
+        var legacyArchiveFingerprints: [String]
+        let legacyPayloadFingerprint: String
+    }
+
+    struct Marker: Codable {
+        let version: Int
+        let fileName: String
+        let bookID: UUID
+        let archiveFingerprint: String
+        let sourceFingerprint: String
+        let payloadFingerprint: String
+    }
+
+    static func legacyBookID(forFileName fileName: String) -> UUID {
+        let hash = fileName.utf8.reduce(into: UInt64(14695981039346656037)) {
+            $0 = ($0 ^ UInt64($1)) &* 1099511628211
+        }
+        return UUID(uuid: (
+            UInt8(truncatingIfNeeded: hash), UInt8(truncatingIfNeeded: hash >> 8),
+            UInt8(truncatingIfNeeded: hash >> 16), UInt8(truncatingIfNeeded: hash >> 24),
+            UInt8(truncatingIfNeeded: hash >> 32), UInt8(truncatingIfNeeded: hash >> 40),
+            UInt8(truncatingIfNeeded: hash >> 48), UInt8(truncatingIfNeeded: hash >> 56),
+            0x44, 0x52, 0x65, 0x61, 0x64, 0x65, 0x72, 0x31
+        ))
+    }
+
+    static func contentBookID(forFileName fileName: String, archiveFingerprint: String) -> UUID {
+        let bytes = Array(SHA256.hash(data: Data("DReader2\0\(fileName)\0\(archiveFingerprint)".utf8)))
+        return UUID(uuid: (
+            bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
+            bytes[8], bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15]
+        ))
+    }
+
+    static func fingerprint(of fileURL: URL) throws -> String {
+        let handle = try FileHandle(forReadingFrom: fileURL)
+        defer { try? handle.close() }
+        var hash = SHA256()
+        while let chunk = try handle.read(upToCount: 1024 * 1024), !chunk.isEmpty {
+            hash.update(data: chunk)
+        }
+        return hex(hash.finalize())
+    }
+
+    static func sourceFingerprint(for fileURL: URL) -> String {
+        hex(SHA256.hash(data: Data(fileURL.standardizedFileURL.resolvingSymlinksInPath().path.utf8)))
+    }
+
+    static func cacheDirectory(root: URL, bookID: UUID, archiveFingerprint: String) -> URL {
+        // Immutable versions avoid replacing a directory that an open reader uses.
+        root.appendingPathComponent("\(bookID.uuidString)-\(archiveFingerprint)", isDirectory: true)
+    }
+
+    static func recordURL(root: URL, fileName: String) -> URL {
+        root.appendingPathComponent(legacyBookID(forFileName: fileName).uuidString + ".json")
+    }
+
+    static func readMarker(in directory: URL) -> Marker? {
+        guard let data = try? Data(contentsOf: directory.appendingPathComponent(markerName)),
+              let marker = try? JSONDecoder().decode(Marker.self, from: data),
+              marker.version == version else { return nil }
+        return marker
+    }
+
+    /// Directory enumeration can return /private/var for a /var input, and
+    /// directory URLs can differ in trailing separators. Compare canonical path
+    /// components instead of slicing one URL by another URL's string length.
+    static func relativePath(of file: URL, in directory: URL) throws -> String {
+        let root = directory.standardizedFileURL.resolvingSymlinksInPath().pathComponents
+        let components = file.standardizedFileURL.resolvingSymlinksInPath().pathComponents
+        guard components.starts(with: root) else { throw EPUBParserError.unsafeArchivePath }
+        return components.dropFirst(root.count).joined(separator: "/")
+    }
+
+    /// Compare source payloads when adopting pre-fingerprint caches. Generated
+    /// reader pages and macOS ZIP metadata are not part of the EPUB's identity.
+    static func payloadFingerprint(in directory: URL) throws -> String {
+        let fm = FileManager.default
+        let root = directory.standardizedFileURL.resolvingSymlinksInPath()
+        let keys: [URLResourceKey] = [.isRegularFileKey, .isDirectoryKey, .isSymbolicLinkKey]
+        guard let entries = fm.enumerator(at: root, includingPropertiesForKeys: keys) else {
+            throw EPUBParserError.containerXMLNotFound
+        }
+        var paths: [String] = []
+        for case let file as URL in entries {
+            let relative = try relativePath(of: file, in: root)
+            let values = try file.resourceValues(forKeys: Set(keys))
+            let components = relative.split(separator: "/")
+            if components.contains(where: {
+                $0 == markerName || $0 == ".DS_Store" || $0 == "__MACOSX" ||
+                $0 == ".AppleDouble" || $0.hasPrefix("._") || $0 == "_dreader_render.html"
+            }) {
+                // Foundation's enumerator may still be at the containing
+                // directory after yielding a regular file. Prune directories
+                // only, or an ignored render page can hide later EPUB siblings.
+                if values.isDirectory == true { entries.skipDescendants() }
+                continue
+            }
+            guard values.isSymbolicLink != true else { throw EPUBParserError.unsafeArchivePath }
+            if values.isRegularFile == true { paths.append(relative) }
+        }
+        var hash = SHA256()
+        for path in paths.sorted() {
+            hash.update(data: Data(path.utf8))
+            hash.update(data: Data([0]))
+            hash.update(data: Data(try fingerprint(of: root.appendingPathComponent(path)).utf8))
+            hash.update(data: Data([0]))
+        }
+        return hex(hash.finalize())
+    }
+
+    private static func hex(_ digest: SHA256.Digest) -> String {
+        digest.map { String(format: "%02x", $0) }.joined()
+    }
+}
+
+/// Every parser instance shares this coordinator. Its synchronous work cannot
+/// reenter at an await, so concurrent shelf restores never overwrite a cache or
+/// race to claim the filename's legacy highlight identity.
+private actor EPUBCacheCoordinator {
+    static let shared = EPUBCacheCoordinator()
+
+    func parse(fileURL: URL, parser: EPUBParser) throws -> EPUBBook {
+        try parser.parseSerially(fileURL: fileURL)
+    }
+}
 
 enum EPUBParserError: LocalizedError {
     case fileNotFound
@@ -9,6 +146,8 @@ enum EPUBParserError: LocalizedError {
     case opfFileNotFound
     case manifestNotFound
     case spineNotFound
+    case sourceChanged
+    case unsafeArchivePath
 
     var errorDescription: String? {
         switch self {
@@ -28,6 +167,10 @@ enum EPUBParserError: LocalizedError {
             return "未在 OPF 中找到 manifest 资源列表"
         case .spineNotFound:
             return "未在 OPF 中找到 spine 章节排布"
+        case .sourceChanged:
+            return "EPUB 文件在解析过程中发生变化，请重试"
+        case .unsafeArchivePath:
+            return "EPUB 含有不安全的文件路径或符号链接"
         }
     }
 }
@@ -43,43 +186,141 @@ final class EPUBParser: Sendable {
         let properties: String?
     }
 
-    private init() {}
+    private let cacheRoot: URL
+    private let identityRoot: URL
+
+    /// Inject both roots together in tests; identity records deliberately live
+    /// outside Caches so deleting extracted books cannot reassign highlight IDs.
+    init(cacheRoot: URL? = nil, identityRoot: URL? = nil) {
+        let fm = FileManager.default
+        self.cacheRoot = cacheRoot ?? fm.urls(for: .cachesDirectory, in: .userDomainMask).first!
+            .appendingPathComponent("com.dreader.cache", isDirectory: true)
+        self.identityRoot = identityRoot ?? fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+            .appendingPathComponent("DReader/EPUBIdentities", isDirectory: true)
+    }
 
     func parse(fileURL: URL) async throws -> EPUBBook {
-        guard FileManager.default.fileExists(atPath: fileURL.path) else {
-            throw EPUBParserError.fileNotFound
+        try await EPUBCacheCoordinator.shared.parse(fileURL: fileURL, parser: self)
+    }
+
+    fileprivate func parseSerially(fileURL: URL) throws -> EPUBBook {
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: fileURL.path) else { throw EPUBParserError.fileNotFound }
+        let headerHandle = try FileHandle(forReadingFrom: fileURL)
+        let header = try headerHandle.read(upToCount: 4)
+        try headerHandle.close()
+        guard header == Data([0x50, 0x4B, 0x03, 0x04]) else { throw EPUBParserError.notAZipArchive }
+
+        let fileName = fileURL.lastPathComponent
+        let archiveFingerprint = try EPUBIdentity.fingerprint(of: fileURL)
+        let sourceFingerprint = EPUBIdentity.sourceFingerprint(for: fileURL)
+        let legacyID = EPUBIdentity.legacyBookID(forFileName: fileName)
+        let contentID = EPUBIdentity.contentBookID(forFileName: fileName, archiveFingerprint: archiveFingerprint)
+        let recordURL = EPUBIdentity.recordURL(root: identityRoot, fileName: fileName)
+        var record: EPUBIdentity.Record?
+        if fm.fileExists(atPath: recordURL.path) {
+            record = try JSONDecoder().decode(EPUBIdentity.Record.self, from: Data(contentsOf: recordURL))
+            guard record?.version == EPUBIdentity.version, record?.fileName == fileName else {
+                throw EPUBParserError.sourceChanged
+            }
         }
 
-        // Bail out early with a clear diagnosis when the file lacks the ZIP signature
-        if let header = try? FileHandle(forReadingFrom: fileURL).read(upToCount: 4),
-           header.count >= 4,
-           header.prefix(4) != Data([0x50, 0x4B, 0x03, 0x04]) {
-            throw EPUBParserError.notAZipArchive
+        let knownID = record?.legacyArchiveFingerprints.contains(archiveFingerprint) == true ? legacyID : contentID
+        let knownDirectory = EPUBIdentity.cacheDirectory(root: cacheRoot, bookID: knownID, archiveFingerprint: archiveFingerprint)
+        if record != nil, completedCache(knownDirectory, fileName: fileName, bookID: knownID, archiveFingerprint: archiveFingerprint),
+           let book = try? parseExtracted(fileURL: fileURL, bookID: knownID, directory: knownDirectory) {
+            return book
         }
 
-        // Deterministic bookId based on file name so highlights and cache persist reliably across launches
-        let fileKey = fileURL.lastPathComponent
-        let hashVal = fileKey.utf8.reduce(into: UInt64(14695981039346656037)) { $0 = ($0 ^ UInt64($1)) &* 1099511628211 }
-        let bookId = UUID(uuid: (
-            UInt8(truncatingIfNeeded: hashVal), UInt8(truncatingIfNeeded: hashVal >> 8),
-            UInt8(truncatingIfNeeded: hashVal >> 16), UInt8(truncatingIfNeeded: hashVal >> 24),
-            UInt8(truncatingIfNeeded: hashVal >> 32), UInt8(truncatingIfNeeded: hashVal >> 40),
-            UInt8(truncatingIfNeeded: hashVal >> 48), UInt8(truncatingIfNeeded: hashVal >> 56),
-            0x44, 0x52, 0x65, 0x61, 0x64, 0x65, 0x72, 0x31
-        ))
+        try fm.createDirectory(at: cacheRoot, withIntermediateDirectories: true)
+        let staging = cacheRoot.appendingPathComponent(".extract-\(UUID())", isDirectory: true)
+        try fm.createDirectory(at: staging, withIntermediateDirectories: false)
+        defer { try? fm.removeItem(at: staging) }
+        let snapshot = staging.appendingPathComponent("source.epub")
+        let payload = staging.appendingPathComponent("payload", isDirectory: true)
+        try fm.copyItem(at: fileURL, to: snapshot)
+        guard try EPUBIdentity.fingerprint(of: snapshot) == archiveFingerprint else { throw EPUBParserError.sourceChanged }
+        try fm.createDirectory(at: payload, withIntermediateDirectories: false)
+        try unzip(archiveURL: snapshot, destinationURL: payload)
+        try validateExtractedPaths(in: payload)
+        let payloadFingerprint = try EPUBIdentity.payloadFingerprint(in: payload)
+        let parsed = try parseExtracted(fileURL: fileURL, bookID: contentID, directory: payload)
 
-        let cachesDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
-        let destinationDir = cachesDir
-            .appendingPathComponent("com.dreader.cache", isDirectory: true)
-            .appendingPathComponent(bookId.uuidString, isDirectory: true)
-
-        let isAlreadyExtracted = FileManager.default.fileExists(atPath: destinationDir.path)
-        if !isAlreadyExtracted {
-            try FileManager.default.createDirectory(at: destinationDir, withIntermediateDirectories: true)
-            // 1. Unzip using macOS native ditto tool (handles Unicode, GBK, AppleDouble and special characters)
-            try await unzip(archiveURL: fileURL, destinationURL: destinationDir)
+        // Claim the old filename ID only after a complete, parseable extraction.
+        // Existing caches provide the origin payload, including when the first
+        // post-upgrade import is a different book with the same filename.
+        if record == nil {
+            let oldDirectory = cacheRoot.appendingPathComponent(legacyID.uuidString, isDirectory: true)
+            var origin = payloadFingerprint
+            if fm.fileExists(atPath: oldDirectory.path),
+               (try? parseExtracted(fileURL: fileURL, bookID: legacyID, directory: oldDirectory)) != nil,
+               let oldPayload = try? EPUBIdentity.payloadFingerprint(in: oldDirectory) {
+                origin = oldPayload
+            }
+            record = EPUBIdentity.Record(version: EPUBIdentity.version, fileName: fileName,
+                                         legacyArchiveFingerprints: [], legacyPayloadFingerprint: origin)
         }
+        var updatedRecord = record!
+        if updatedRecord.legacyPayloadFingerprint == payloadFingerprint,
+           !updatedRecord.legacyArchiveFingerprints.contains(archiveFingerprint) {
+            updatedRecord.legacyArchiveFingerprints.append(archiveFingerprint)
+        }
+        let bookID = updatedRecord.legacyArchiveFingerprints.contains(archiveFingerprint) ? legacyID : contentID
+        let destination = EPUBIdentity.cacheDirectory(root: cacheRoot, bookID: bookID, archiveFingerprint: archiveFingerprint)
+        guard try EPUBIdentity.fingerprint(of: fileURL) == archiveFingerprint else { throw EPUBParserError.sourceChanged }
+        try fm.createDirectory(at: identityRoot, withIntermediateDirectories: true)
 
+        let marker = EPUBIdentity.Marker(version: EPUBIdentity.version, fileName: fileName, bookID: bookID,
+                                         archiveFingerprint: archiveFingerprint, sourceFingerprint: sourceFingerprint,
+                                         payloadFingerprint: payloadFingerprint)
+        try JSONEncoder().encode(marker).write(to: payload.appendingPathComponent(EPUBIdentity.markerName), options: .atomic)
+        if completedCache(destination, fileName: fileName, bookID: bookID, archiveFingerprint: archiveFingerprint),
+           let existing = try? parseExtracted(fileURL: fileURL, bookID: bookID, directory: destination) {
+            try JSONEncoder().encode(updatedRecord).write(to: recordURL, options: .atomic)
+            return existing
+        }
+        // Only incomplete/corrupt entries are replaced. Publishing a sibling
+        // directory with rename never exposes a partially extracted archive.
+        let publishedBook = try rebased(parsed, bookID: bookID, from: payload, to: destination)
+        if fm.fileExists(atPath: destination.path) { try fm.removeItem(at: destination) }
+        try fm.moveItem(at: payload, to: destination)
+        try JSONEncoder().encode(updatedRecord).write(to: recordURL, options: .atomic)
+        return publishedBook
+    }
+
+    private func completedCache(_ directory: URL, fileName: String, bookID: UUID, archiveFingerprint: String) -> Bool {
+        guard let marker = EPUBIdentity.readMarker(in: directory) else { return false }
+        return marker.fileName == fileName && marker.bookID == bookID && marker.archiveFingerprint == archiveFingerprint
+    }
+
+    private func rebased(_ book: EPUBBook, bookID: UUID, from oldRoot: URL, to newRoot: URL) throws -> EPUBBook {
+        func url(_ original: URL) throws -> URL {
+            let relative = try EPUBIdentity.relativePath(of: original, in: oldRoot)
+            return relative.isEmpty ? newRoot : newRoot.appendingPathComponent(relative)
+        }
+        func toc(_ item: TOCItem) throws -> TOCItem {
+            try TOCItem(id: item.id, title: item.title, href: item.href, targetURL: url(item.targetURL), subitems: item.subitems.map(toc))
+        }
+        return try EPUBBook(id: bookID, title: book.title, author: book.author, language: book.language,
+                           bookDescription: book.bookDescription, coverImageURL: book.coverImageURL.map(url), fileURL: book.fileURL,
+                           unzippedDirectory: newRoot, opfDirectory: url(book.opfDirectory),
+                           chapters: book.chapters.map {
+                               try EPUBChapter(id: $0.id, title: $0.title, fileURL: url($0.fileURL), orderIndex: $0.orderIndex)
+                           }, toc: book.toc.map(toc))
+    }
+
+    private func validateExtractedPaths(in directory: URL) throws {
+        guard let entries = FileManager.default.enumerator(at: directory, includingPropertiesForKeys: [.isSymbolicLinkKey]) else {
+            throw EPUBParserError.containerXMLNotFound
+        }
+        for case let file as URL in entries {
+            if try file.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink == true {
+                throw EPUBParserError.unsafeArchivePath
+            }
+        }
+    }
+
+    private func parseExtracted(fileURL: URL, bookID bookId: UUID, directory destinationDir: URL) throws -> EPUBBook {
         // 2. Read container.xml (resilient search)
         var containerURL = destinationDir.appendingPathComponent("META-INF/container.xml")
         var epubRoot = destinationDir
@@ -323,6 +564,19 @@ final class EPUBParser: Sendable {
             }
         }
 
+        guard !chapters.isEmpty else { throw EPUBParserError.spineNotFound }
+        let rootPath = destinationDir.standardizedFileURL.resolvingSymlinksInPath().path
+        let resourceURLs = [opfDirectory] + chapters.map(\.fileURL) + (coverURL.map { [$0] } ?? [])
+        func contained(_ url: URL) -> Bool {
+            let path = url.standardizedFileURL.resolvingSymlinksInPath().path
+            return path == rootPath || path.hasPrefix(rootPath + "/")
+        }
+        func tocContained(_ item: TOCItem) -> Bool {
+            contained(item.targetURL) && item.subitems.allSatisfy(tocContained)
+        }
+        guard resourceURLs.allSatisfy(contained), tocItems.allSatisfy(tocContained) else {
+            throw EPUBParserError.unsafeArchivePath
+        }
         return EPUBBook(
             id: bookId,
             title: title,
@@ -339,7 +593,28 @@ final class EPUBParser: Sendable {
     }
 
     // MARK: - Unzip Helper
-    private func unzip(archiveURL: URL, destinationURL: URL) async throws {
+    private func unzip(archiveURL: URL, destinationURL: URL) throws {
+        // Read the listing before extraction, without executing anything from the
+        // archive's directory. Reject paths that could escape the staging root.
+        let listing = Process()
+        listing.executableURL = URL(fileURLWithPath: "/usr/bin/unzip")
+        listing.arguments = ["-Z", "-1", archiveURL.path]
+        listing.standardError = FileHandle.nullDevice
+        let listingPipe = Pipe()
+        listing.standardOutput = listingPipe
+        try listing.run()
+        let listingData = listingPipe.fileHandleForReading.readDataToEndOfFile()
+        listing.waitUntilExit()
+        guard listing.terminationStatus == 0,
+              let names = String(data: listingData, encoding: .utf8) ?? String(data: listingData, encoding: .isoLatin1) else {
+            throw EPUBParserError.unzipFailed("无法读取 ZIP 文件列表")
+        }
+        for name in names.split(whereSeparator: \.isNewline) {
+            let path = name.replacingOccurrences(of: "\\", with: "/")
+            guard !path.hasPrefix("/"), !path.split(separator: "/").contains(".."), !path.contains("\0") else {
+                throw EPUBParserError.unsafeArchivePath
+            }
+        }
         // Primary: macOS native ditto tool (handles Unicode, GBK, UTF-8, and AppleDouble archives)
         let dittoProcess = Process()
         dittoProcess.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
@@ -347,18 +622,21 @@ final class EPUBParser: Sendable {
 
         let dittoErrorPipe = Pipe()
         dittoProcess.standardError = dittoErrorPipe
+        dittoProcess.standardOutput = FileHandle.nullDevice
 
         do {
             try dittoProcess.run()
+            _ = dittoErrorPipe.fileHandleForReading.readDataToEndOfFile()
             dittoProcess.waitUntilExit()
-
-            if dittoProcess.terminationStatus == 0 {
-                return
-            }
+            if dittoProcess.terminationStatus == 0 { return }
         } catch {
             // Fall through to unzip if ditto cannot execute
         }
 
+        // A failed extractor may have left partial files or symlinks. Never
+        // overlay another extractor on top of those entries.
+        try FileManager.default.removeItem(at: destinationURL)
+        try FileManager.default.createDirectory(at: destinationURL, withIntermediateDirectories: false)
         // Fallback: Info-ZIP unzip
         let unzipProcess = Process()
         unzipProcess.executableURL = URL(fileURLWithPath: "/usr/bin/unzip")
@@ -366,12 +644,13 @@ final class EPUBParser: Sendable {
 
         let unzipPipe = Pipe()
         unzipProcess.standardError = unzipPipe
+        unzipProcess.standardOutput = FileHandle.nullDevice
 
         try unzipProcess.run()
+        let errorData = unzipPipe.fileHandleForReading.readDataToEndOfFile()
         unzipProcess.waitUntilExit()
 
         if unzipProcess.terminationStatus != 0 {
-            let errorData = unzipPipe.fileHandleForReading.readDataToEndOfFile()
             let errorMsg = String(data: errorData, encoding: .utf8) ?? "code \(unzipProcess.terminationStatus)"
             throw EPUBParserError.unzipFailed(errorMsg)
         }

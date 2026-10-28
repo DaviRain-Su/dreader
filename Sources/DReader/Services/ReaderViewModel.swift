@@ -20,6 +20,9 @@ final class ReaderViewModel: @unchecked Sendable {
     var settings = ReaderSettings()
     var selectionManager = ReaderSelectionManager()
     var agentService = AIAgentService()
+    private let databaseOverride: LibraryDatabase?
+    private var database: LibraryDatabase { databaseOverride ?? .shared }
+    private var deletedHighlights: [Highlight] = []
 
     var isViewingBookshelf: Bool = true // Default to showing Bookshelf on launch
     var sidebarTab: SidebarTab = .toc
@@ -43,10 +46,13 @@ final class ReaderViewModel: @unchecked Sendable {
         ReadingStatsManager.shared.stats
     }
 
-    init(loadLibrary: Bool = true) {
+    init(loadLibrary: Bool = true, database: LibraryDatabase? = nil) {
+        self.databaseOverride = database
+        if loadLibrary || database != nil {
+            loadPersistedHighlights()
+            loadPersistedBookmarks()
+        }
         guard loadLibrary else { return }
-        loadPersistedHighlights()
-        loadPersistedBookmarks()
         // 跟随系统外观：启动即按当前亮暗套用昼/夜主题偏好
         if settings.followSystemAppearance {
             settings.applySystemAppearance()
@@ -74,11 +80,11 @@ final class ReaderViewModel: @unchecked Sendable {
         }
     }
 
-    /// 重新扫描持久化书架目录，补入新增 EPUB（按文件名去重）
+    /// 重新扫描持久化书架目录，按完整路径补入新增 EPUB。
     @MainActor
     func reloadLibraryFromDisk() {
         for url in Self.persistedLibraryEPUBs() {
-            guard !books.contains(where: { url.lastPathComponent == $0.fileURL.lastPathComponent }) else { continue }
+            guard !books.contains(where: { url.standardizedFileURL == $0.fileURL.standardizedFileURL }) else { continue }
             Task {
                 if let book = try? await EPUBParser.shared.parse(fileURL: url) {
                     if !books.contains(where: { $0.title == book.title }) {
@@ -98,11 +104,8 @@ final class ReaderViewModel: @unchecked Sendable {
 
         // 1. Restore persisted shelf EPUBs (manually imported books are copied here so
         //    they survive app restarts and Caches purges)
-        // 书籍 ID 按文件名生成，同名副本只解析最新的一个，避免并发解压到同一目录。
-        var seenFiles = Set<String>()
-        let urls = Self.persistedLibraryEPUBs().filter { seenFiles.insert($0.lastPathComponent).inserted }
-        var parsed: [EPUBBook] = []
-        parsed.reserveCapacity(urls.count)
+        // 同名不同内容现在有独立身份；解析器负责缓存串行发布，书架按解析后的 ID 去重。
+        let urls = Self.persistedLibraryEPUBs()
         await withTaskGroup(of: EPUBBook?.self) { group in
             var iterator = urls.makeIterator()
             func addNext() {
@@ -113,8 +116,7 @@ final class ReaderViewModel: @unchecked Sendable {
             for await book in group {
                 addNext()
                 if let book {
-                    parsed.append(book)
-                    books = Self.orderedRestoredBooks(books + parsed, sourceURLs: urls)
+                    books = Self.orderedRestoredBooks(books + [book], sourceURLs: urls)
                 }
             }
         }
@@ -142,14 +144,22 @@ final class ReaderViewModel: @unchecked Sendable {
     }
 
     /// Canonical shelf directory: Application Support/DReader (legacy samples) + DownloadedBooks/
-    static func persistedLibraryEPUBs() -> [URL] {
+    static func persistedLibraryEPUBs(baseDirectory: URL? = nil) -> [URL] {
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        let base = appSupport.appendingPathComponent("DReader", isDirectory: true)
+        let base = baseDirectory ?? appSupport.appendingPathComponent("DReader", isDirectory: true)
         var urls: [URL] = []
         let fm = FileManager.default
         for dir in [base, base.appendingPathComponent("DownloadedBooks")] {
             if let items = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) {
                 urls.append(contentsOf: items.filter { $0.pathExtension.lowercased() == "epub" })
+            }
+        }
+        let collisions = base.appendingPathComponent("DownloadedBooks/Variants", isDirectory: true)
+        if let directories = try? fm.contentsOfDirectory(at: collisions, includingPropertiesForKeys: [.isDirectoryKey]) {
+            for directory in directories where (try? directory.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true {
+                if let items = try? fm.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil) {
+                    urls.append(contentsOf: items.filter { $0.pathExtension.lowercased() == "epub" })
+                }
             }
         }
         // Order: file modification (newest first) to keep the shelf fresh-feeling on restore
@@ -160,17 +170,26 @@ final class ReaderViewModel: @unchecked Sendable {
         }
     }
 
-    /// Copies a newly imported EPUB into the persistent shelf dir (idempotent: overwrites by name).
-    private func persistShelfCopy(for fileURL: URL) {
-        guard fileURL.pathExtension.lowercased() == "epub" else { return }
-        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        let shelfDir = appSupport.appendingPathComponent("DReader/DownloadedBooks", isDirectory: true)
-        try? FileManager.default.createDirectory(at: shelfDir, withIntermediateDirectories: true)
-        let destination = shelfDir.appendingPathComponent(fileURL.lastPathComponent)
-        // Same name + already present: skip (parser's bookId is filename-derived, so highlights stay bound)
-        if FileManager.default.fileExists(atPath: destination.path) { return }
-        try? FileManager.default.removeItem(at: destination)
-        try? FileManager.default.copyItem(at: fileURL, to: destination)
+    /// 同名不同内容存入独立子目录，保留原文件名和旧书副本。
+    static func persistShelfCopy(for fileURL: URL, shelfDirectory: URL? = nil) throws -> URL {
+        let fm = FileManager.default
+        let appSupport = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        let shelfDir = shelfDirectory ?? appSupport.appendingPathComponent("DReader/DownloadedBooks", isDirectory: true)
+        try fm.createDirectory(at: shelfDir, withIntermediateDirectories: true)
+        var destination = shelfDir.appendingPathComponent(fileURL.lastPathComponent)
+        if destination.standardizedFileURL == fileURL.standardizedFileURL { return destination }
+        if fm.fileExists(atPath: destination.path) {
+            let fingerprint = try EPUBIdentity.fingerprint(of: fileURL)
+            if try EPUBIdentity.fingerprint(of: destination) == fingerprint { return destination }
+            let variant = shelfDir.appendingPathComponent("Variants/\(fingerprint)", isDirectory: true)
+            try fm.createDirectory(at: variant, withIntermediateDirectories: true)
+            destination = variant.appendingPathComponent(fileURL.lastPathComponent)
+            if fm.fileExists(atPath: destination.path),
+               try EPUBIdentity.fingerprint(of: destination) == fingerprint { return destination }
+        }
+        let data = try Data(contentsOf: fileURL, options: .mappedIfSafe)
+        try data.write(to: destination, options: .atomic)
+        return destination
     }
 
     func returnToBookshelf() {
@@ -223,7 +242,7 @@ final class ReaderViewModel: @unchecked Sendable {
         recapTask?.cancel()
         pendingRecap = nil
         guard !recapDismissedBookTitles.contains(book.title), book.currentChapterIndex == 0 else { return }
-        guard let activity = LibraryDatabase.shared.latestActivity(bookTitle: book.title) else { return }
+        guard let activity = database.latestActivity(bookTitle: book.title) else { return }
         let days = max(1, Int(Date().timeIntervalSince(activity.date) / 86_400))
         guard days >= 3, activity.chapterIndex > 0 else { return }
         recapTask = Task { @MainActor in
@@ -288,8 +307,10 @@ final class ReaderViewModel: @unchecked Sendable {
         errorMessage = nil
 
         do {
-            let book = try await EPUBParser.shared.parse(fileURL: url)
-            persistShelfCopy(for: url)
+            var book = try await EPUBParser.shared.parse(fileURL: url)
+            book.fileURL = try await Task.detached(priority: .userInitiated) {
+                try Self.persistShelfCopy(for: url)
+            }.value
             if let existingIndex = books.firstIndex(where: { $0.title == book.title }) {
                 books[existingIndex] = book
                 selectBookForReading(book)
@@ -572,14 +593,20 @@ final class ReaderViewModel: @unchecked Sendable {
     func updateHighlight(id: UUID, colorHex: String? = nil, note: String? = nil) {
         if let idx = highlights.firstIndex(where: { $0.id == id }) {
             var h = highlights[idx]
+            // 旧记录缺少字段标记时延续已有保护；此后只标记用户实际编辑的字段。
+            let legacyEdited = (h.updatedAt ?? h.createdAt) > h.createdAt
+            h.isNoteLocallyEdited = h.isNoteLocallyEdited ?? legacyEdited
+            h.isColorLocallyEdited = h.isColorLocallyEdited ?? legacyEdited
             if let c = colorHex {
                 h.colorHex = c
+                h.isColorLocallyEdited = true
                 lastChosenHighlightColor = c
                 updateHighlightColorAction?(id.uuidString, c)
             }
             if let n = note {
                 let trimmed = n.trimmingCharacters(in: .whitespacesAndNewlines)
                 h.note = trimmed.isEmpty ? nil : trimmed
+                h.isNoteLocallyEdited = true
                 updateHighlightThoughtAction?(id.uuidString, h.note)
             }
             h.updatedAt = Date()
@@ -589,9 +616,12 @@ final class ReaderViewModel: @unchecked Sendable {
     }
 
     func deleteHighlight(_ id: UUID) {
+        if let removed = highlights.first(where: { $0.id == id }) {
+            deletedHighlights.append(removed)
+        }
         highlights.removeAll { $0.id == id }
-        LibraryDatabase.shared.deleteHighlight(id: id)
-        LibraryDatabase.shared.deleteReviewSchedule(highlightId: id)
+        database.deleteHighlight(id: id)
+        database.deleteReviewSchedule(highlightId: id)
         selectionManager.activeHighlightCard = nil
         removeHighlightAction?(id.uuidString)
     }
@@ -600,21 +630,25 @@ final class ReaderViewModel: @unchecked Sendable {
         savePersistedHighlights()
     }
 
+    @MainActor
+    @discardableResult
+    func applyWeChatSyncResult(_ incoming: [Highlight], baseline: [Highlight]) -> Int {
+        let oldCount = highlights.count
+        highlights = WeChatReadingService.mergeHighlights(incoming, into: highlights,
+            baseline: baseline, deleted: deletedHighlights)
+        savePersistedHighlights()
+        return max(0, highlights.count - oldCount)
+    }
+
     private func savePersistedHighlights() {
-        LibraryDatabase.shared.upsertHighlights(highlights)
+        database.upsertHighlights(highlights)
         // Legacy UserDefaults copy retired from active use; SQLite (LibraryDatabase) is now
         // the source of truth. The old UserDefaults blob stays as a historical backup.
     }
 
     private func loadPersistedHighlights() {
-        let stored = LibraryDatabase.shared.loadHighlights()
-        if !stored.isEmpty {
-            self.highlights = stored
-        } else if let data = UserDefaults.standard.data(forKey: "dreader.highlights"),
-                  let decoded = try? JSONDecoder().decode([Highlight].self, from: data) {
-            // Fallback for the rare case migration was skipped (Database handled it internally too)
-            self.highlights = decoded
-        }
+        // 旧格式迁移由数据库负责；空数组也是有效的已保存状态。
+        highlights = database.loadHighlights()
     }
 
     // MARK: - In-Book Full-Text Search (Apple Books style)
@@ -729,24 +763,23 @@ final class ReaderViewModel: @unchecked Sendable {
 
     // MARK: - AI 伴读笔记落库
 
-    /// 把一条 AI 解读存为书内笔记：挂在当前章，source 标记 ai_companion，
-    /// 进入 SQLite 划线库 → iCloud 备份 → MCP 全链路。
+    /// 用提问时捕获的书章归属保存回答，切章和换书不改变旧消息的来源。
     @MainActor
-    func saveAIMessageAsNote(_ content: String) {
-        guard let book = currentBook, let chapter = book.currentChapter else { return }
-        let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
+    func saveAIMessageAsNote(_ message: ChatMessage) {
+        guard message.role == .assistant, let source = message.noteSource else { return }
+        let trimmed = message.content.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         let note = Highlight(
-            bookId: book.id,
-            bookTitle: book.title,
-            chapterIndex: book.currentChapterIndex,
-            chapterTitle: chapter.title,
-            text: "【AI 伴读解读】\(ChineseScriptConverter.convert(chapter.title, mode: settings.chineseScriptMode))",
+            bookId: source.bookId,
+            bookTitle: source.bookTitle,
+            chapterIndex: source.chapterIndex,
+            chapterTitle: source.chapterTitle,
+            text: "【AI 伴读解读】\(source.chapterTitle)",
             colorHex: "#A5D8FF",
             note: trimmed,
             source: "ai_companion"
         )
-        LibraryDatabase.shared.upsertHighlights([note])
+        database.upsertHighlights([note])
         highlights.append(note)
     }
 
@@ -754,14 +787,14 @@ final class ReaderViewModel: @unchecked Sendable {
     /// 首次到期复习由 review_schedule 的 NULL 分支自然接管，进入 7/14/28 天队列。
     func saveVocabularyWord(_ raw: String) {
         guard let book = currentBook, let chapter = book.currentChapter else { return }
-        if LibraryDatabase.shared.upsertVocabularyWord(
+        if database.upsertVocabularyWord(
             raw,
             bookId: book.id,
             bookTitle: book.title,
             chapterTitle: chapter.title
         ) != nil {
             // 仅新词才刷新内存列表（去重命中时静默）
-            highlights = LibraryDatabase.shared.loadHighlights()
+            highlights = database.loadHighlights()
         }
     }
 
@@ -831,7 +864,8 @@ final class ReaderViewModel: @unchecked Sendable {
     func toggleCurrentChapterBookmark() {
         guard let book = currentBook, let chapter = book.currentChapter else { return }
         if let idx = bookmarks.firstIndex(where: { $0.bookId == book.id && $0.chapterIndex == book.currentChapterIndex }) {
-            bookmarks.remove(at: idx)
+            let removed = bookmarks.remove(at: idx)
+            database.deleteBookmark(id: removed.id)
         } else {
             let bm = Bookmark(
                 bookId: book.id,
@@ -847,21 +881,15 @@ final class ReaderViewModel: @unchecked Sendable {
 
     func deleteBookmark(id: UUID) {
         bookmarks.removeAll { $0.id == id }
-        savePersistedBookmarks()
+        database.deleteBookmark(id: id)
     }
 
     private func savePersistedBookmarks() {
-        LibraryDatabase.shared.upsertBookmarks(bookmarks)
+        database.upsertBookmarks(bookmarks)
     }
 
     private func loadPersistedBookmarks() {
-        let stored = LibraryDatabase.shared.loadBookmarks()
-        if !stored.isEmpty {
-            self.bookmarks = stored
-        } else if let data = UserDefaults.standard.data(forKey: "dreader.bookmarks"),
-                  let decoded = try? JSONDecoder().decode([Bookmark].self, from: data) {
-            self.bookmarks = decoded
-        }
+        bookmarks = database.loadBookmarks()
     }
 
     // MARK: - Reading Time & Speed Estimation

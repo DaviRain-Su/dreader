@@ -355,7 +355,7 @@ struct ReaderTypographySettingsPopover: View {
                                 .textFieldStyle(.roundedBorder)
                                 .font(.system(size: 10.5, design: .monospaced))
                         }
-                        Text("兼容 OpenAI /v1/audio/speech 接口（硅基流动 CosyVoice2 拟人效果佳，有免费额度）。朗读中请求失败会自动切到 Piper 本地引擎，不打断听书")
+                        Text("兼容 OpenAI /v1/audio/speech 接口（硅基流动 CosyVoice2 提供拟人音色）。请求失败时尝试 Piper 本地引擎；两个引擎都失败会停止朗读并显示原因。")
                             .font(.system(size: 9.5))
                             .foregroundStyle(.secondary.opacity(0.8))
                             .fixedSize(horizontal: false, vertical: true)

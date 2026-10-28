@@ -96,13 +96,15 @@ final class OPDSService: @unchecked Sendable {
     private static let sourcesKey = "dreader.opds.sources"
 
     static func loadSources() -> [Source] {
-        guard let data = UserDefaults.standard.data(forKey: sourcesKey),
-              let list = try? JSONDecoder().decode([Source].self, from: data)
-        else { return [] }
+        let list = UserDefaults.standard.data(forKey: sourcesKey)
+            .flatMap { try? JSONDecoder().decode([Source].self, from: $0) } ?? []
+        shared.updateSources(list)
         return list
     }
 
     static func saveSources(_ sources: [Source]) {
+        // 先撤销旧策略及连接；不能等下一次请求或应用重启才生效。
+        shared.updateSources(sources)
         if let data = try? JSONEncoder().encode(sources) {
             UserDefaults.standard.set(data, forKey: sourcesKey)
         }
@@ -110,33 +112,119 @@ final class OPDSService: @unchecked Sendable {
 
     // MARK: - 网络
 
-    /// 带自签名信任策略的 URLSession（按源配置放行特定主机）
-    private lazy var session: URLSession = {
-        let config = URLSessionConfiguration.ephemeral
-        config.timeoutIntervalForRequest = 30
-        config.requestCachePolicy = .reloadIgnoringLocalCacheData
-        let delegate = TrustDelegate()
-        return URLSession(configuration: config, delegate: delegate, delegateQueue: nil)
-    }()
+    /// 凭据与证书例外都绑定完整 origin，显式默认端口与省略端口视为同源。
+    struct Origin: Equatable, Sendable {
+        let scheme: String
+        let host: String
+        let port: Int
 
-    private var trustedHosts: Set<String> = []
-    private let trustLock = NSLock()
-    private let imageCache = NSCache<NSString, NSImage>()
+        init?(scheme: String?, host: String?, port: Int?) {
+            guard let scheme = scheme?.lowercased(), scheme == "http" || scheme == "https",
+                  let host = host?.lowercased(), !host.isEmpty else { return nil }
+            self.scheme = scheme
+            self.host = host
+            self.port = port ?? (scheme == "https" ? 443 : 80)
+        }
+
+        init?(_ url: URL) {
+            self.init(scheme: url.scheme, host: url.host, port: url.port)
+        }
+    }
+
+    /// 一份源配置对应一个可撤销策略。旧副本、重定向及连接级 challenge 共用此策略。
+    final class RequestPolicy: @unchecked Sendable {
+        let source: Source?
+        let cacheID = UUID()
+        private let origin: Origin?
+        private let authorization: String?
+        private let lock = NSLock()
+        private var revoked = false
+
+        init(source: Source?) throws {
+            self.source = source
+            if let source {
+                guard let url = URL(string: source.url), let origin = Origin(url),
+                      url.user == nil, url.password == nil else { throw OPDSError.badURL }
+                self.origin = origin
+                authorization = source.username.isEmpty ? nil
+                    : "Basic " + Data("\(source.username):\(source.password)".utf8).base64EncodedString()
+            } else {
+                origin = nil
+                authorization = nil
+            }
+        }
+
+        func revoke() {
+            lock.withLock { revoked = true }
+        }
+
+        func request(for url: URL, redirecting proposed: URLRequest? = nil) throws -> URLRequest {
+            try lock.withLock {
+                guard !revoked else { throw URLError(.cancelled) }
+                guard let target = Origin(url), url.user == nil, url.password == nil else { throw OPDSError.badURL }
+                var request = proposed ?? URLRequest(url: url)
+                request.url = url
+                request.setValue(OPDSService.userAgent, forHTTPHeaderField: "User-Agent")
+                // 每一跳重新计算，不能依赖 URLSession 对跨协议/端口跳转的默认处理。
+                request.setValue(target == origin ? authorization : nil, forHTTPHeaderField: "Authorization")
+                request.setValue(nil, forHTTPHeaderField: "Proxy-Authorization")
+                return request
+            }
+        }
+
+        func allowsSelfSigned(_ space: URLProtectionSpace) -> Bool {
+            lock.withLock {
+                !revoked && source?.allowSelfSigned == true
+                    && origin == Origin(scheme: space.protocol, host: space.host, port: space.port)
+            }
+        }
+    }
 
     final class TrustDelegate: NSObject, URLSessionDataDelegate {
+        let policy: RequestPolicy
+
+        init(policy: RequestPolicy) {
+            self.policy = policy
+        }
+
+        func urlSession(
+            _ session: URLSession,
+            task: URLSessionTask,
+            willPerformHTTPRedirection response: HTTPURLResponse,
+            newRequest request: URLRequest,
+            completionHandler: @escaping (URLRequest?) -> Void
+        ) {
+            guard let url = request.url else { completionHandler(nil); return }
+            completionHandler(try? policy.request(for: url, redirecting: request))
+        }
+
         func urlSession(
             _ session: URLSession,
             didReceive challenge: URLAuthenticationChallenge,
             completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
         ) {
-            guard challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
-                  let trust = challenge.protectionSpace.serverTrust else {
-                completionHandler(.performDefaultHandling, nil)
+            handle(challenge, completionHandler: completionHandler)
+        }
+
+        func urlSession(
+            _ session: URLSession,
+            task: URLSessionTask,
+            didReceive challenge: URLAuthenticationChallenge,
+            completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
+        ) {
+            handle(challenge, completionHandler: completionHandler)
+        }
+
+        private func handle(
+            _ challenge: URLAuthenticationChallenge,
+            completionHandler: (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
+        ) {
+            guard challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust else {
+                // Basic 只由 request(for:) 发出，不从系统凭据库或 challenge 自动补发。
+                completionHandler(.rejectProtectionSpace, nil)
                 return
             }
-            let host = challenge.protectionSpace.host
-            let allowed = OPDSService.shared.trustLock.withLock { OPDSService.shared.trustedHosts.contains(host) }
-            if allowed {
+            if policy.allowsSelfSigned(challenge.protectionSpace), let trust = challenge.protectionSpace.serverTrust {
                 completionHandler(.useCredential, URLCredential(trust: trust))
             } else {
                 completionHandler(.performDefaultHandling, nil)
@@ -144,40 +232,93 @@ final class OPDSService: @unchecked Sendable {
         }
     }
 
-    private func context(_ source: Source?) throws -> (request: URLRequest, authHeader: String?) {
-        let base = source?.url ?? ""
-        guard let url = URL(string: base), !base.isEmpty else { throw OPDSError.badURL }
-        var request = URLRequest(url: url)
-        request.setValue(Self.userAgent, forHTTPHeaderField: "User-Agent")
-        request.setValue("application/atom+xml,application/xml;q=0.9,text/xml;q=0.8,*/*;q=0.5", forHTTPHeaderField: "Accept")
-        var auth: String? = nil
-        if let src = source, !src.username.isEmpty {
-            let raw = "\(src.username):\(src.password)"
-            let token = Data(raw.utf8).base64EncodedString()
-            auth = "Basic \(token)"
-            request.setValue(auth!, forHTTPHeaderField: "Authorization")
+    struct NetworkContext {
+        let policy: RequestPolicy
+        let session: URLSession
+    }
+
+    private let configuration: URLSessionConfiguration
+    private let networkLock = NSLock()
+    private var configuredSources: [UUID: Source]?
+    private var contexts: [UUID: NetworkContext] = [:]
+    private var anonymousContext: NetworkContext?
+    private let imageCache = NSCache<NSString, NSImage>()
+
+    /// 配置注入仅用于隔离网络的 URLProtocol 回归；正常调用保持 OPDSService() 兼容。
+    init(configuration: URLSessionConfiguration = .ephemeral) {
+        self.configuration = configuration.copy() as! URLSessionConfiguration
+    }
+
+    deinit {
+        for context in contexts.values { context.session.invalidateAndCancel() }
+        anonymousContext?.session.invalidateAndCancel()
+    }
+
+    func updateSources(_ sources: [Source]) {
+        let retired = networkLock.withLock { () -> [NetworkContext] in
+            let latest = Dictionary(sources.map { ($0.id, $0) }, uniquingKeysWith: { _, last in last })
+            configuredSources = latest
+            let retired = contexts.filter { latest[$0.key] != $0.value.policy.source }
+            for (id, context) in retired {
+                context.policy.revoke()
+                contexts.removeValue(forKey: id)
+            }
+            return Array(retired.values)
         }
-        // 自签名开关：登记主机，TrustDelegate 据此放行
-        if let src = source, src.allowSelfSigned, let host = url.host {
-            trustLock.withLock { _ = trustedHosts.insert(host) }
+        // 新 URLSession 同时隔离已获放行的 TLS 连接及认证缓存，关闭开关后不复用旧连接。
+        for context in retired { context.session.invalidateAndCancel() }
+        if !retired.isEmpty { imageCache.removeAllObjects() }
+    }
+
+    func context(_ source: Source?) throws -> NetworkContext {
+        try networkLock.withLock {
+            if let source {
+                // 配置保存后，旧任务持有的 Source 副本不能把已删除/修改的策略重新启用。
+                if let configuredSources, configuredSources[source.id] != source { throw URLError(.cancelled) }
+                if let existing = contexts[source.id], existing.policy.source == source { return existing }
+                if let old = contexts.removeValue(forKey: source.id) {
+                    old.policy.revoke()
+                    old.session.invalidateAndCancel()
+                }
+                let context = try makeContext(source)
+                contexts[source.id] = context
+                return context
+            }
+            if let anonymousContext { return anonymousContext }
+            let context = try makeContext(nil)
+            anonymousContext = context
+            return context
         }
-        return (request, auth)
+    }
+
+    private func makeContext(_ source: Source?) throws -> NetworkContext {
+        let policy = try RequestPolicy(source: source)
+        let config = configuration.copy() as! URLSessionConfiguration
+        config.timeoutIntervalForRequest = 30
+        config.requestCachePolicy = .reloadIgnoringLocalCacheData
+        config.urlCache = nil
+        config.urlCredentialStorage = nil
+        config.httpCookieStorage = nil
+        config.httpShouldSetCookies = false
+        config.httpAdditionalHeaders = config.httpAdditionalHeaders?.filter {
+            let name = String(describing: $0.key).lowercased()
+            return name != "authorization" && name != "proxy-authorization"
+        }
+        return NetworkContext(policy: policy,
+                              session: URLSession(configuration: config, delegate: TrustDelegate(policy: policy), delegateQueue: nil))
     }
 
     // MARK: - 拉取 feed
 
     func fetchFeed(href: String, source: Source?) async throws -> Feed {
-        let base = try context(source)
+        let context = try context(source)
         guard let url = absoluteURL(href) else { throw OPDSError.badURL }
-        var request = base.request
-        request.url = url
-        if let auth = base.authHeader {
-            request.setValue(auth, forHTTPHeaderField: "Authorization")
-        }
-        let (data, resp) = try await session.data(for: request)
+        var request = try context.policy.request(for: url)
+        request.setValue("application/atom+xml,application/xml;q=0.9,text/xml;q=0.8,*/*;q=0.5", forHTTPHeaderField: "Accept")
+        let (data, resp) = try await context.session.data(for: request)
         guard let http = resp as? HTTPURLResponse else { throw OPDSError.http(-1) }
         guard (200..<300).contains(http.statusCode) else { throw OPDSError.http(http.statusCode) }
-        return try parseFeed(data, baseURL: url)
+        return try parseFeed(data, baseURL: http.url ?? url)
     }
 
     /// 目录内搜索：把 {searchTerms} 模板替换为编码后的关键词。
@@ -408,14 +549,11 @@ extension OPDSService {
         progress: (@Sendable (Double) -> Void)? = nil
     ) async throws -> URL {
         guard let href = pickEPUBLink(entry) else { throw OPDSError.noEpubLink }
-        let ctx = try context(source)
-        var request = ctx.request
-        request.url = absoluteURL(href)
-        if let auth = ctx.authHeader {
-            request.setValue(auth, forHTTPHeaderField: "Authorization")
-        }
+        let context = try context(source)
+        guard let url = absoluteURL(href) else { throw OPDSError.badURL }
+        let request = try context.policy.request(for: url)
 
-        let (asyncBytes, resp) = try await session.bytes(for: request)
+        let (asyncBytes, resp) = try await context.session.bytes(for: request)
         guard let http = resp as? HTTPURLResponse else { throw OPDSError.http(-1) }
         guard (200..<300).contains(http.statusCode) else { throw OPDSError.http(http.statusCode) }
         let expected = http.expectedContentLength
@@ -466,20 +604,15 @@ extension OPDSService {
 
     /// 拉 OPDS 封面（可能需要 Basic 认证），带内存缓存，失败返回 nil 走占位图
     func fetchImage(href: String, source: Source?) async -> NSImage? {
-        if let hit = imageCache.object(forKey: href as NSString) { return hit }
-        guard let url = absoluteURL(href) else { return nil }
-        var request = URLRequest(url: url)
-        request.setValue(Self.userAgent, forHTTPHeaderField: "User-Agent")
-        if let source {
-            guard let ctx = try? context(source) else { return nil }
-            request = ctx.request
-            request.url = url
-            if let auth = ctx.authHeader {
-                request.setValue(auth, forHTTPHeaderField: "Authorization")
-            }
-        }
-        guard let (data, _) = try? await session.data(for: request), let image = NSImage(data: data) else { return nil }
-        imageCache.setObject(image, forKey: href as NSString)
+        guard let context = try? context(source), let url = absoluteURL(href),
+              let request = try? context.policy.request(for: url) else { return nil }
+        // 同一封面 URL 在不同源/策略下不能共享认证或证书例外得到的缓存。
+        let cacheKey = "\(context.policy.cacheID):\(href)" as NSString
+        if let hit = imageCache.object(forKey: cacheKey) { return hit }
+        guard let (data, response) = try? await context.session.data(for: request),
+              let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode),
+              let image = NSImage(data: data) else { return nil }
+        imageCache.setObject(image, forKey: cacheKey)
         return image
     }
 }

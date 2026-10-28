@@ -27,7 +27,8 @@ final class WeChatReadingService: @unchecked Sendable {
     var totalNoteCount: Int = 0
     var errorMessage: String? = nil
 
-    init() {
+    init(loadPreferences: Bool = true) {
+        guard loadPreferences else { return }
         // 1. Try reading saved key from UserDefaults
         if let saved = UserDefaults.standard.string(forKey: apiKeyDefaultsKey), !saved.isEmpty {
             self.apiKey = saved
@@ -248,7 +249,7 @@ final class WeChatReadingService: @unchecked Sendable {
             let createdDate = Date(timeIntervalSince1970: bm.createTime)
 
             let highlight = Highlight(
-                id: deterministicUUID(for: "wechat_bm_\(bm.bookmarkId)"),
+                id: deterministicUUID(for: "wechat_bm_\(wechatBookId)_\(bm.bookmarkId)"),
                 bookId: targetBookId,
                 bookTitle: bookTitle,
                 chapterIndex: chapterIdx,
@@ -261,7 +262,9 @@ final class WeChatReadingService: @unchecked Sendable {
                 source: "wechat_read",
                 wechatBookId: wechatBookId,
                 wechatBookmarkId: bm.bookmarkId,
-                wechatAuthor: bookAuthor
+                wechatAuthor: bookAuthor,
+                isNoteLocallyEdited: false,
+                isColorLocallyEdited: false
             )
             results.append(highlight)
         }
@@ -277,7 +280,7 @@ final class WeChatReadingService: @unchecked Sendable {
             let createdDate = Date(timeIntervalSince1970: rev.createTime)
 
             let highlight = Highlight(
-                id: deterministicUUID(for: "wechat_rev_\(rev.reviewId)"),
+                id: deterministicUUID(for: "wechat_rev_\(wechatBookId)_\(rev.reviewId)"),
                 bookId: targetBookId,
                 bookTitle: bookTitle,
                 chapterIndex: chapterIdx,
@@ -290,7 +293,9 @@ final class WeChatReadingService: @unchecked Sendable {
                 source: "wechat_read",
                 wechatBookId: wechatBookId,
                 wechatBookmarkId: "rev_\(rev.reviewId)",
-                wechatAuthor: bookAuthor
+                wechatAuthor: bookAuthor,
+                isNoteLocallyEdited: false,
+                isColorLocallyEdited: false
             )
             results.append(highlight)
         }
@@ -301,8 +306,7 @@ final class WeChatReadingService: @unchecked Sendable {
     // MARK: - Synchronize a Single Book
     func syncSingleBook(
         notebook: WeChatNotebookItem,
-        localBooks: [EPUBBook],
-        currentHighlights: [Highlight]
+        localBooks: [EPUBBook]
     ) async throws -> [Highlight] {
         // Find matching book in DReader library if available
         let matchingLocal = localBooks.first { b in
@@ -322,29 +326,54 @@ final class WeChatReadingService: @unchecked Sendable {
             matchingLocalBook: matchingLocal
         )
 
-        // Merge and deduplicate by wechatBookmarkId or id
-        var updatedList = currentHighlights
-        for h in newHighlights {
-            if let idx = updatedList.firstIndex(where: {
-                $0.id == h.id ||
-                ($0.wechatBookmarkId != nil && $0.wechatBookmarkId == h.wechatBookmarkId) ||
-                ($0.source == "wechat_read" && $0.bookTitle == h.bookTitle && $0.text == h.text)
-            }) {
-                // Update existing
-                updatedList[idx] = h
-            } else {
-                // Prepend new
-                updatedList.insert(h, at: 0)
+        return newHighlights
+    }
+
+    /// 只用远端身份合并；相同引文可能来自不同随笔、章节或书籍。
+    static func isSameRemoteHighlight(_ local: Highlight, _ remote: Highlight) -> Bool {
+        if local.id == remote.id { return true }
+        guard let localBook = local.wechatBookId, let remoteBook = remote.wechatBookId,
+              let localMark = local.wechatBookmarkId, let remoteMark = remote.wechatBookmarkId else { return false }
+        return localBook == remoteBook && localMark == remoteMark
+    }
+
+    static func mergeHighlights(_ incoming: [Highlight], into current: [Highlight],
+                                baseline: [Highlight]? = nil, deleted: [Highlight] = []) -> [Highlight] {
+        var result = current
+        for remote in incoming {
+            guard !deleted.contains(where: { isSameRemoteHighlight($0, remote) }) else { continue }
+            let original = baseline?.first { isSameRemoteHighlight($0, remote) }
+            if let index = result.firstIndex(where: { isSameRemoteHighlight($0, remote) }) {
+                let local = result[index]
+                if let original, local != original { continue }
+                var merged = Highlight(id: local.id, bookId: remote.bookId, bookTitle: remote.bookTitle,
+                    chapterIndex: remote.chapterIndex, chapterTitle: remote.chapterTitle,
+                    text: remote.text, colorHex: remote.colorHex, createdAt: local.createdAt,
+                    note: remote.note, updatedAt: remote.updatedAt, source: remote.source,
+                    wechatBookId: remote.wechatBookId, wechatBookmarkId: remote.wechatBookmarkId,
+                    wechatAuthor: remote.wechatAuthor)
+                // 旧记录没有逐字段标记时保守保留；新编辑只保护实际修改的字段。
+                let legacyEdited = (local.updatedAt ?? local.createdAt) > local.createdAt
+                let preserveNote = local.isNoteLocallyEdited ?? legacyEdited
+                let preserveColor = local.isColorLocallyEdited ?? legacyEdited
+                merged.isNoteLocallyEdited = preserveNote
+                merged.isColorLocallyEdited = preserveColor
+                if preserveNote || merged.note?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
+                    merged.note = local.note
+                }
+                if preserveColor { merged.colorHex = local.colorHex }
+                if preserveNote || preserveColor { merged.updatedAt = local.updatedAt }
+                result[index] = merged
+            } else if original == nil {
+                result.insert(remote, at: 0)
             }
         }
-
-        return updatedList
+        return result
     }
 
     // MARK: - Full Batch Sync
     func syncAllNotebooks(
         localBooks: [EPUBBook],
-        currentHighlights: [Highlight],
         onProgress: (@Sendable (Double, String) -> Void)? = nil
     ) async throws -> (importedCount: Int, updatedHighlights: [Highlight]) {
         isSyncing = true
@@ -360,10 +389,10 @@ final class WeChatReadingService: @unchecked Sendable {
 
         let books = try await fetchAllNotebooks()
         guard !books.isEmpty else {
-            return (0, currentHighlights)
+            return (0, [])
         }
 
-        var runningHighlights = currentHighlights
+        var runningHighlights: [Highlight] = []
         var newlyImportedCount = 0
 
         for (index, nb) in books.enumerated() {
@@ -375,11 +404,9 @@ final class WeChatReadingService: @unchecked Sendable {
 
             do {
                 let beforeCount = runningHighlights.count
-                runningHighlights = try await syncSingleBook(
-                    notebook: nb,
-                    localBooks: localBooks,
-                    currentHighlights: runningHighlights
-                )
+                let incoming = try await syncSingleBook(notebook: nb, localBooks: localBooks)
+                try Task.checkCancellation()
+                runningHighlights = Self.mergeHighlights(incoming, into: runningHighlights)
                 let added = runningHighlights.count - beforeCount
                 if added > 0 {
                     newlyImportedCount += added

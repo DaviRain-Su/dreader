@@ -104,6 +104,9 @@ final class OPDSBrowseModel: ObservableObject {
             )
         }
         OPDSService.saveSources(sources)
+        if let active = activeSource {
+            activeSource = sources.first { $0.id == active.id }
+        }
         errorMessage = nil
         showForm = false
     }
@@ -111,6 +114,14 @@ final class OPDSBrowseModel: ObservableObject {
     func deleteSource(_ source: OPDSService.Source) {
         sources.removeAll { $0.id == source.id }
         OPDSService.saveSources(sources)
+        if activeSource?.id == source.id {
+            activeSource = nil
+            stack = []
+            searchTemplate = nil
+            searchFeed = nil
+            isSearchResults = false
+            mode = .manage
+        }
         if editingID == source.id { showForm = false }
     }
 
@@ -817,6 +828,11 @@ struct OPDSCoverImage: View {
 
     @State private var image: NSImage? = nil
 
+    private struct LoadID: Equatable {
+        let href: String?
+        let source: OPDSService.Source?
+    }
+
     var body: some View {
         ZStack {
             RoundedRectangle(cornerRadius: 5, style: .continuous)
@@ -831,9 +847,12 @@ struct OPDSCoverImage: View {
                     .foregroundStyle(Color.primary.opacity(0.55))
             }
         }
-        .task(id: href) {
+        .task(id: LoadID(href: href, source: source)) {
+            image = nil
             guard let href else { return }
-            image = await OPDSService.shared.fetchImage(href: href, source: source)
+            let loaded = await OPDSService.shared.fetchImage(href: href, source: source)
+            guard !Task.isCancelled else { return }
+            image = loaded
         }
     }
 }

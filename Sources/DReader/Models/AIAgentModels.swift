@@ -63,6 +63,32 @@ enum AIAgentRole: String, CaseIterable, Identifiable, Codable {
     }
 }
 
+struct AINoteSource: Hashable, Sendable {
+    let bookId: UUID
+    let bookTitle: String
+    let chapterIndex: Int
+    let chapterTitle: String
+
+    init?(book: EPUBBook?, chapter: EPUBChapter?) {
+        guard let book, let chapter else { return nil }
+        let matches: (EPUBChapter) -> Bool = {
+            $0.fileURL == chapter.fileURL && $0.id == chapter.id && $0.orderIndex == chapter.orderIndex
+        }
+        let index: Int
+        if let current = book.currentChapter, matches(current) {
+            index = book.currentChapterIndex
+        } else if let matched = book.chapters.firstIndex(where: matches) {
+            index = matched
+        } else {
+            return nil
+        }
+        bookId = book.id
+        bookTitle = book.title
+        chapterIndex = index
+        chapterTitle = chapter.title
+    }
+}
+
 /// A chat message in the conversation
 struct ChatMessage: Identifiable, Hashable, Sendable {
     let id: UUID
@@ -70,6 +96,7 @@ struct ChatMessage: Identifiable, Hashable, Sendable {
     var content: String
     let quoteContext: String?
     let timestamp: Date
+    let noteSource: AINoteSource?
 
     enum Role: String, Codable, Sendable {
         case user
@@ -82,12 +109,14 @@ struct ChatMessage: Identifiable, Hashable, Sendable {
         role: Role,
         content: String,
         quoteContext: String? = nil,
-        timestamp: Date = Date()
+        timestamp: Date = Date(),
+        noteSource: AINoteSource? = nil
     ) {
         self.id = id
         self.role = role
         self.content = content
         self.quoteContext = quoteContext
         self.timestamp = timestamp
+        self.noteSource = noteSource
     }
 }

@@ -8,41 +8,99 @@
 
 import Foundation
 import SQLite3
+import CryptoKit
 
 let mcpProtocolVersion = "2024-11-05"
 
 // MARK: - 位置
 
 enum LibraryLocations {
+    private static func overrideRoot(_ name: String) -> URL? {
+        guard let path = ProcessInfo.processInfo.environment[name], path.hasPrefix("/") else { return nil }
+        return URL(fileURLWithPath: path, isDirectory: true)
+    }
     static var appSupport: URL {
-        FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Application Support/DReader")
+        overrideRoot("DREADER_APP_SUPPORT_ROOT") ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+            .appendingPathComponent("DReader", isDirectory: true)
     }
-    static var sqlitePath: String {
-        appSupport.appendingPathComponent("library.sqlite").path
-    }
+    static var sqlitePath: String { appSupport.appendingPathComponent("library.sqlite").path }
     static var shelfDirs: [URL] {
-        [appSupport, appSupport.appendingPathComponent("DownloadedBooks")]
+        let roots: [URL]
+        if let root = overrideRoot("DREADER_EPUB_ROOT") { roots = [root] }
+        else { roots = [appSupport, appSupport.appendingPathComponent("DownloadedBooks", isDirectory: true)] }
+        // GUI preserves colliding basenames in DownloadedBooks/Variants/<digest>/.
+        let variants = roots.flatMap { root -> [URL] in
+            let directory = root.appendingPathComponent("Variants", isDirectory: true)
+            return (try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.isDirectoryKey]))?
+                .filter { (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true } ?? []
+        }
+        return roots + variants
     }
     static var cachesRoot: URL {
-        FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Caches/com.dreader.cache")
+        overrideRoot("DREADER_CACHE_ROOT") ?? FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
+            .appendingPathComponent("com.dreader.cache", isDirectory: true)
     }
-    /// 必须与 EPUBParser 的确定性 bookId 逐字节一致（FNV-1a + "DReader1" 魔数），
-    /// 否则渲染缓存定位到不同 UUID、章节文本读不到。
+    static var identityRoot: URL {
+        overrideRoot("DREADER_IDENTITY_ROOT") ?? appSupport.appendingPathComponent("EPUBIdentities", isDirectory: true)
+    }
+
+    // Shared on-disk protocol with EPUBIdentity in the GUI target. Both targets
+    // intentionally remain dependency-free; keep schema/version and hashes equal.
+    private struct IdentityRecord: Decodable {
+        let version: Int
+        let fileName: String
+        let legacyArchiveFingerprints: [String]
+        let legacyPayloadFingerprint: String
+    }
+    private struct CacheMarker: Decodable {
+        let version: Int
+        let fileName: String
+        let bookID: UUID
+        let archiveFingerprint: String
+        let sourceFingerprint: String
+        let payloadFingerprint: String
+    }
     static func bookId(forFileName fileName: String) -> UUID {
-        let hashVal = fileName.utf8.reduce(into: UInt64(14695981039346656037)) { $0 = ($0 ^ UInt64($1)) &* 1099511628211 }
+        let hash = fileName.utf8.reduce(into: UInt64(14695981039346656037)) { $0 = ($0 ^ UInt64($1)) &* 1099511628211 }
         return UUID(uuid: (
-            UInt8(truncatingIfNeeded: hashVal), UInt8(truncatingIfNeeded: hashVal >> 8),
-            UInt8(truncatingIfNeeded: hashVal >> 16), UInt8(truncatingIfNeeded: hashVal >> 24),
-            UInt8(truncatingIfNeeded: hashVal >> 32), UInt8(truncatingIfNeeded: hashVal >> 40),
-            UInt8(truncatingIfNeeded: hashVal >> 48), UInt8(truncatingIfNeeded: hashVal >> 56),
+            UInt8(truncatingIfNeeded: hash), UInt8(truncatingIfNeeded: hash >> 8),
+            UInt8(truncatingIfNeeded: hash >> 16), UInt8(truncatingIfNeeded: hash >> 24),
+            UInt8(truncatingIfNeeded: hash >> 32), UInt8(truncatingIfNeeded: hash >> 40),
+            UInt8(truncatingIfNeeded: hash >> 48), UInt8(truncatingIfNeeded: hash >> 56),
             0x44, 0x52, 0x65, 0x61, 0x64, 0x65, 0x72, 0x31
         ))
     }
-    static func cacheDir(forFileName fileName: String) -> URL? {
-        let dir = cachesRoot.appendingPathComponent(bookId(forFileName: fileName).uuidString, isDirectory: true)
-        return FileManager.default.fileExists(atPath: dir.path) ? dir : nil
+    static func archiveFingerprint(for fileURL: URL) -> String? {
+        guard let handle = try? FileHandle(forReadingFrom: fileURL) else { return nil }
+        defer { try? handle.close() }
+        var hash = SHA256()
+        do {
+            while let chunk = try handle.read(upToCount: 1024 * 1024), !chunk.isEmpty { hash.update(data: chunk) }
+        } catch { return nil }
+        return hash.finalize().map { String(format: "%02x", $0) }.joined()
+    }
+    private static func contentBookID(fileName: String, fingerprint: String) -> UUID {
+        let bytes = Array(SHA256.hash(data: Data("DReader2\0\(fileName)\0\(fingerprint)".utf8)))
+        return UUID(uuid: (
+            bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
+            bytes[8], bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15]
+        ))
+    }
+    static func cacheDir(forFileURL fileURL: URL, archiveFingerprint knownFingerprint: String? = nil) -> URL? {
+        guard let fingerprint = knownFingerprint ?? archiveFingerprint(for: fileURL) else { return nil }
+        let fileName = fileURL.lastPathComponent
+        let legacyID = bookId(forFileName: fileName)
+        let recordURL = identityRoot.appendingPathComponent(legacyID.uuidString + ".json")
+        guard let data = try? Data(contentsOf: recordURL),
+              let record = try? JSONDecoder().decode(IdentityRecord.self, from: data),
+              record.version == 1, record.fileName == fileName else { return nil }
+        let bookID = record.legacyArchiveFingerprints.contains(fingerprint) ? legacyID : contentBookID(fileName: fileName, fingerprint: fingerprint)
+        let directory = cachesRoot.appendingPathComponent("\(bookID.uuidString)-\(fingerprint)", isDirectory: true)
+        guard let markerData = try? Data(contentsOf: directory.appendingPathComponent(".dreader-cache.json")),
+              let marker = try? JSONDecoder().decode(CacheMarker.self, from: markerData),
+              marker.version == 1, marker.fileName == fileName, marker.bookID == bookID,
+              marker.archiveFingerprint == fingerprint else { return nil }
+        return directory
     }
 }
 
@@ -99,6 +157,7 @@ struct ShelfBook {
     let author: String
     let chapterCount: Int
     let opfPath: String
+    let archiveFingerprint: String?
 }
 
 private func zipMemberString(epub: URL, member: String) -> String? {
@@ -109,9 +168,12 @@ private func zipMemberString(epub: URL, member: String) -> String? {
     process.standardOutput = pipe
     process.standardError = FileHandle.nullDevice
     do { try process.run() } catch { return nil }
+    // Drain while unzip is running: a chapter can exceed the pipe buffer and
+    // otherwise block unzip before waitUntilExit() can return.
+    let data = pipe.fileHandleForReading.readDataToEndOfFile()
     process.waitUntilExit()
     guard process.terminationStatus == 0 else { return nil }
-    return String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)
+    return String(data: data, encoding: .utf8)
 }
 
 private func opfFor(_ epub: URL) -> (path: String, markup: String)? {
@@ -123,26 +185,43 @@ private func opfFor(_ epub: URL) -> (path: String, markup: String)? {
 
 private func loadShelf() -> [ShelfBook] {
     var seen = Set<String>()
+    var titles = Set<String>()
     var books: [ShelfBook] = []
     let fm = FileManager.default
+    var sources: [(url: URL, modified: Date)] = []
     for dir in LibraryLocations.shelfDirs {
-        for epub in (try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? []
+        for epub in (try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
         where epub.pathExtension.lowercased() == "epub" {
-            let name = epub.lastPathComponent
-            guard !seen.contains(name) else { continue }
-            seen.insert(name)
-            var title = name.replacingOccurrences(of: "_", with: " ").replacingOccurrences(of: ".epub", with: "")
-            var author = ""
-            var chapterCount = 0
-            var opfPath = ""
-            if let opf = opfFor(epub) {
-                opfPath = opf.path
-                if let t = content(ofTag: "dc:title", in: opf.markup)?.trimmingCharacters(in: .whitespacesAndNewlines), !t.isEmpty { title = t }
-                if let a = content(ofTag: "dc:creator", in: opf.markup)?.trimmingCharacters(in: .whitespacesAndNewlines) { author = a }
-                chapterCount = max(0, opf.markup.components(separatedBy: "<itemref").count - 1)
-            }
-            books.append(ShelfBook(fileName: name, fileURL: epub, title: title, author: author, chapterCount: chapterCount, opfPath: opfPath))
+            let modified = (try? epub.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+            sources.append((epub, modified))
         }
+    }
+    // Match GUI restore: a newer variant wins even when the old top-level EPUB
+    // was enumerated first. A path tie-break keeps equal timestamps repeatable.
+    sources.sort {
+        if $0.modified != $1.modified { return $0.modified > $1.modified }
+        return $0.url.standardizedFileURL.path < $1.url.standardizedFileURL.path
+    }
+    for source in sources {
+        let epub = source.url
+        let name = epub.lastPathComponent
+        let fingerprint = LibraryLocations.archiveFingerprint(for: epub)
+        let key = name + "\0" + (fingerprint ?? epub.standardizedFileURL.path)
+        guard !seen.contains(key) else { continue }
+        var title = name.replacingOccurrences(of: "_", with: " ").replacingOccurrences(of: ".epub", with: "")
+        var author = ""
+        var chapterCount = 0
+        var opfPath = ""
+        if let opf = opfFor(epub) {
+            opfPath = opf.path
+            if let t = content(ofTag: "dc:title", in: opf.markup)?.trimmingCharacters(in: .whitespacesAndNewlines), !t.isEmpty { title = t }
+            if let a = content(ofTag: "dc:creator", in: opf.markup)?.trimmingCharacters(in: .whitespacesAndNewlines) { author = a }
+            chapterCount = max(0, opf.markup.components(separatedBy: "<itemref").count - 1)
+        }
+        guard !titles.contains(title) else { continue }
+        seen.insert(key)
+        titles.insert(title)
+        books.append(ShelfBook(fileName: name, fileURL: epub, title: title, author: author, chapterCount: chapterCount, opfPath: opfPath, archiveFingerprint: fingerprint))
     }
     return books
 }
@@ -184,9 +263,10 @@ private func chapterText(of book: ShelfBook, chapterIndex: Int) -> String? {
     guard paths.indices.contains(chapterIndex) else { return nil }
     let member = paths[chapterIndex]
     // 优先读 GUI 已解压的渲染缓存（快、与界面上看到的一致）
-    if let cacheDir = LibraryLocations.cacheDir(forFileName: book.fileName), !book.opfPath.isEmpty {
-        let fileURL = cacheDir.appendingPathComponent(member)
-        if let data = try? Data(contentsOf: fileURL), let html = String(data: data, encoding: .utf8) {
+    if let cacheDir = LibraryLocations.cacheDir(forFileURL: book.fileURL, archiveFingerprint: book.archiveFingerprint), !book.opfPath.isEmpty {
+        let fileURL = cacheDir.appendingPathComponent(member).standardizedFileURL.resolvingSymlinksInPath()
+        if fileURL.path.hasPrefix(cacheDir.standardizedFileURL.resolvingSymlinksInPath().path + "/"),
+           let data = try? Data(contentsOf: fileURL), let html = String(data: data, encoding: .utf8) {
             let text = htmlToText(html)
             if !text.isEmpty { return text }
         }

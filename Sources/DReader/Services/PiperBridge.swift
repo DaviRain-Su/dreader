@@ -8,9 +8,16 @@ final class PiperBridge: @unchecked Sendable {
 
     private var process: Process?
     private var stdinHandle: FileHandle?
+    private var stdoutHandle: FileHandle?
     private var stdoutBuffer = Data()
     private let lock = NSLock()
     private var launchFailed = false
+    /// 测试只替换启动命令，仍使用完整的真实管道与帧协议。
+    private let processFactory: (@Sendable () throws -> Process)?
+
+    init(processFactory: (@Sendable () throws -> Process)? = nil) {
+        self.processFactory = processFactory
+    }
 
     // MARK: - 桥接脚本（写入 Piper 根目录后由 venv python 执行）
 
@@ -92,60 +99,68 @@ final class PiperBridge: @unchecked Sendable {
 
     // MARK: - 进程生命周期
 
-    private func launchIfNeeded() throws {
-        lock.lock()
-        defer { lock.unlock() }
+    /// 调用方持锁；启动与请求在同一临界区内，避免 shutdown 插在二者之间。
+    private func launchIfNeededLocked() throws {
         if let process, process.isRunning {
             return
         }
+        cleanupLocked()
         guard !launchFailed else { throw ReadAloudError.piperFailed("桥进程此前启动失败") }
-        try ensureScriptOnDisk()
 
-        guard FileManager.default.isExecutableFile(atPath: PiperInstaller.venvPython.path) else {
-            throw ReadAloudError.piperNotInstalled
+        let proc: Process
+        if let processFactory {
+            proc = try processFactory()
+        } else {
+            try ensureScriptOnDisk()
+            guard FileManager.default.isExecutableFile(atPath: PiperInstaller.venvPython.path) else {
+                throw ReadAloudError.piperNotInstalled
+            }
+            proc = Process()
+            proc.executableURL = PiperInstaller.venvPython
+            proc.arguments = [Self.bridgeScriptURL.path]
+            proc.environment = [
+                "PIPER_MODEL": PiperInstaller.modelURL.path,
+                "HOME": NSHomeDirectory(),
+                "PATH": "/usr/bin:/bin:/opt/homebrew/bin:/usr/local/bin"
+            ]
         }
-
-        let proc = Process()
-        proc.executableURL = PiperInstaller.venvPython
-        proc.arguments = [Self.bridgeScriptURL.path]
-        proc.environment = [
-            "PIPER_MODEL": PiperInstaller.modelURL.path,
-            "HOME": NSHomeDirectory(),
-            "PATH": "/usr/bin:/bin:/opt/homebrew/bin:/usr/local/bin"
-        ]
         let stdinPipe = Pipe()
         let stdoutPipe = Pipe()
-        let stderrPipe = Pipe()
         proc.standardInput = stdinPipe
         proc.standardOutput = stdoutPipe
-        proc.standardError = stderrPipe
+        // 错误通过协议帧返回，stderr 不留无人消费的管道，防止写满阻塞。
+        proc.standardError = FileHandle.nullDevice
         try proc.run()
-
-        // 等就绪帧（模型加载 1~3 秒）
-        let readyData = readFrameLocked(from: stdoutPipe.fileHandleForReading)
-        guard readyData != nil else {
-            let err = String(data: stderrPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-            proc.terminate()
-            launchFailed = true
-            throw ReadAloudError.piperFailed("桥启动失败: \(err.prefix(200))")
-        }
-
-        // 后台收割退出状态，防止僵尸进程
-        proc.terminationHandler = { [weak self] _ in
-            self?.lock.lock()
-            self?.process = nil
-            self?.stdinHandle = nil
-            self?.stdoutBuffer = Data()
-            self?.lock.unlock()
-        }
         process = proc
         stdinHandle = stdinPipe.fileHandleForWriting
-        stdoutBuffer = Data()
+        stdoutHandle = stdoutPipe.fileHandleForReading
+
+        // ready 和后续 wav 帧必须共用句柄及缓冲，不能丢弃同次读取的尾部。
+        do {
+            let readyData = try readFrameLocked(from: stdoutPipe.fileHandleForReading)
+            guard let ready = try JSONSerialization.jsonObject(with: readyData) as? [String: Any],
+                  ready["ok"] as? Bool == true else {
+                throw ReadAloudError.piperFailed("桥未返回就绪帧")
+            }
+        } catch {
+            cleanupLocked()
+            launchFailed = true
+            throw ReadAloudError.piperFailed("桥启动失败: \(error.localizedDescription)")
+        }
+
+        proc.terminationHandler = { [weak self] exitedProcess in
+            guard let self else { return }
+            self.lock.lock()
+            defer { self.lock.unlock() }
+            // 旧进程的延迟退出通知不能清理已重启的新进程。
+            guard self.process === exitedProcess else { return }
+            self.cleanupLocked()
+        }
     }
 
     /// 合成一段文本 → wav Data。失败抛错由上层回退 AI 引擎。
     func synthesize(text: String, lengthScale: Double) async throws -> Data {
-        try launchIfNeeded()
+        try Task.checkCancellation()
         return try await withCheckedThrowingContinuation { cont in
             DispatchQueue.global().async { [weak self] in
                 guard let self else {
@@ -165,69 +180,72 @@ final class PiperBridge: @unchecked Sendable {
     private func synthesizeSync(text: String, lengthScale: Double) throws -> Data {
         lock.lock()
         defer { lock.unlock() }
-        guard let stdin = stdinHandle, let proc = process, proc.isRunning else {
+        try launchIfNeededLocked()
+        guard let stdin = stdinHandle, let stdout = stdoutHandle,
+              let proc = process, proc.isRunning else {
             throw ReadAloudError.piperFailed("桥进程未就绪")
-        }
-        guard let stdoutHandle = proc.standardOutput as? FileHandle else {
-            throw ReadAloudError.piperFailed("桥 stdout 不可用")
         }
         // 请求帧：一行 JSON（length_scale 每段可调）
         let request: [String: Any] = ["text": text, "length_scale": lengthScale]
         let requestData = try JSONSerialization.data(withJSONObject: request)
         try stdin.write(contentsOf: requestData)
         try stdin.write(contentsOf: Data("\n".utf8))
-
-        guard let frame = readFrameLocked(from: stdoutHandle) else {
-            throw ReadAloudError.piperFailed("桥输出中断")
-        }
-        return frame
+        return try readFrameLocked(from: stdout)
     }
 
     /// 读一帧：8 字节长度头 + 数据。错误帧（长度头 0）展开为异常。
-    private func readFrameLocked(from handle: FileHandle) -> Data? {
-        guard let header = readExactLocked(handle, count: 8), header.count == 8 else { return nil }
-        let length = header.withUnsafeBytes { $0.load(as: UInt64.self).littleEndian }
-        // 错误帧：长度 0，后跟另一长度头 + 文本
+    private func readFrameLocked(from handle: FileHandle) throws -> Data {
+        let header = try readExactLocked(handle, count: 8)
+        let length = header.withUnsafeBytes { $0.loadUnaligned(as: UInt64.self).littleEndian }
         if length == 0 {
-            guard let errHeader = readExactLocked(handle, count: 8),
-                  errHeader.count == 8 else { return nil }
-            let errLen = errHeader.withUnsafeBytes { $0.load(as: UInt64.self).littleEndian }
-            guard let errData = readExactLocked(handle, count: Int(errLen)) else { return nil }
+            let errHeader = try readExactLocked(handle, count: 8)
+            let errLen = errHeader.withUnsafeBytes { $0.loadUnaligned(as: UInt64.self).littleEndian }
+            guard errLen > 0, errLen < 512 * 1024 * 1024 else {
+                throw ReadAloudError.piperFailed("桥错误帧长度无效")
+            }
+            let errData = try readExactLocked(handle, count: Int(errLen))
             let msg = String(data: errData, encoding: .utf8) ?? "unknown bridge error"
-            // 以异常形式传达（同步上下文，直接抛）
-            _ = msg
-            return Data() // 空数据 = 失败信号
+            throw ReadAloudError.piperFailed(msg)
         }
-        guard length > 0, length < 512 * 1024 * 1024 else { return nil }
-        return readExactLocked(handle, count: Int(length))
+        guard length < 512 * 1024 * 1024 else {
+            throw ReadAloudError.piperFailed("桥输出帧长度无效")
+        }
+        return try readExactLocked(handle, count: Int(length))
     }
 
-    private func readExactLocked(_ handle: FileHandle, count: Int) -> Data? {
+    private func readExactLocked(_ handle: FileHandle, count: Int) throws -> Data {
         var collected = stdoutBuffer
         stdoutBuffer = Data()
         while collected.count < count {
             let chunk = handle.availableData
-            if chunk.isEmpty { // EOF
-                stdoutBuffer = Data(collected.suffix(min(collected.count, count - 1)))
-                return collected.count == count ? collected : nil
+            guard !chunk.isEmpty else {
+                throw ReadAloudError.piperFailed("桥输出中断")
             }
             collected.append(chunk)
         }
         if collected.count > count {
             stdoutBuffer = Data(collected.dropFirst(count))
         }
-        return collected.prefix(count)
+        return Data(collected.prefix(count))
+    }
+
+    private func cleanupLocked() {
+        let oldProcess = process
+        process = nil
+        try? stdinHandle?.close()
+        try? stdoutHandle?.close()
+        stdinHandle = nil
+        stdoutHandle = nil
+        stdoutBuffer = Data()
+        if oldProcess?.isRunning == true {
+            oldProcess?.terminate()
+        }
     }
 
     func shutdown() {
         lock.lock()
         defer { lock.unlock() }
-        if let stdin = stdinHandle {
-            try? stdin.close()
-        }
-        process?.terminate()
-        process = nil
-        stdinHandle = nil
-        stdoutBuffer = Data()
+        cleanupLocked()
+        launchFailed = false
     }
 }

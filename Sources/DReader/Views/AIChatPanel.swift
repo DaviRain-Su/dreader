@@ -30,7 +30,7 @@ struct AIChatPanel: View {
     var retrieveBookPassages: ((String) -> [BookIndexService.IndexedParagraph])? = nil
     /// Jump-to-text in the reader (clickable AI citations)
     var onJumpToOriginalText: ((String) -> Void)? = nil
-    var onSaveMessageAsNote: ((String) -> Void)? = nil
+    var onSaveMessageAsNote: ((ChatMessage) -> Void)? = nil
 
     @State private var messages: [ChatMessage] = []
     @State private var inputText: String = ""
@@ -77,8 +77,8 @@ struct AIChatPanel: View {
                         ForEach(messages) { msg in
                             MessageRow(message: msg, onJumpToQuotation: { quoted in
                                 onJumpToOriginalText?(quoted)
-                            }, onSaveAsNote: { content in
-                                onSaveMessageAsNote?(content)
+                            }, onSaveAsNote: { message in
+                                onSaveMessageAsNote?(message)
                             })
                             .id(msg.id)
                         }
@@ -542,6 +542,7 @@ struct AIChatPanel: View {
     // MARK: - Send Action
     func sendCustomPrompt(_ prompt: String, quote: String? = nil) {
         let actualQuote = quote ?? activeQuote
+        let noteSource = AINoteSource(book: book, chapter: currentChapter)
         let userMsg = ChatMessage(
             role: .user,
             content: prompt,
@@ -612,13 +613,15 @@ struct AIChatPanel: View {
                     messages.append(ChatMessage(
                         role: .assistant,
                         content: answer,
-                        quoteContext: actualQuote
+                        quoteContext: actualQuote,
+                        noteSource: noteSource
                     ))
                 } else {
                     messages.append(ChatMessage(
                         role: .assistant,
                         content: "（未收到来自 \(agentService.currentPreset.name) 的有效回答，请检查本地环境或切换 Agent）",
-                        quoteContext: actualQuote
+                        quoteContext: actualQuote,
+                        noteSource: noteSource
                     ))
                 }
                 currentStreamingAnswer = ""
@@ -645,7 +648,7 @@ struct AIChatPanel: View {
 private struct MessageRow: View {
     let message: ChatMessage
     var onJumpToQuotation: ((String) -> Void)? = nil
-    var onSaveAsNote: ((String) -> Void)? = nil
+    var onSaveAsNote: ((ChatMessage) -> Void)? = nil
 
     @State private var savedFeedback: Bool = false
 
@@ -716,9 +719,9 @@ private struct MessageRow: View {
                         .buttonStyle(.plain)
 
                         // 一键把 AI 解读存为书内笔记（进入划线库、iCloud 备份与 MCP）
-                        if let save = onSaveAsNote {
+                        if let save = onSaveAsNote, message.noteSource != nil {
                             Button {
-                                save(message.content)
+                                save(message)
                                 savedFeedback = true
                                 DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
                                     savedFeedback = false

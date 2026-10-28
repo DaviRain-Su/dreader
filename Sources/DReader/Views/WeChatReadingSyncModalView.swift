@@ -789,17 +789,13 @@ struct WeChatReadingSyncModalView: View {
 
         Task { @MainActor in
             do {
-                let beforeCount = viewModel.highlights.count
-                let updated = try await wechatService.syncSingleBook(
+                let baseline = viewModel.highlights
+                let incoming = try await wechatService.syncSingleBook(
                     notebook: nb,
-                    localBooks: viewModel.books,
-                    currentHighlights: viewModel.highlights
+                    localBooks: viewModel.books
                 )
-                viewModel.highlights = updated
-                viewModel.persistHighlightsDirectly()
+                let delta = viewModel.applyWeChatSyncResult(incoming, baseline: baseline)
                 syncingBookId = nil
-
-                let delta = viewModel.highlights.count - beforeCount
                 successBannerMessage = "已成功同步《\(nb.book.title)》的 \(nb.totalNotes) 条划线与想法 (新增 \(max(0, delta)) 条)！"
             } catch {
                 syncingBookId = nil
@@ -814,12 +810,9 @@ struct WeChatReadingSyncModalView: View {
 
         Task { @MainActor in
             do {
-                let (imported, updated) = try await wechatService.syncAllNotebooks(
-                    localBooks: viewModel.books,
-                    currentHighlights: viewModel.highlights
-                )
-                viewModel.highlights = updated
-                viewModel.persistHighlightsDirectly()
+                let baseline = viewModel.highlights
+                let (_, incoming) = try await wechatService.syncAllNotebooks(localBooks: viewModel.books)
+                let imported = viewModel.applyWeChatSyncResult(incoming, baseline: baseline)
 
                 successBannerMessage = "全量同步完成！本次新增导入 \(imported) 条划线与个人思考，已自动存入 DReader 知识库。"
             } catch {

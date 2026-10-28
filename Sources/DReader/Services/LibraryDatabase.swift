@@ -9,14 +9,22 @@ final class LibraryDatabase: @unchecked Sendable {
     private var db: OpaquePointer?
     private let dbQueue = DispatchQueue(label: "com.dreader.librarydb")
     private let dbURL: URL
+    private let preferences: UserDefaults
+    private let schedulesBackups: Bool
 
     private static let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
 
-    private init() {
+    private convenience init() {
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        let dir = appSupport.appendingPathComponent("DReader", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        dbURL = dir.appendingPathComponent("library.sqlite")
+        self.init(databaseURL: appSupport.appendingPathComponent("DReader/library.sqlite"),
+                  preferences: .standard, schedulesBackups: true)
+    }
+
+    init(databaseURL: URL, preferences: UserDefaults, schedulesBackups: Bool = false) {
+        dbURL = databaseURL
+        self.preferences = preferences
+        self.schedulesBackups = schedulesBackups
+        try? FileManager.default.createDirectory(at: databaseURL.deletingLastPathComponent(), withIntermediateDirectories: true)
 
         dbQueue.sync {
             openDatabase()
@@ -27,6 +35,10 @@ final class LibraryDatabase: @unchecked Sendable {
 
     deinit {
         if let db { sqlite3_close(db) }
+    }
+
+    private func scheduleBackup() {
+        if schedulesBackups { ICloudBackupService.shared.scheduleBackup() }
     }
 
     // MARK: - Setup
@@ -58,7 +70,9 @@ final class LibraryDatabase: @unchecked Sendable {
             source TEXT,
             wechat_book_id TEXT,
             wechat_bookmark_id TEXT,
-            wechat_author TEXT
+            wechat_author TEXT,
+            note_locally_edited INTEGER,
+            color_locally_edited INTEGER
         );
         CREATE TABLE IF NOT EXISTS bookmarks (
             id TEXT PRIMARY KEY,
@@ -86,6 +100,8 @@ final class LibraryDatabase: @unchecked Sendable {
         sqlite3_exec(db, sql, nil, nil, nil)
         // SM-2 ease 因子列（对已存在的旧表幂等——列已有时 ALTER 报错被忽略）
         sqlite3_exec(db, "ALTER TABLE review_schedule ADD COLUMN ease_factor REAL NOT NULL DEFAULT 2.5;", nil, nil, nil)
+        sqlite3_exec(db, "ALTER TABLE highlights ADD COLUMN note_locally_edited INTEGER;", nil, nil, nil)
+        sqlite3_exec(db, "ALTER TABLE highlights ADD COLUMN color_locally_edited INTEGER;", nil, nil, nil)
     }
 
     // MARK: - Mastery Review Scheduling (Readwise-style spaced resurfacing)
@@ -107,7 +123,8 @@ final class LibraryDatabase: @unchecked Sendable {
         SELECT h.id, h.book_id, h.book_title, h.chapter_index, h.chapter_title, h.text, h.color_hex,
                h.created_at, h.note, h.updated_at, h.source, h.wechat_book_id, h.wechat_bookmark_id, h.wechat_author,
                COALESCE(r.mastery_level, 0), COALESCE(r.review_count, 0),
-               CASE WHEN r.due_at IS NOT NULL AND r.due_at < ? THEN 1 ELSE 0 END
+               CASE WHEN r.due_at IS NOT NULL AND r.due_at < ? THEN 1 ELSE 0 END,
+               h.note_locally_edited, h.color_locally_edited
         FROM highlights h
         LEFT JOIN review_schedule r ON r.highlight_id = h.id
         WHERE r.highlight_id IS NULL                    -- brand-new, never scheduled
@@ -141,7 +158,9 @@ final class LibraryDatabase: @unchecked Sendable {
                 source: text(stmt, 10),
                 wechatBookId: text(stmt, 11),
                 wechatBookmarkId: text(stmt, 12),
-                wechatAuthor: text(stmt, 13)
+                wechatAuthor: text(stmt, 13),
+                isNoteLocallyEdited: sqlite3_column_type(stmt, 17) == SQLITE_NULL ? nil : sqlite3_column_int(stmt, 17) != 0,
+                isColorLocallyEdited: sqlite3_column_type(stmt, 18) == SQLITE_NULL ? nil : sqlite3_column_int(stmt, 18) != 0
             )
             results.append(DueReviewCard(
                 highlight: h,
@@ -287,11 +306,11 @@ final class LibraryDatabase: @unchecked Sendable {
     private func migrateLegacyUserDefaultsIfNeeded() {
         guard db != nil else { return }
         let flagKey = "dreader.librarydb.migrated.v1"
-        guard !UserDefaults.standard.bool(forKey: flagKey) else { return }
+        guard !preferences.bool(forKey: flagKey) else { return }
 
         var migrated = false
 
-        if let data = UserDefaults.standard.data(forKey: "dreader.highlights"),
+        if let data = preferences.data(forKey: "dreader.highlights"),
            let legacy = try? JSONDecoder().decode([Highlight].self, from: data),
            !legacy.isEmpty {
             let count = countRows(table: "highlights")
@@ -302,7 +321,7 @@ final class LibraryDatabase: @unchecked Sendable {
             migrated = true
         }
 
-        if let data = UserDefaults.standard.data(forKey: "dreader.bookmarks"),
+        if let data = preferences.data(forKey: "dreader.bookmarks"),
            let legacy = try? JSONDecoder().decode([Bookmark].self, from: data),
            !legacy.isEmpty {
             let count = countRows(table: "bookmarks")
@@ -314,7 +333,7 @@ final class LibraryDatabase: @unchecked Sendable {
         }
 
         if migrated {
-            UserDefaults.standard.set(true, forKey: flagKey)
+            preferences.set(true, forKey: flagKey)
         }
     }
 
@@ -337,7 +356,8 @@ final class LibraryDatabase: @unchecked Sendable {
         var stmt: OpaquePointer?
         let sql = """
         SELECT id, book_id, book_title, chapter_index, chapter_title, text, color_hex,
-               created_at, note, updated_at, source, wechat_book_id, wechat_bookmark_id, wechat_author
+               created_at, note, updated_at, source, wechat_book_id, wechat_bookmark_id, wechat_author,
+               note_locally_edited, color_locally_edited
         FROM highlights ORDER BY created_at DESC
         """
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
@@ -366,7 +386,9 @@ final class LibraryDatabase: @unchecked Sendable {
                 source: text(stmt, 10),
                 wechatBookId: text(stmt, 11),
                 wechatBookmarkId: text(stmt, 12),
-                wechatAuthor: text(stmt, 13)
+                wechatAuthor: text(stmt, 13),
+                isNoteLocallyEdited: sqlite3_column_type(stmt, 14) == SQLITE_NULL ? nil : sqlite3_column_int(stmt, 14) != 0,
+                isColorLocallyEdited: sqlite3_column_type(stmt, 15) == SQLITE_NULL ? nil : sqlite3_column_int(stmt, 15) != 0
             ))
         }
         return results
@@ -382,8 +404,9 @@ final class LibraryDatabase: @unchecked Sendable {
         let sql = """
         INSERT OR REPLACE INTO highlights
         (id, book_id, book_title, chapter_index, chapter_title, text, color_hex,
-         created_at, note, updated_at, source, wechat_book_id, wechat_bookmark_id, wechat_author)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+         created_at, note, updated_at, source, wechat_book_id, wechat_bookmark_id, wechat_author,
+         note_locally_edited, color_locally_edited)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
         defer { sqlite3_finalize(stmt) }
@@ -409,10 +432,20 @@ final class LibraryDatabase: @unchecked Sendable {
             bindOptionalText(stmt, 12, h.wechatBookId)
             bindOptionalText(stmt, 13, h.wechatBookmarkId)
             bindOptionalText(stmt, 14, h.wechatAuthor)
+            if let edited = h.isNoteLocallyEdited {
+                sqlite3_bind_int(stmt, 15, edited ? 1 : 0)
+            } else {
+                sqlite3_bind_null(stmt, 15)
+            }
+            if let edited = h.isColorLocallyEdited {
+                sqlite3_bind_int(stmt, 16, edited ? 1 : 0)
+            } else {
+                sqlite3_bind_null(stmt, 16)
+            }
             _ = sqlite3_step(stmt)
         }
         sqlite3_exec(db, "COMMIT", nil, nil, nil)
-        ICloudBackupService.shared.scheduleBackup()
+        scheduleBackup()
     }
 
     func deleteHighlight(id: UUID) {
@@ -423,7 +456,7 @@ final class LibraryDatabase: @unchecked Sendable {
             defer { sqlite3_finalize(stmt) }
             bindText(stmt, 1, id.uuidString)
             _ = sqlite3_step(stmt)
-            ICloudBackupService.shared.scheduleBackup()
+            scheduleBackup()
         }
     }
 
@@ -559,7 +592,7 @@ final class LibraryDatabase: @unchecked Sendable {
             _ = sqlite3_step(stmt)
         }
         sqlite3_exec(db, "COMMIT", nil, nil, nil)
-        ICloudBackupService.shared.scheduleBackup()
+        scheduleBackup()
     }
 
     func deleteBookmark(id: UUID) {
@@ -570,7 +603,7 @@ final class LibraryDatabase: @unchecked Sendable {
             defer { sqlite3_finalize(stmt) }
             bindText(stmt, 1, id.uuidString)
             _ = sqlite3_step(stmt)
-            ICloudBackupService.shared.scheduleBackup()
+            scheduleBackup()
         }
     }
 

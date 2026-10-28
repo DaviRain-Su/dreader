@@ -114,6 +114,9 @@ struct Highlight: Identifiable, Codable, Hashable, Sendable {
     var wechatBookId: String?
     var wechatBookmarkId: String?
     var wechatAuthor: String?
+    /// nil 表示旧记录未知；新同步记录逐字段记录本地编辑，避免改色冻结云端想法。
+    var isNoteLocallyEdited: Bool?
+    var isColorLocallyEdited: Bool?
 
     var isFromWeChatRead: Bool {
         source == "wechat_read" || wechatBookmarkId != nil
@@ -137,7 +140,9 @@ struct Highlight: Identifiable, Codable, Hashable, Sendable {
         source: String? = nil,
         wechatBookId: String? = nil,
         wechatBookmarkId: String? = nil,
-        wechatAuthor: String? = nil
+        wechatAuthor: String? = nil,
+        isNoteLocallyEdited: Bool? = nil,
+        isColorLocallyEdited: Bool? = nil
     ) {
         self.id = id
         self.bookId = bookId
@@ -153,11 +158,14 @@ struct Highlight: Identifiable, Codable, Hashable, Sendable {
         self.wechatBookId = wechatBookId
         self.wechatBookmarkId = wechatBookmarkId
         self.wechatAuthor = wechatAuthor
+        self.isNoteLocallyEdited = isNoteLocallyEdited
+        self.isColorLocallyEdited = isColorLocallyEdited
     }
 
     enum CodingKeys: String, CodingKey {
         case id, bookId, bookTitle, chapterIndex, chapterTitle, text, colorHex, createdAt, note, updatedAt
         case source, wechatBookId, wechatBookmarkId, wechatAuthor
+        case isNoteLocallyEdited, isColorLocallyEdited
     }
 
     init(from decoder: Decoder) throws {
@@ -176,5 +184,7 @@ struct Highlight: Identifiable, Codable, Hashable, Sendable {
         self.wechatBookId = try container.decodeIfPresent(String.self, forKey: .wechatBookId)
         self.wechatBookmarkId = try container.decodeIfPresent(String.self, forKey: .wechatBookmarkId)
         self.wechatAuthor = try container.decodeIfPresent(String.self, forKey: .wechatAuthor)
+        self.isNoteLocallyEdited = try container.decodeIfPresent(Bool.self, forKey: .isNoteLocallyEdited)
+        self.isColorLocallyEdited = try container.decodeIfPresent(Bool.self, forKey: .isColorLocallyEdited)
     }
 }

@@ -616,11 +616,21 @@ struct ReaderMainView: View {
                     onJumpToOriginalText: { text in
                         vm.scrollToSearchMatchAction?(text, 0)
                     },
-                    onSaveMessageAsNote: { content in
-                        vm.saveAIMessageAsNote(content)
+                    onSaveMessageAsNote: { message in
+                        vm.saveAIMessageAsNote(message)
                     }
                 )
                 .transition(.move(edge: .trailing))
+            }
+        }
+        .onChange(of: vm.readAloud.state) { _, state in
+            if state == .idle, let reason = vm.readAloud.engineError {
+                vm.errorMessage = "听书已停止：\(reason)"
+            }
+        }
+        .onChange(of: vm.readAloud.engineError) { _, reason in
+            if vm.readAloud.state == .idle, let reason {
+                vm.errorMessage = "听书已停止：\(reason)"
             }
         }
         // Read-aloud carousel: auto-scroll the page to the paragraph being narrated

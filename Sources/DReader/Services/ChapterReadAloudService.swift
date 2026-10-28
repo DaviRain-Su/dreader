@@ -11,9 +11,28 @@ final class ChapterReadAloudService: NSObject, @unchecked Sendable, AVAudioPlaye
         case idle, playing, paused
     }
 
-    enum Engine: String {
+    enum Engine: String, Hashable, Sendable {
         case piper
         case ai
+
+        var alternate: Engine { self == .piper ? .ai : .piper }
+        var displayName: String { self == .piper ? "Piper" : "AI 语音" }
+    }
+
+    /// 轻量播放接口；测试可替换为纯内存播放器，不打开音频设备。
+    struct Playback {
+        let play: () -> Bool
+        let pause: () -> Void
+        let stop: () -> Void
+    }
+
+    typealias Synthesis = @Sendable (Engine, String, Double) async throws -> Data
+    typealias PlaybackCompletion = @Sendable (Bool) -> Void
+    typealias PlaybackFactory = (Data, @escaping PlaybackCompletion) throws -> Playback
+
+    private struct Attempt: Hashable {
+        let sequence: Int
+        let engine: Engine
     }
 
     private var paragraphs: [(index: Int, firstLine: String)] = []
@@ -27,16 +46,24 @@ final class ChapterReadAloudService: NSObject, @unchecked Sendable, AVAudioPlaye
 
     /// 当前生效的引擎
     private(set) var activeEngine: Engine = .piper
-    /// 引擎最近一次失败原因（nil = 无；失败时自动切到另一引擎）
+    /// 当前段的失败原因；双引擎耗尽后停止并保留，供 UI 显示。
     private(set) var engineError: String?
 
-    /// AI TTS 音频播放器（每段一个，播完释放）
     private var audioPlayer: AVAudioPlayer?
-    /// 预取缓存：段落序列号 → 音频数据（piper 为 wav，ai 为 mp3）
-    private var prefetchedAudio: [Int: Data] = [:]
-    private var prefetchTask: Task<Void, Never>?
-    /// 防止过期回调推进段落（stop/重启后旧事件丢弃）
+    private var playback: Playback?
+    private var playbackCompletion: PlaybackCompletion?
+    private var playbackID: UUID?
+    /// 同段/同引擎只有一个任务，预取与前台共用成功或失败的结果。
+    private var synthesisTasks: [Attempt: Task<Data, Error>] = [:]
+    private var failedAttempts: [Attempt: String] = [:]
+    private var speechTask: Task<Void, Never>?
+    private var currentAttempt: Attempt?
+    /// stop/重启后，合成结果与播放器回调均须匹配本代次。
     private var playbackGeneration = 0
+
+    private let preferredEngine: Engine?
+    private let synthesisOverride: Synthesis?
+    private let playbackFactory: PlaybackFactory?
 
     /// Sleep timer fire date (nil = off). When set, playback pauses at the deadline.
     private(set) var sleepTimerDeadline: Date?
@@ -44,6 +71,15 @@ final class ChapterReadAloudService: NSObject, @unchecked Sendable, AVAudioPlaye
 
     /// 注入设置读取器（避免服务直接持有 ReaderSettings 引用）
     var settingsProvider: () -> ReaderSettings = { ReaderSettings() }
+
+    /// 默认仍使用真实引擎/播放器；注入时无需读取凭据或打开音频设备。
+    init(preferredEngine: Engine? = nil, synthesizeAudio: Synthesis? = nil,
+         makePlayback: PlaybackFactory? = nil) {
+        self.preferredEngine = preferredEngine
+        self.synthesisOverride = synthesizeAudio
+        self.playbackFactory = makePlayback
+        super.init()
+    }
 
     var isBusyForBook: (UUID) -> Bool { { [weak self] bookId in
         self?.state != .idle && self?.currentBookId == bookId
@@ -59,24 +95,31 @@ final class ChapterReadAloudService: NSObject, @unchecked Sendable, AVAudioPlaye
             .filter { $0.element.trimmingCharacters(in: .whitespacesAndNewlines).count >= 2 }
             .map { (index: $0.offset, firstLine: $0.element) }
         self.paragraphIndex = self.paragraphs.firstIndex(where: { $0.index >= startIndex }) ?? 0
-        currentBookId = bookId
         guard !self.paragraphs.isEmpty else { return }
+        currentBookId = bookId
         state = .playing
-        activeEngine = settingsProvider().readAloudEngine == .ai ? .ai : .piper
-        engineError = nil
+        activeEngine = preferredEngine ?? (settingsProvider().readAloudEngine == .ai ? .ai : .piper)
         speakCurrentParagraph()
     }
 
     func pause() {
         guard state == .playing else { return }
-        audioPlayer?.pause()
         state = .paused
+        playback?.pause()
     }
 
     func resume() {
         guard state == .paused else { return }
-        audioPlayer?.play()
         state = .playing
+        if let playback {
+            if !playback.play() {
+                fallback(reason: "音频播放失败", attempt: Attempt(sequence: paragraphIndex, engine: activeEngine),
+                         generation: playbackGeneration)
+            }
+        } else {
+            // 暂停中合成完成或回退时，复用已有任务/结果，不重复消耗尝试次数。
+            speakCurrentParagraph()
+        }
     }
 
     func toggledFrom(_ bookId: UUID) {
@@ -92,16 +135,19 @@ final class ChapterReadAloudService: NSObject, @unchecked Sendable, AVAudioPlaye
 
     func stop() {
         playbackGeneration += 1
-        prefetchTask?.cancel()
-        prefetchTask = nil
-        prefetchedAudio.removeAll()
-        audioPlayer?.stop()
-        audioPlayer = nil
+        speechTask?.cancel()
+        speechTask = nil
+        currentAttempt = nil
+        synthesisTasks.values.forEach { $0.cancel() }
+        synthesisTasks.removeAll()
+        failedAttempts.removeAll()
+        clearPlayback()
         paragraphs = []
         paragraphIndex = 0
         currentParagraphIndex = 0
         currentBookId = nil
         state = .idle
+        engineError = nil
         cancelSleepTimer()
     }
 
@@ -114,7 +160,6 @@ final class ChapterReadAloudService: NSObject, @unchecked Sendable, AVAudioPlaye
 
     func enableSleepTimer(minutes: Int) {
         sleepTimerDeadline = Date().addingTimeInterval(Double(minutes) * 60)
-        // Re-start the timer cleanly
         stopSleepTimerInternal()
         let timer = Timer(timeInterval: 5, repeats: true) { [weak self] _ in
             guard let self else { return }
@@ -139,80 +184,162 @@ final class ChapterReadAloudService: NSObject, @unchecked Sendable, AVAudioPlaye
 
     // MARK: - Speech Driver
 
+    private func isCurrent(_ attempt: Attempt, generation: Int) -> Bool {
+        generation == playbackGeneration && attempt.sequence == paragraphIndex
+            && attempt.engine == activeEngine && (state == .playing || state == .paused)
+    }
+
     private func speakCurrentParagraph() {
+        guard state == .playing, playback == nil else { return }
         guard paragraphIndex < paragraphs.count else {
-            // Chapter finished
             stop()
             return
         }
         let entry = paragraphs[paragraphIndex]
         currentParagraphIndex = entry.index
-        switch activeEngine {
-        case .piper:
-            speakWithPiper(entry.firstLine, sequence: paragraphIndex)
-        case .ai:
-            speakWithAI(entry.firstLine, sequence: paragraphIndex)
+        let attempt = Attempt(sequence: paragraphIndex, engine: activeEngine)
+        guard currentAttempt != attempt else { return }
+        // 已经失败的音频缓存/任务不能在恢复播放时绕过引擎上限。
+        guard failedAttempts[attempt] == nil else { return }
+        let generation = playbackGeneration
+        let synthesis = synthesisTask(for: attempt)
+        currentAttempt = attempt
+        speechTask = Task { @MainActor [weak self] in
+            do {
+                let audio = try await synthesis.value
+                guard !Task.isCancelled, let self,
+                      self.isCurrent(attempt, generation: generation), self.currentAttempt == attempt else { return }
+                self.speechTask = nil
+                self.currentAttempt = nil
+                // 保留任务中的音频，resume 后才创建/启动播放器。
+                guard self.state == .playing else { return }
+                self.playAudio(audio, attempt: attempt, generation: generation)
+            } catch {
+                guard !Task.isCancelled, let self,
+                      self.isCurrent(attempt, generation: generation), self.currentAttempt == attempt else { return }
+                self.speechTask = nil
+                self.currentAttempt = nil
+                self.fallback(reason: error.localizedDescription, attempt: attempt, generation: generation)
+            }
         }
     }
 
-    /// 引擎失败：记录原因，切到另一引擎重读当前段（不打断听书体验）
-    private func fallback(reason: String, restartWithText: String) {
-        engineError = reason
-        activeEngine = (activeEngine == .piper) ? .ai : .piper
-        guard state == .playing || state == .paused else { return }
-        if state == .paused {
-            // 暂停状态下失败：记下引擎切换，等恢复时再读
-            pendingRestartText = restartWithText
+    /// 预取失败也属于一次尝试：任务结果保留到该段前台消费，避免自动重试。
+    private func synthesisTask(for attempt: Attempt) -> Task<Data, Error> {
+        if let task = synthesisTasks[attempt] { return task }
+        let text = paragraphs[attempt.sequence].firstLine
+        let rate = self.rate
+        let synthesizeAudio: Synthesis
+        if let synthesisOverride {
+            synthesizeAudio = synthesisOverride
+        } else {
+            let settings = settingsProvider()
+            synthesizeAudio = { engine, text, rate in
+                switch engine {
+                case .piper: return try await Self.piperSynthesize(text: text, rate: rate)
+                case .ai: return try await Self.synthesize(text: text, settings: settings)
+                }
+            }
+        }
+        let task = Task {
+            try Task.checkCancellation()
+            let audio = try await synthesizeAudio(attempt.engine, text, rate)
+            try Task.checkCancellation()
+            guard !audio.isEmpty else { throw ReadAloudError.emptyResponse }
+            return audio
+        }
+        synthesisTasks[attempt] = task
+        return task
+    }
+
+    /// 每个会话内，同一段每个引擎最多一次；双失败进入 idle，保留原因。
+    private func fallback(reason: String, attempt: Attempt, generation: Int) {
+        guard isCurrent(attempt, generation: generation), failedAttempts[attempt] == nil else { return }
+        clearPlayback()
+        failedAttempts[attempt] = "\(attempt.engine.displayName)：\(reason)"
+        engineError = [Engine.piper, .ai].compactMap {
+            failedAttempts[Attempt(sequence: attempt.sequence, engine: $0)]
+        }.joined(separator: "；")
+        let alternate = Attempt(sequence: attempt.sequence, engine: attempt.engine.alternate)
+        guard failedAttempts[alternate] == nil else {
+            let finalError = engineError
+            stop()
+            engineError = finalError
             return
         }
-        speakCurrentParagraphForText(restartWithText)
+        activeEngine = alternate.engine
+        // paused 时只切换记录；resume 统一驱动下一次尝试。
+        speakCurrentParagraph()
     }
 
-    /// 暂停中失败时暂存的段落文本（恢复播放时先读它）
-    private var pendingRestartText: String?
+    /// 保留旧调用入口；resume 本身已处理暂停中的引擎切换。
+    func resumeIfNeededAfterEngineSwitch() {
+        speakCurrentParagraph()
+    }
 
-    /// 用指定文本重读（fallback 用；不推进 currentParagraphIndex，段落归属不变）
-    private func speakCurrentParagraphForText(_ text: String) {
-        switch activeEngine {
-        case .piper:
-            speakWithPiper(text, sequence: paragraphIndex)
-        case .ai:
-            speakWithAI(text, sequence: paragraphIndex)
+    private func prefetchNext(sequence: Int) {
+        guard sequence < paragraphs.count else { return }
+        _ = synthesisTask(for: Attempt(sequence: sequence, engine: activeEngine))
+    }
+
+    private func playAudio(_ data: Data, attempt: Attempt, generation: Int) {
+        guard isCurrent(attempt, generation: generation), state == .playing else { return }
+        let id = UUID()
+        playbackID = id
+        let completion: PlaybackCompletion = { [weak self] success in
+            Task { @MainActor [weak self] in
+                self?.playbackFinished(successfully: success, attempt: attempt, generation: generation, id: id)
+            }
+        }
+        do {
+            let player: Playback
+            if let playbackFactory {
+                player = try playbackFactory(data, completion)
+            } else {
+                let nativePlayer = try AVAudioPlayer(data: data)
+                nativePlayer.delegate = self
+                nativePlayer.rate = 1.0
+                audioPlayer = nativePlayer
+                playbackCompletion = completion
+                player = Playback(play: { nativePlayer.play() }, pause: { nativePlayer.pause() },
+                                  stop: { nativePlayer.stop() })
+            }
+            playback = player
+            guard player.play() else { throw ReadAloudError.playbackFailed }
+            prefetchNext(sequence: attempt.sequence + 1)
+        } catch {
+            fallback(reason: "音频播放失败：\(error.localizedDescription)", attempt: attempt, generation: generation)
         }
     }
 
-    /// 暂停恢复时如果引擎已切换，需要从暂存文本重读
-    func resumeIfNeededAfterEngineSwitch() {
-        if let text = pendingRestartText {
-            pendingRestartText = nil
-            speakCurrentParagraphForText(text)
+    private func clearPlayback() {
+        playbackID = nil
+        playbackCompletion = nil
+        playback?.stop()
+        playback = nil
+        audioPlayer = nil
+    }
+
+    private func playbackFinished(successfully: Bool, attempt: Attempt, generation: Int, id: UUID) {
+        guard isCurrent(attempt, generation: generation), playbackID == id else { return }
+        if !successfully {
+            fallback(reason: "音频播放失败", attempt: attempt, generation: generation)
+            return
+        }
+        clearPlayback()
+        // 真正播完再重置本段预算，下一段可重新尝试两个引擎。
+        synthesisTasks = synthesisTasks.filter { $0.key.sequence > attempt.sequence }
+        failedAttempts.removeAll()
+        engineError = nil
+        paragraphIndex += 1
+        if paragraphIndex < paragraphs.count {
+            speakCurrentParagraph()
+        } else {
+            stop()
         }
     }
 
     // MARK: Piper 本地引擎（进程管道：stdin 文本 → stdout wav）
-
-    private func speakWithPiper(_ text: String, sequence: Int) {
-        let generation = playbackGeneration
-        Task { [weak self] in
-            guard let self else { return }
-            do {
-                let audio: Data
-                if let cached = self.prefetchedAudio[sequence] {
-                    audio = cached
-                    self.prefetchedAudio.removeValue(forKey: sequence)
-                } else {
-                    audio = try await Self.piperSynthesize(text: text, rate: self.rate)
-                }
-                guard generation == self.playbackGeneration,
-                      self.state == .playing || self.state == .paused else { return }
-                self.playAudio(audio, sequence: sequence, generation: generation)
-                self.prefetchNext(sequence: sequence + 1)
-            } catch {
-                guard generation == self.playbackGeneration else { return }
-                self.fallback(reason: "Piper：\(error.localizedDescription)", restartWithText: text)
-            }
-        }
-    }
 
     /// 经 PiperBridge（常驻 venv Python 进程）合成一段 wav。
     /// length_scale 越小语速越快（rate 0.3~0.8 → 1.63~0.68）。
@@ -233,66 +360,6 @@ final class ChapterReadAloudService: NSObject, @unchecked Sendable, AVAudioPlaye
     }
 
     // MARK: AI 在线引擎（OpenAI 兼容 /v1/audio/speech）
-
-    private func speakWithAI(_ text: String, sequence: Int) {
-        let generation = playbackGeneration
-        let settings = settingsProvider()
-        Task { [weak self] in
-            guard let self else { return }
-            do {
-                let audio: Data
-                if let cached = self.prefetchedAudio[sequence] {
-                    audio = cached
-                    self.prefetchedAudio.removeValue(forKey: sequence)
-                } else {
-                    audio = try await Self.synthesize(text: text, settings: settings)
-                }
-                guard generation == self.playbackGeneration,
-                      self.state == .playing || self.state == .paused else { return }
-                self.playAudio(audio, sequence: sequence, generation: generation)
-                self.prefetchNext(sequence: sequence + 1)
-            } catch {
-                guard generation == self.playbackGeneration else { return }
-                self.fallback(reason: "AI 语音：\(error.localizedDescription)", restartWithText: text)
-            }
-        }
-    }
-
-    /// 预取下一段（只预取一段，piper 本地无成本、AI 控制 API 用量）
-    private func prefetchNext(sequence: Int) {
-        guard sequence < paragraphs.count, prefetchedAudio[sequence] == nil else { return }
-        let text = paragraphs[sequence].firstLine
-        let generation = playbackGeneration
-        let engine = activeEngine
-        let rate = self.rate
-        let settings = settingsProvider()
-        prefetchTask?.cancel()
-        prefetchTask = Task { [weak self] in
-            let data: Data?
-            switch engine {
-            case .piper:
-                data = try? await Self.piperSynthesize(text: text, rate: rate)
-            case .ai:
-                data = try? await Self.synthesize(text: text, settings: settings)
-            }
-            if let data {
-                guard let self, generation == self.playbackGeneration else { return }
-                self.prefetchedAudio[sequence] = data
-            }
-        }
-    }
-
-    private func playAudio(_ data: Data, sequence: Int, generation: Int) {
-        do {
-            let player = try AVAudioPlayer(data: data)
-            player.delegate = self
-            player.rate = 1.0
-            audioPlayer = player
-            player.play()
-        } catch {
-            fallback(reason: "音频播放失败：\(error.localizedDescription)", restartWithText: paragraphs[sequence].firstLine)
-        }
-    }
 
     static func synthesize(text: String, settings: ReaderSettings) async throws -> Data {
         guard !settings.aiTTSAPIKey.isEmpty else { throw ReadAloudError.missingKey }
@@ -320,16 +387,16 @@ final class ChapterReadAloudService: NSObject, @unchecked Sendable, AVAudioPlaye
         return data
     }
 
-    // MARK: - AVAudioPlayerDelegate（段落播完 → 下一段）
+    // MARK: - AVAudioPlayerDelegate（只接收当前播放器的事件）
 
     func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
-        guard state == .playing else { return }
-        paragraphIndex += 1
-        if paragraphIndex < paragraphs.count {
-            speakCurrentParagraph()
-        } else {
-            stop()
-        }
+        guard audioPlayer === player else { return }
+        playbackCompletion?(flag)
+    }
+
+    func audioPlayerDecodeErrorDidOccur(_ player: AVAudioPlayer, error: Error?) {
+        guard audioPlayer === player else { return }
+        playbackCompletion?(false)
     }
 }
 
@@ -340,6 +407,7 @@ enum ReadAloudError: LocalizedError {
     case network
     case http(Int)
     case emptyResponse
+    case playbackFailed
     case piperNotInstalled
     case piperFailed(String)
 
@@ -350,6 +418,7 @@ enum ReadAloudError: LocalizedError {
         case .network: return "网络错误"
         case .http(let code): return "TTS 服务返回 HTTP \(code)"
         case .emptyResponse: return "TTS 服务返回空音频"
+        case .playbackFailed: return "播放器无法开始播放"
         case .piperNotInstalled: return "Piper 引擎未安装"
         case .piperFailed(let detail): return "Piper 合成失败 \(detail.prefix(160))"
         }
