@@ -76,13 +76,16 @@ final class LibraryDatabase: @unchecked Sendable {
             interval_days REAL NOT NULL DEFAULT 0,
             due_at REAL NOT NULL DEFAULT 0,
             review_count INTEGER NOT NULL DEFAULT 0,
-            last_reviewed_at REAL
+            last_reviewed_at REAL,
+            ease_factor REAL NOT NULL DEFAULT 2.5
         );
         CREATE INDEX IF NOT EXISTS idx_highlights_book ON highlights(book_id);
         CREATE INDEX IF NOT EXISTS idx_bookmarks_book ON bookmarks(book_id);
         CREATE INDEX IF NOT EXISTS idx_review_due ON review_schedule(due_at);
         """
         sqlite3_exec(db, sql, nil, nil, nil)
+        // SM-2 ease 因子列（对已存在的旧表幂等——列已有时 ALTER 报错被忽略）
+        sqlite3_exec(db, "ALTER TABLE review_schedule ADD COLUMN ease_factor REAL NOT NULL DEFAULT 2.5;", nil, nil, nil)
     }
 
     // MARK: - Mastery Review Scheduling (Readwise-style spaced resurfacing)
@@ -168,48 +171,72 @@ final class LibraryDatabase: @unchecked Sendable {
         return sqlite3_step(stmt) == SQLITE_ROW ? Int(sqlite3_column_int64(stmt, 0)) : 0
     }
 
-    /// Readwise-style mastery lanes: never-reviewed (interval 0) → 7d → 14d → 28d.
-    /// Score ≥ 3 (QualityScore 0..5) promotes a lane; score < 3 drops back one lane.
-    private static let laneIntervals: [Double] = [0, 7, 14, 28]
-
     func recordReview(highlightId: UUID, score: Int, asOf date: Date = Date()) {
         guard let db else { return }
         var stmt: OpaquePointer?
-        guard sqlite3_prepare_v2(db, "SELECT mastery_level, review_count FROM review_schedule WHERE highlight_id = ?", -1, &stmt, nil) == SQLITE_OK else { return }
+        guard sqlite3_prepare_v2(db, "SELECT interval_days, review_count, ease_factor FROM review_schedule WHERE highlight_id = ?", -1, &stmt, nil) == SQLITE_OK else { return }
         sqlite3_bind_text(stmt, 1, highlightId.uuidString, -1, Self.transient)
-        var currentLevel = 0
+        var currentInterval: Double = 0
         var currentCount = 0
+        var ease = 2.5
         if sqlite3_step(stmt) == SQLITE_ROW {
-            currentLevel = Int(sqlite3_column_int64(stmt, 0))
+            currentInterval = sqlite3_column_double(stmt, 0)
             currentCount = Int(sqlite3_column_int64(stmt, 1))
+            ease = sqlite3_column_double(stmt, 2)
         }
         sqlite3_finalize(stmt)
 
-        var newLevel: Int
-        if score >= 3 {
-            newLevel = min(currentLevel + 1, Self.laneIntervals.count - 1)
-        } else {
-            newLevel = max(currentLevel - 1, 0)
-        }
-        // First successful review moves into the 7-day lane rather than staying due forever
-        if currentLevel == 0 && score >= 3 { newLevel = max(newLevel, 1) }
+        // SM-2 简化版：ease 因子随评分浮动，间隔 = 上一间隔 × ease
+        // 完全记得(5) ease +0.1，模糊(3) 轻微收缩，忘记(1) 重挫并腰斩间隔
+        ease = Self.nextEase(ease: ease, score: score)
 
-        let interval = Self.laneIntervals[newLevel]
-        let dueAt = date.timeIntervalSince1970 + interval * 86400
+        var newInterval: Double
+        if score < 3 {
+            // 遗忘：间隔腰斩（而非清零），保底 1 天——卡片不会被打回起点
+            newInterval = max(1, currentInterval * 0.5)
+        } else if currentInterval < 1 {
+            // 首次成功复习：从 1 天起步（车道制旧数据 interval 0/7/14/28 均大于等于此档）
+            newInterval = 1
+        } else {
+            newInterval = min(currentInterval * ease, 365)
+        }
+
+        let dueAt = date.timeIntervalSince1970 + newInterval * 86400
+        let newLevel = Self.level(forInterval: newInterval)
 
         guard sqlite3_prepare_v2(db, """
         INSERT OR REPLACE INTO review_schedule
-        (highlight_id, mastery_level, interval_days, due_at, review_count, last_reviewed_at)
-        VALUES (?,?,?,?,?,?)
+        (highlight_id, mastery_level, interval_days, due_at, review_count, last_reviewed_at, ease_factor)
+        VALUES (?,?,?,?,?,?,?)
         """, -1, &stmt, nil) == SQLITE_OK else { return }
         defer { sqlite3_finalize(stmt) }
         sqlite3_bind_text(stmt, 1, highlightId.uuidString, -1, Self.transient)
         sqlite3_bind_int64(stmt, 2, Int64(newLevel))
-        sqlite3_bind_double(stmt, 3, interval)
+        sqlite3_bind_double(stmt, 3, newInterval)
         sqlite3_bind_double(stmt, 4, dueAt)
         sqlite3_bind_int64(stmt, 5, Int64(currentCount + 1))
         sqlite3_bind_double(stmt, 6, date.timeIntervalSince1970)
+        sqlite3_bind_double(stmt, 7, ease)
         _ = sqlite3_step(stmt)
+    }
+
+    /// 经典 SM-2 ease 调整：EF' = EF + (0.1 − (5−q)(0.08 + (5−q)×0.02))
+    /// q=5 → +0.1，q=4 → 0，q=3 → −0.14，q=1 → −0.54。夹在 [1.3, 3.0] 防失速或僵死。
+    private static func nextEase(ease: Double, score: Int) -> Double {
+        let d = Double(5 - min(max(score, 0), 5))
+        let adjusted = ease + 0.1 - d * (0.08 + d * 0.02)
+        return min(max(adjusted, 1.3), 3.0)
+    }
+
+    /// 展示等级由实际间隔推导（≥28 天视为已掌握，供徽章/统计沿用旧语义）
+    private static func level(forInterval interval: Double) -> Int {
+        switch interval {
+        case ..<1: return 0
+        case ..<7: return 1
+        case ..<14: return 2
+        case ..<28: return 3
+        default: return 4
+        }
     }
 
     /// Removes a highlight's schedule row when the highlight itself is deleted.
@@ -220,6 +247,17 @@ final class LibraryDatabase: @unchecked Sendable {
         defer { sqlite3_finalize(stmt) }
         sqlite3_bind_text(stmt, 1, highlightId.uuidString, -1, Self.transient)
         _ = sqlite3_step(stmt)
+    }
+
+    /// 某张卡当前的复习间隔（天）；从未排期返回 0。UI 用于展示记忆强度。
+    func currentIntervalDays(highlightId: UUID) -> Double {
+        guard let db else { return 0 }
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, "SELECT interval_days FROM review_schedule WHERE highlight_id = ?", -1, &stmt, nil) == SQLITE_OK else { return 0 }
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_text(stmt, 1, highlightId.uuidString, -1, Self.transient)
+        guard sqlite3_step(stmt) == SQLITE_ROW else { return 0 }
+        return sqlite3_column_double(stmt, 0)
     }
 
     /// Cards reviewed today and small stats for the session banner.

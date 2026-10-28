@@ -22,10 +22,11 @@ struct ReviewSessionModalView: View {
         let label: String
         init(level: Int) {
             switch level {
-            case 0: symbol = "_seedling"; label = "新卡"
-            case 1: symbol = "leaf"; label = "7天期"
-            case 2: symbol = "mountain.2dome"; label = "14天期"
-            default: symbol = "sun.max"; label = "28天期"
+            case 0: symbol = "seedling"; label = "新芽"
+            case 1: symbol = "leaf"; label = "起步期"
+            case 2: symbol = "leaf.arrow.triangle.circlepath"; label = "巩固期"
+            case 3: symbol = "mountain.2dome"; label = "稳定期"
+            default: symbol = "sun.max"; label = "已掌握"
             }
         }
     }
@@ -58,7 +59,7 @@ struct ReviewSessionModalView: View {
             VStack(alignment: .leading, spacing: 1) {
                 Text("今日划线 Mastery 复习")
                     .font(.system(size: 14, weight: .bold))
-                Text("间隔重现 · 记忆半衰期 7 / 14 / 28 天")
+                Text("间隔重现 · 遗忘曲线调度（SM-2）")
                     .font(.system(size: 10))
                     .foregroundStyle(.secondary)
             }
@@ -97,6 +98,13 @@ struct ReviewSessionModalView: View {
     private func flashCardView(_ card: LibraryDatabase.DueReviewCard) -> some View {
         let highlight = card.highlight
         let lane = LaneMark(level: card.masteryLevel)
+        let laneHint: String = {
+            let interval = LibraryDatabase.shared.currentIntervalDays(highlightId: card.highlight.id)
+            if interval >= 1 {
+                return "当前间隔 \(Int(interval.rounded())) 天 · 记忆强度随复习表现伸缩"
+            }
+            return "新卡 · 首次复习通过后进入遗忘曲线调度"
+        }()
         return ScrollView {
             VStack(alignment: .leading, spacing: 14) {
                 // Book & chapter context
@@ -126,6 +134,7 @@ struct ReviewSessionModalView: View {
                     .padding(.vertical, 3)
                     .background(Color.primary.opacity(0.05))
                     .clipShape(Capsule())
+                    .help(laneHint)
                 }
 
                 // Recall prompt
@@ -236,7 +245,7 @@ struct ReviewSessionModalView: View {
                 .clipShape(Capsule())
         }
         .buttonStyle(.plain)
-        .help(scoreOf == 1 ? "遗忘：降回复习队列（间隔重置）" : scoreOf == 3 ? "模糊：留在当前半衰期通道" : "记住：进入更长半衰期通道")
+        .help(scoreOf == 1 ? "遗忘：间隔腰斩，很快重现" : scoreOf == 3 ? "模糊：间隔小幅增长" : "记住：间隔显著拉长")
     }
 
     // MARK: - 来源徽章（本地划线 / 微信读书 / AI 伴读解读）
@@ -370,7 +379,7 @@ struct ReviewSessionModalView: View {
                 .foregroundStyle(Color(hex: "#07C160"))
             Text("今日复习任务已完成")
                 .font(.system(size: 15, weight: .bold))
-            Text("目前没有到期的划线。划线会在 7 / 14 / 28 天后半衰期到期时自动重现。")
+            Text("目前没有到期的划线。已排期的卡片会按遗忘曲线到期后自动重现，答得越好下次间隔越长。")
                 .font(.system(size: 12))
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -392,7 +401,7 @@ struct ReviewSessionModalView: View {
                 .foregroundStyle(Color.primary.opacity(0.75))
             Text("本轮 Mastery 复习完成 ✓")
                 .font(.system(size: 15, weight: .bold))
-            Text("今天共完成 \(reviewedCount) 张卡。记得的卡片将进入更长半衰期通道，忘记的会更快重现。")
+            Text("今天共完成 \(reviewedCount) 张卡。记得的卡片间隔会更长，忘记的会更快重现。")
                 .font(.system(size: 12))
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
