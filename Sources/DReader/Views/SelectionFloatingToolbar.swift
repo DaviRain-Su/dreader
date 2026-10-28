@@ -15,6 +15,18 @@ struct SelectionFloatingToolbar: View {
 
     @State private var copyFeedback = false
 
+    /// 键位键帽（H/N 快捷标注的可发现性）：细边框小方块，不与色点争色
+    private func keyCap(_ key: String) -> some View {
+        Text(key)
+            .font(.system(size: 8.5, weight: .bold, design: .monospaced))
+            .foregroundStyle(Color.primary.opacity(0.45))
+            .frame(width: 13, height: 13)
+            .overlay(
+                RoundedRectangle(cornerRadius: 3)
+                    .stroke(Color.primary.opacity(0.22), lineWidth: 0.6)
+            )
+    }
+
     private let highlightColors: [(name: String, hex: String, color: Color)] = [
         ("黄色", "#FFE066", Color(hex: "#FFE066")),
         ("绿色", "#99E9F2", Color(hex: "#99E9F2")),
@@ -26,6 +38,7 @@ struct SelectionFloatingToolbar: View {
     var body: some View {
         HStack(spacing: 2) {
             // 1. Color Palette Dots (Click to instant highlight) —— 全条唯一的彩色
+            // 色点行加 H 键帽：选中文字后直接按 H 就是划线（默认色），无需点色点
             HStack(spacing: 4) {
                 ForEach(highlightColors, id: \.hex) { item in
                     Circle()
@@ -39,6 +52,8 @@ struct SelectionFloatingToolbar: View {
                         }
                         .help("划线 (\(item.name))")
                 }
+                keyCap("H")
+                    .padding(.leading, 2)
             }
             .padding(.horizontal, 4)
 
@@ -50,12 +65,15 @@ struct SelectionFloatingToolbar: View {
             Button {
                 onWriteThought()
             } label: {
-                Image(systemName: "square.and.pencil")
-                    .font(.system(size: 11.5))
-                    .frame(width: 26, height: 26)
+                HStack(spacing: 3) {
+                    Image(systemName: "square.and.pencil")
+                        .font(.system(size: 11.5))
+                    keyCap("N")
+                }
+                .frame(width: 40, height: 26)
             }
             .buttonStyle(ChromeToolButtonStyle())
-            .help("划线并记录读书思考与笔记")
+            .help("划线并记录读书思考与笔记（快捷键 N）")
 
             // 3. Quote Card
             Button {

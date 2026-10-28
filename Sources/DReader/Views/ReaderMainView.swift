@@ -103,6 +103,35 @@ struct ReaderMainView: View {
                 .transition(.opacity)
                 .zIndex(50)
             }
+
+            // H/N 无选区轻提示（底部居中，2.2s 自动消失）
+            if let hint = vm.selectionManager.selectionHint {
+                VStack {
+                    Spacer()
+                    HStack(spacing: 7) {
+                        Image(systemName: "text.cursor")
+                            .font(.system(size: 11))
+                        Text(hint)
+                            .font(.system(size: 12, weight: .medium))
+                    }
+                    .foregroundStyle(Color.primary.opacity(0.85))
+                    .padding(.horizontal, 15)
+                    .padding(.vertical, 9)
+                    .background(.ultraThinMaterial, in: Capsule())
+                    .overlay(Capsule().stroke(Color.primary.opacity(0.12), lineWidth: 0.5))
+                    .shadow(color: .black.opacity(0.14), radius: 9, y: 3)
+                    .padding(.bottom, 26)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .allowsHitTesting(false)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+                .zIndex(45)
+                .task(id: hint) {
+                    try? await Task.sleep(nanoseconds: 2_200_000_000)
+                    withAnimation(.easeOut(duration: 0.25)) { vm.selectionManager.selectionHint = nil }
+                }
+            }
         }
         .sheet(item: $quoteCardHighlight) { highlight in
             QuoteCardView(
@@ -233,8 +262,14 @@ struct ReaderMainView: View {
 
     /// H/N 键盘标注：false = 直接高亮，true = 高亮并弹想法卡（SwiftUI onKeyPress 与 JS 桥接两条路径共用）。
     /// applyHighlight 成功后清空选区，双路径命中也天然幂等。
+    /// 无选区时不静默——给一条“先选中文字”的轻提示，这是 H/N 可发现性的兜底。
     private func handleKeyboardAnnotate(wantThought: Bool) {
-        guard let selection = vm.selectionManager.activeSelection else { return }
+        guard let selection = vm.selectionManager.activeSelection else {
+            vm.selectionManager.selectionHint = wantThought
+                ? "先选中一段文字，再按 N 写想法"
+                : "先选中一段文字，再按 H 划线"
+            return
+        }
         if wantThought {
             if let h = vm.applyHighlight(colorHex: vm.lastChosenHighlightColor) {
                 vm.selectionManager.activeHighlightCard = HighlightCardInfo(

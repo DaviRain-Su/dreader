@@ -759,10 +759,9 @@ struct EPUBWebView: NSViewRepresentable {
                         y: CGFloat(y),
                         bottomY: CGFloat(bottomY)
                     )
-                } else if type == "keyboardHighlight" {
-                    self.parent.onKeyboardAnnotate?(false)
-                } else if type == "keyboardThought" {
-                    self.parent.onKeyboardAnnotate?(true)
+                } else if type == "keyboardHighlight" || type == "keyboardThought" {
+                    // noSelection: JS 端无选区按键——交给统一入口弹“先选中文字”提示
+                    self.parent.onKeyboardAnnotate?(type == "keyboardThought")
                 } else if type == "nextChapter" {
                     self.parent.onNextChapter()
                 } else if type == "prevChapter" {

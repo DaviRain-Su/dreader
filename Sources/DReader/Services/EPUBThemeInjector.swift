@@ -1301,20 +1301,29 @@ struct EPUBThemeInjector {
                     if (vertical) { e.preventDefault(); window.dreaderScrollPage(-1); }
                 } else if ((e.key === 'h' || e.key === 'H') && !e.metaKey && !e.ctrlKey && !e.altKey) {
                     // 键盘标注流：H = 高亮选区（webview 聚焦时 here 生效；SwiftUI onKeyPress 是另一条兜底路径）
+                    e.preventDefault();
                     const sel = window.getSelection();
                     if (sel && !sel.isCollapsed) {
-                        e.preventDefault();
                         if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.selectionBridge) {
                             window.webkit.messageHandlers.selectionBridge.postMessage({ type: 'keyboardHighlight' });
+                        }
+                    } else {
+                        // 无选区不静默：交给 Swift 侧弹轻提示
+                        if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.selectionBridge) {
+                            window.webkit.messageHandlers.selectionBridge.postMessage({ type: 'keyboardHighlight', noSelection: true });
                         }
                     }
                 } else if ((e.key === 'n' || e.key === 'N') && !e.metaKey && !e.ctrlKey && !e.altKey) {
                     // N = 高亮并写想法
+                    e.preventDefault();
                     const sel = window.getSelection();
                     if (sel && !sel.isCollapsed) {
-                        e.preventDefault();
                         if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.selectionBridge) {
                             window.webkit.messageHandlers.selectionBridge.postMessage({ type: 'keyboardThought' });
+                        }
+                    } else {
+                        if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.selectionBridge) {
+                            window.webkit.messageHandlers.selectionBridge.postMessage({ type: 'keyboardThought', noSelection: true });
                         }
                     }
                 }

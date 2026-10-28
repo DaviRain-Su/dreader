@@ -35,6 +35,8 @@ final class ReaderSelectionManager: @unchecked Sendable {
     var activeFootnoteCard: FootnoteCardInfo?
     var isAIPanelVisible: Bool = true
     var quoteForAI: String?
+    /// 无选区按 H/N 时的轻提示（“先选中一段文字”），2 秒后自动清空
+    var selectionHint: String?
 
     func clear() {
         activeSelection = nil
