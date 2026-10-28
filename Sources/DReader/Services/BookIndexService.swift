@@ -43,8 +43,7 @@ final class BookIndexService: @unchecked Sendable {
             var index = BookIndex()
             for (ci, chapter) in chapters.enumerated() {
                 let raw = htmlProvider(chapter.fileURL)
-                    ?? (try? String(contentsOf: chapter.fileURL, encoding: .utf8))
-                    ?? (try? String(contentsOf: chapter.fileURL, encoding: .isoLatin1))
+                    ?? EPUBWebView.Coordinator.readTextSmart(chapter.fileURL)
                     ?? ""
                 guard !raw.isEmpty else { continue }
 

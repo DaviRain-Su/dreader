@@ -9,20 +9,7 @@ struct RealisticBookItemView: View {
     var chineseScriptMode: ChineseScriptMode = .original
 
     @State private var isHovered: Bool = false
-    /// 后台解码完成后的封面（滚动时直接走 NSCache，不在 body 里同步读盘）
     @State private var loadedCover: NSImage? = nil
-
-    private var coverImage: NSImage? {
-        guard let url = book.coverImageURL else { return nil }
-        if let hit = CoverImageCache.shared.cachedImage(for: url) {
-            return hit
-        }
-        // 未命中：触发一次后台解码（inflight 去重），完成后进缓存并更新视图
-        CoverImageCache.shared.loadImage(for: url) { image in
-            self.loadedCover = image
-        }
-        return loadedCover
-    }
 
     // Color theme per book for fallback
     private var coverTheme: (bgStart: String, bgEnd: String, gold: String, accent: String) {
@@ -77,7 +64,7 @@ struct RealisticBookItemView: View {
                             )
 
                         // 2. Main Hardcover
-                        if let img = coverImage {
+                        if let img = loadedCover {
                             // Real Book Cover Image (from EPUB file, like Apple Books)
                             ZStack {
                                 Image(nsImage: img)
@@ -248,6 +235,17 @@ struct RealisticBookItemView: View {
             }
         }
         .buttonStyle(.plain)
+        .task(id: book.coverImageURL) {
+            loadedCover = nil
+            guard let url = book.coverImageURL else { return }
+            let image = await withCheckedContinuation { continuation in
+                CoverImageCache.shared.loadImage(for: url) { image in
+                    continuation.resume(returning: image)
+                }
+            }
+            guard !Task.isCancelled else { return }
+            loadedCover = image
+        }
         .onHover { isHovered = $0 }
         .contextMenu {
             Button {

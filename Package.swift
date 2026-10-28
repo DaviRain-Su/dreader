@@ -22,5 +22,10 @@ let package = Package(
             dependencies: [],
             path: "Sources/dreader-mcp"
         ),
+        .testTarget(
+            name: "DReaderTests",
+            dependencies: ["DReader"],
+            path: "Tests/DReaderTests"
+        ),
     ]
 )

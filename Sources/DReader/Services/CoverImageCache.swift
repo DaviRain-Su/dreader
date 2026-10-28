@@ -1,50 +1,63 @@
 import AppKit
+import ImageIO
 
-/// 书架封面缓存：磁盘解码一次、NSCache 常驻，滚动时零解码开销。
-/// EPUB 封面常是 1000×1500 大图，同步解码一张几十毫秒——书架书项
-/// 此前在 body 计算属性里每次重算都重新读盘解码，滑动必掉帧。
+/// 后台生成封面缩略图，并通知等待同一资源的全部书项。
 final class CoverImageCache: @unchecked Sendable {
     static let shared = CoverImageCache()
 
+    private typealias Completion = @MainActor @Sendable (NSImage?) -> Void
     private let cache = NSCache<NSString, NSImage>()
-    /// 同一 URL 的在途加载去重（并发滚动时同一封面只解码一次）
-    private var inflight: Set<String> = []
+    private var inflight: [String: [Completion]] = [:]
     private let lock = NSLock()
 
     private init() {
-        // 封面解码后常驻内存的合理上限：约 60 张 140×204 显示尺寸所需的原图内存
         cache.countLimit = 60
+        cache.totalCostLimit = 60 * 1024 * 1024
     }
 
-    /// 同步取缓存；未命中返回 nil（视图随即显示占位封面）
+    private func cacheKey(for url: URL) -> String {
+        let values = try? url.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
+        return "\(url.path)-\(values?.contentModificationDate?.timeIntervalSince1970 ?? 0)-\(values?.fileSize ?? 0)"
+    }
+
     func cachedImage(for url: URL) -> NSImage? {
-        cache.object(forKey: url.path as NSString)
+        cache.object(forKey: cacheKey(for: url) as NSString)
     }
 
-    /// 后台解码 + 缓存。完成在主线程回调（nil = 解码失败）。
-    /// 同一 URL 并发请求去重；重复请求完成前只排最早的一次。
-    func loadImage(for url: URL, completion: @escaping (NSImage?) -> Void) {
-        let path = url.path
-        if let hit = cache.object(forKey: path as NSString) {
+    @MainActor
+    func loadImage(for url: URL, completion: @escaping @MainActor @Sendable (NSImage?) -> Void) {
+        let key = cacheKey(for: url)
+        if let hit = cache.object(forKey: key as NSString) {
             completion(hit)
             return
         }
         lock.lock()
-        let alreadyInflight = inflight.contains(path)
-        if !alreadyInflight { inflight.insert(path) }
+        if inflight[key] != nil {
+            inflight[key]?.append(completion)
+            lock.unlock()
+            return
+        }
+        inflight[key] = [completion]
         lock.unlock()
-        guard !alreadyInflight else { return }
 
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            let image = NSImage(contentsOf: url)
-            if let image {
-                self?.cache.setObject(image, forKey: path as NSString)
+        DispatchQueue.global(qos: .userInitiated).async { [self] in
+            let options: [CFString: Any] = [
+                kCGImageSourceCreateThumbnailFromImageAlways: true,
+                kCGImageSourceCreateThumbnailWithTransform: true,
+                kCGImageSourceThumbnailMaxPixelSize: 512,
+                kCGImageSourceShouldCacheImmediately: true
+            ]
+            let source = CGImageSourceCreateWithURL(url as CFURL, nil)
+            let bitmap = source.flatMap { CGImageSourceCreateThumbnailAtIndex($0, 0, options as CFDictionary) }
+            let image = bitmap.map { NSImage(cgImage: $0, size: NSSize(width: $0.width, height: $0.height)) }
+            if let image, let bitmap {
+                cache.setObject(image, forKey: key as NSString, cost: bitmap.bytesPerRow * bitmap.height)
             }
-            self?.lock.lock()
-            self?.inflight.remove(path)
-            self?.lock.unlock()
+            lock.lock()
+            let callbacks = inflight.removeValue(forKey: key) ?? []
+            lock.unlock()
             DispatchQueue.main.async {
-                completion(image)
+                for callback in callbacks { callback(image) }
             }
         }
     }

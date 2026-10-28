@@ -43,7 +43,8 @@ final class ReaderViewModel: @unchecked Sendable {
         ReadingStatsManager.shared.stats
     }
 
-    init() {
+    init(loadLibrary: Bool = true) {
+        guard loadLibrary else { return }
         loadPersistedHighlights()
         loadPersistedBookmarks()
         // 跟随系统外观：启动即按当前亮暗套用昼/夜主题偏好
@@ -97,38 +98,25 @@ final class ReaderViewModel: @unchecked Sendable {
 
         // 1. Restore persisted shelf EPUBs (manually imported books are copied here so
         //    they survive app restarts and Caches purges)
-        // 4 路并发解析、先到先显示：大合订本的 OPF/spine 解析不再阻塞整排书架
-        let urls = Self.persistedLibraryEPUBs()
+        // 书籍 ID 按文件名生成，同名副本只解析最新的一个，避免并发解压到同一目录。
+        var seenFiles = Set<String>()
+        let urls = Self.persistedLibraryEPUBs().filter { seenFiles.insert($0.lastPathComponent).inserted }
         var parsed: [EPUBBook] = []
         parsed.reserveCapacity(urls.count)
         await withTaskGroup(of: EPUBBook?.self) { group in
-            var inFlight = 0
             var iterator = urls.makeIterator()
-            let maxConcurrent = 4
             func addNext() {
                 guard let url = iterator.next() else { return }
-                inFlight += 1
                 group.addTask { try? await EPUBParser.shared.parse(fileURL: url) }
             }
-            for _ in 0..<maxConcurrent { addNext() }
+            for _ in 0..<4 { addNext() }
             for await book in group {
-                inFlight -= 1
                 addNext()
                 if let book {
                     parsed.append(book)
-                    // 先到先显示：书架逐本浮现，不等全批
-                    if !books.contains(where: { $0.title == book.title }) {
-                        books.append(book)
-                    }
+                    books = Self.orderedRestoredBooks(books + parsed, sourceURLs: urls)
                 }
             }
-            _ = inFlight
-        }
-
-        // 按 persistedLibraryEPUBs 的原始顺序（最新在前）重排，保持既有排序语义
-        let order = Dictionary(uniqueKeysWithValues: urls.enumerated().map { ($1.lastPathComponent, $0) })
-        books.sort {
-            (order[$0.fileURL.lastPathComponent] ?? Int.max) < (order[$1.fileURL.lastPathComponent] ?? Int.max)
         }
 
         // 内置 demo 书（Walden/Little_Prince/LuXun）已按用户要求停用：书架只保留真实藏书。
@@ -136,6 +124,21 @@ final class ReaderViewModel: @unchecked Sendable {
 
         isLoadingBook = false
         // Keep isViewingBookshelf = true so the user starts at the bookshelf!
+    }
+
+    /// 并发解析完成顺序不影响同书名的版本选择：始终保留来源列表中较新的版本。
+    static func orderedRestoredBooks(_ candidates: [EPUBBook], sourceURLs: [URL]) -> [EPUBBook] {
+        let order = Dictionary(sourceURLs.enumerated().map { ($1.standardizedFileURL, $0) }, uniquingKeysWith: min)
+        var titles = Set<String>()
+        var ids = Set<UUID>()
+        return candidates.sorted {
+            (order[$0.fileURL.standardizedFileURL] ?? Int.max) < (order[$1.fileURL.standardizedFileURL] ?? Int.max)
+        }.filter { book in
+            guard !titles.contains(book.title), !ids.contains(book.id) else { return false }
+            titles.insert(book.title)
+            ids.insert(book.id)
+            return true
+        }
     }
 
     /// Canonical shelf directory: Application Support/DReader (legacy samples) + DownloadedBooks/
@@ -182,6 +185,8 @@ final class ReaderViewModel: @unchecked Sendable {
     func selectBookForReading(_ book: EPUBBook) {
         ReadingStatsManager.shared.startSession()
         withAnimation(.easeInOut(duration: 0.25)) {
+            readyChapterURL = nil
+            pendingReadingDestination = nil
             currentBook = book
             isViewingBookshelf = false
             isSidebarVisible = false
@@ -205,7 +210,6 @@ final class ReaderViewModel: @unchecked Sendable {
             }
         }
         updateSubsequentChaptersTotalChars()
-        preloadAllChapters(for: book)
     }
 
     // MARK: - 读完复盘状态
@@ -294,7 +298,6 @@ final class ReaderViewModel: @unchecked Sendable {
                 selectBookForReading(book)
             }
             self.isLoadingBook = false
-            preloadAllChapters(for: book)
         } catch {
             self.isLoadingBook = false
             let fileName = url.deletingPathExtension().lastPathComponent
@@ -391,42 +394,28 @@ final class ReaderViewModel: @unchecked Sendable {
         htmlContentCache[url] = html
     }
 
-    /// 异步预热章节：当前章 ±2 章进内存缓存保证 0ms 翻章；全本字数统计照算（剩余时间需要）。
-    /// 全书 AI 索引懒构建——大合订本（36 册级）全量预载 + 全段落 bigram 索引会把
-    /// 内存与 CPU 双双打爆，改为 AI 伴读首次提问时才建（见 BookIndexService.retrieve 路径）。
+    private var pendingPreloadURLs: Set<URL> = []
+
+    /// 只预热当前章附近的正文；全书字数由统一后台队列补齐。
     func preloadAllChapters(for book: EPUBBook) {
         let chapters = book.chapters
-        let currentIndex = book.currentChapterIndex
-        let window = 2
-        let windowURLs = Set(chapters[max(0, currentIndex - window)..<min(chapters.count, currentIndex + window + 1)].map(\.fileURL))
+        guard chapters.indices.contains(book.currentChapterIndex) else { return }
+        let lower = max(0, book.currentChapterIndex - 2)
+        let upper = min(chapters.count, book.currentChapterIndex + 3)
+        let urls = chapters[lower..<upper].map(\.fileURL).filter {
+            htmlContentCache[$0] == nil && pendingPreloadURLs.insert($0).inserted
+        }
+        guard !urls.isEmpty else { return }
         Task.detached(priority: .userInitiated) { [weak self] in
-            var preloaded: [URL: String] = [:]
-            var counts: [URL: Int] = [:]
-            for ch in chapters {
-                guard let content = try? String(contentsOf: ch.fileURL, encoding: .utf8) else { continue }
-                // 窗口内章节进 HTML 缓存；窗口外只算字数后即弃（不驻留内存）
-                if windowURLs.contains(ch.fileURL) {
-                    preloaded[ch.fileURL] = content
+            for url in urls {
+                let content = EPUBWebView.Coordinator.readTextSmart(url)
+                await MainActor.run { [weak self] in
+                    guard let self else { return }
+                    self.pendingPreloadURLs.remove(url)
+                    if let content { self.cacheHTML(content, for: url) }
                 }
-                counts[ch.fileURL] = stripHTMLTags(from: content).count
             }
-            if let self = self {
-                await self.storePreloadedChapters(preloaded, counts: counts)
-            }
-            // 全书索引不再随开书构建；AI 伴读检索时按需构建
-            BookIndexService.shared.invalidateIndex(for: book.id)
         }
-    }
-
-    @MainActor
-    private func storePreloadedChapters(_ preloaded: [URL: String], counts: [URL: Int]) {
-        for (url, content) in preloaded {
-            self.htmlContentCache[url] = content
-        }
-        for (url, count) in counts {
-            self.chapterCharCountCache[url] = count
-        }
-        updateSubsequentChaptersTotalChars()
     }
 
     func scrollPage(direction: Int) {
@@ -444,6 +433,8 @@ final class ReaderViewModel: @unchecked Sendable {
     func nextChapter() {
         guard var book = currentBook, book.currentChapterIndex < book.chapters.count - 1 else { return }
         readAloud.stop()
+        readyChapterURL = nil
+        pendingReadingDestination = nil
         book.currentChapterIndex += 1
         currentBook = book
         updateBookInLibrary(book)
@@ -455,6 +446,8 @@ final class ReaderViewModel: @unchecked Sendable {
     func prevChapter() {
         guard var book = currentBook, book.currentChapterIndex > 0 else { return }
         readAloud.stop()
+        readyChapterURL = nil
+        pendingReadingDestination = nil
         book.currentChapterIndex -= 1
         currentBook = book
         updateBookInLibrary(book)
@@ -471,6 +464,8 @@ final class ReaderViewModel: @unchecked Sendable {
             return
         }
         readAloud.stop()
+        readyChapterURL = nil
+        pendingReadingDestination = nil
         book.currentChapterIndex = index
         currentBook = book
         updateBookInLibrary(book)
@@ -515,15 +510,32 @@ final class ReaderViewModel: @unchecked Sendable {
         }
     }
 
+    private enum ReadingDestination {
+        case highlight(String)
+        case search(String, Int)
+    }
+    private var pendingReadingDestination: (URL, ReadingDestination)?
+    private var readyChapterURL: URL?
+
+    func chapterDidBecomeReady(_ url: URL) {
+        guard currentBook?.currentChapter?.fileURL == url else { return }
+        readyChapterURL = url
+        guard let (targetURL, destination) = pendingReadingDestination, targetURL == url else { return }
+        pendingReadingDestination = nil
+        switch destination {
+        case .highlight(let id): scrollToHighlightAction?(id)
+        case .search(let keyword, let index): scrollToSearchMatchAction?(keyword, index)
+        }
+    }
+
     func jumpToHighlight(_ highlight: Highlight) {
-        guard let book = currentBook else { return }
-        if book.currentChapterIndex == highlight.chapterIndex {
+        guard let book = currentBook, book.chapters.indices.contains(highlight.chapterIndex) else { return }
+        let url = book.chapters[highlight.chapterIndex].fileURL
+        if book.currentChapterIndex == highlight.chapterIndex, readyChapterURL == url {
             scrollToHighlightAction?(highlight.id.uuidString)
         } else {
-            jumpToChapter(highlight.chapterIndex)
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
-                self?.scrollToHighlightAction?(highlight.id.uuidString)
-            }
+            if book.currentChapterIndex != highlight.chapterIndex { jumpToChapter(highlight.chapterIndex) }
+            pendingReadingDestination = (url, .highlight(highlight.id.uuidString))
         }
     }
 
@@ -705,13 +717,13 @@ final class ReaderViewModel: @unchecked Sendable {
             currentSearchIndex = idx
         }
 
-        if book.currentChapterIndex != item.chapterIndex {
-            jumpToChapter(item.chapterIndex)
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { [weak self] in
-                self?.scrollToSearchMatchAction?(item.keyword, item.matchIndexInChapter)
-            }
-        } else {
+        guard book.chapters.indices.contains(item.chapterIndex) else { return }
+        let url = book.chapters[item.chapterIndex].fileURL
+        if book.currentChapterIndex == item.chapterIndex, readyChapterURL == url {
             scrollToSearchMatchAction?(item.keyword, item.matchIndexInChapter)
+        } else {
+            if book.currentChapterIndex != item.chapterIndex { jumpToChapter(item.chapterIndex) }
+            pendingReadingDestination = (url, .search(item.keyword, item.matchIndexInChapter))
         }
     }
 
@@ -856,70 +868,72 @@ final class ReaderViewModel: @unchecked Sendable {
     private let charactersPerMinute: Double = 400.0
     private var chapterCharCountCache: [URL: Int] = [:]
     private var subsequentChaptersTotalChars: Int = 0
-    /// 后台字数补算去重（同一 URL 不重复排任务）+ 代际防过期回写
     private var pendingCharCountURLs: Set<URL> = []
-    private var charCountGeneration: Int = 0
+    private var charCountQueue: [URL] = []
+    private var activeCharCountTasks = 0
+    private let maxCharCountTasks = 2
 
-    /// 主线程专用：只查缓存。未命中返回 nil，绝不在此读盘——
-    /// 合订本几百章同步读盘会把主线程冻住（章间切换卡死的根因）。
     private func cachedCharCount(for url: URL) -> Int? {
         chapterCharCountCache[url]
     }
 
-    /// 后台读盘 + 剥标签算字数，完成后回主线程入缓存并触发重算。
+    /// 所有字数任务共用两路队列，避免合订本为每章同时创建读盘任务。
     func computeCharCountInBackground(for url: URL) {
-                do {
-            // pendingCharCountURLs 与 cache 都是主线程状态（VM 非 actor 但 UI 驱动均在主线程）
-            if chapterCharCountCache[url] != nil { return }
-            if pendingCharCountURLs.contains(url) { return }
-            pendingCharCountURLs.insert(url)
-        }
-        let generation = charCountGeneration
-        Task.detached(priority: .utility) { [weak self] in
-            let html = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
-            let count = stripHTMLTags(from: html).count
-            await MainActor.run { [weak self] in
-                guard let self else { return }
-                self.pendingCharCountURLs.remove(url)
-                // 换书/换章后代际变化：过期结果只入缓存不触发重算
-                self.chapterCharCountCache[url] = count
-                guard generation == self.charCountGeneration else { return }
-                self.updateSubsequentChaptersTotalChars()
+        guard chapterCharCountCache[url] == nil, pendingCharCountURLs.insert(url).inserted else { return }
+        charCountQueue.append(url)
+        startQueuedCharCounts()
+    }
+
+    private func startQueuedCharCounts() {
+        while activeCharCountTasks < maxCharCountTasks, !charCountQueue.isEmpty {
+            let url = charCountQueue.removeFirst()
+            let cachedHTML = getCachedHTML(for: url)
+            activeCharCountTasks += 1
+            Task.detached(priority: .utility) { [weak self] in
+                let html = cachedHTML ?? EPUBWebView.Coordinator.readTextSmart(url)
+                let count = html.map { stripHTMLTags(from: $0).count }
+                await MainActor.run { [weak self] in
+                    guard let self else { return }
+                    self.activeCharCountTasks -= 1
+                    self.pendingCharCountURLs.remove(url)
+                    if let count { self.chapterCharCountCache[url] = count }
+                    self.refreshSubsequentChaptersTotalChars()
+                    self.startQueuedCharCounts()
+                }
             }
         }
     }
 
-    /// 汇总后续章节总字数。只求和缓存命中；未命中的排后台补算（完成后自动刷新）。
-    /// 大合订本首次翻章不再有主线程同步读盘卡死。
-    func updateSubsequentChaptersTotalChars() {
+    private func refreshSubsequentChaptersTotalChars() {
         guard let book = currentBook else {
             subsequentChaptersTotalChars = 0
             return
         }
-        charCountGeneration += 1
-        var total = 0
-        let nextIndex = book.currentChapterIndex + 1
-        if nextIndex < book.chapters.count {
-            for i in nextIndex..<book.chapters.count {
-                let url = book.chapters[i].fileURL
-                if let count = cachedCharCount(for: url) {
-                    total += count
-                } else {
-                    computeCharCountInBackground(for: url)
-                }
-            }
+        subsequentChaptersTotalChars = book.chapters.dropFirst(book.currentChapterIndex + 1).reduce(0) {
+            $0 + (chapterCharCountCache[$1.fileURL] ?? 0)
         }
-        subsequentChaptersTotalChars = total
+    }
+
+    /// 界面只查缓存，后台完成后对当前阅读位置重新求和。
+    func updateSubsequentChaptersTotalChars() {
+        refreshSubsequentChaptersTotalChars()
+        guard let book = currentBook else { return }
+        let needed = Set(book.chapters.dropFirst(book.currentChapterIndex).map(\.fileURL))
+        let obsolete = charCountQueue.filter { !needed.contains($0) }
+        charCountQueue.removeAll { !needed.contains($0) }
+        for url in obsolete { pendingCharCountURLs.remove(url) }
+        if let chapter = book.currentChapter { computeCharCountInBackground(for: chapter.fileURL) }
+        for chapter in book.chapters.dropFirst(book.currentChapterIndex + 1) {
+            computeCharCountInBackground(for: chapter.fileURL)
+        }
+        preloadAllChapters(for: book)
     }
 
     func currentChapterCharCount() -> Int {
-        guard let book = currentBook, let chapter = book.currentChapter else { return 0 }
-        // 当前章通常已被 preload 窗口缓存；未命中读一次盘可接受（单章，非全本）
+        guard let chapter = currentBook?.currentChapter else { return 0 }
         if let count = cachedCharCount(for: chapter.fileURL) { return count }
-        let html = getCachedHTML(for: chapter.fileURL) ?? (try? String(contentsOf: chapter.fileURL, encoding: .utf8)) ?? ""
-        let count = stripHTMLTags(from: html).count
-        chapterCharCountCache[chapter.fileURL] = count
-        return count
+        computeCharCountInBackground(for: chapter.fileURL)
+        return 0
     }
 
     func currentChapterRemainingMinutes() -> Int {

@@ -56,7 +56,7 @@ struct RealisticBookshelfView: View {
 
             // Scrollable Wooden Bookshelf Racks
             ScrollView {
-                VStack(spacing: 36) {
+                LazyVStack(spacing: 36) {
                     // Ceiling Warm Ambient Light
                     Rectangle()
                         .fill(Color.clear)

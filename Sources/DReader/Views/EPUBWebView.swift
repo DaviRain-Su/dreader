@@ -25,6 +25,7 @@ struct EPUBWebView: NSViewRepresentable {
     var onTranslateParagraph: ((Int, String) -> Void)? = nil
     var registerUpdateTranslationAction: ((@escaping (Int, String, String) -> Void) -> Void)? = nil
     var onChapterLinkTapped: ((URL) -> Bool)? = nil
+    var onChapterReady: ((URL) -> Void)? = nil
     let onScrollProgress: (Double) -> Void
     let registerScrollAction: (@escaping (Int) -> Void) -> Void
     let registerHighlightAction: (@escaping (String, String, String?) -> Void) -> Void
@@ -151,6 +152,8 @@ struct EPUBWebView: NSViewRepresentable {
         var lastBilingualEnabled: Bool = false
         var lastScriptMode: ChineseScriptMode = .original
         var pendingScrollHighlightId: String? = nil
+        private var chapterLoadGeneration = 0
+        private var isChapterLoading = false
         /// 仿真翻页进行中（防止连按叠帧）
         var isPageTurnAnimating: Bool = false
 
@@ -159,8 +162,9 @@ struct EPUBWebView: NSViewRepresentable {
         }
 
         func scrollPage(direction: Int) {
+            guard !isChapterLoading else { return }
             if direction == 0 {
-                webView?.evaluateJavaScript("window.scrollTo({ top: 0, behavior: 'smooth' }); document.body.scrollTop = 0; document.documentElement.scrollTop = 0;", completionHandler: nil)
+                webView?.evaluateJavaScript("window.dreaderScrollToStart && window.dreaderScrollToStart();", completionHandler: nil)
                 return
             }
             // 仿真翻页：旧页快照盖在原地 → webview 无动画瞬时跳页 → 快照整幅滑出露出新页。
@@ -297,14 +301,15 @@ struct EPUBWebView: NSViewRepresentable {
         /// 拦截页内链接导航（如 Kindle 目录页的章节链接）。
         /// 原始章节文件大多没有 charset 声明，WebKit 裸导航会按 Latin-1 解码产生乱码，
         /// 且丢失全部主题/高亮/进度环境。这里转交 Swift 跳章并走完整渲染管线。
-        func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+        func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping @MainActor @Sendable (WKNavigationActionPolicy) -> Void) {
             guard navigationAction.navigationType == .linkActivated,
                   let target = navigationAction.request.url else {
                 decisionHandler(.allow)
                 return
             }
             // 只拦截书内 file:// 链接；外链与锚点不动（锚点由 JS 端脚注拦截处理）
-            let insideBook = target.path.hasPrefix(parent.unzippedDirectory.path)
+            let bookPath = parent.unzippedDirectory.resolvingSymlinksInPath().path + "/"
+            let insideBook = target.resolvingSymlinksInPath().path.hasPrefix(bookPath)
             if insideBook, let handler = parent.onChapterLinkTapped, handler(target) {
                 decisionHandler(.cancel)
             } else {
@@ -313,6 +318,7 @@ struct EPUBWebView: NSViewRepresentable {
         }
 
         func applyHighlightInDOM(colorHex: String, id: String, note: String?) {
+            guard !isChapterLoading else { return }
             let escapedNote = note?
                 .replacingOccurrences(of: "\\", with: "\\\\")
                 .replacingOccurrences(of: "'", with: "\\'")
@@ -376,9 +382,15 @@ struct EPUBWebView: NSViewRepresentable {
             hasNextChapter: Bool,
             nextChapterTitle: String?
         ) {
-            guard let webView = webView else { return }
+            guard webView != nil else { return }
+            chapterLoadGeneration += 1
+            let generation = chapterLoadGeneration
+            isChapterLoading = true
+            parent.selectionManager.clear()
             currentURL = url
             lastSettingsSummary = parent.settingsSummary
+            lastBilingualEnabled = settings.isBilingualEnabled
+            lastScriptMode = settings.chineseScriptMode
 
             // 读盘 + 编码探测移出主线程：合订本单章可达数 MB，同步 readTextSmart
             // 会冻住 UI（章间切换卡死的直接元凶之一）。缓存命中时走快路径。
@@ -391,13 +403,11 @@ struct EPUBWebView: NSViewRepresentable {
                 Self.readTextSmart(url)
             }
             Task { @MainActor [weak self] in
-                guard let self else { return }
-                guard let loaded = await readTask.value, !loaded.isEmpty else {
-                    webView.loadFileURL(url, allowingReadAccessTo: unzippedDir)
-                    return
-                }
-                self.parent.cacheHTML(loaded, url)
-                self.proceedWithRawHTML(rawHTML: loaded, url: url, opfDir: opfDir, unzippedDir: unzippedDir,
+                let loaded = await readTask.value
+                guard let self, self.chapterLoadGeneration == generation, self.currentURL == url else { return }
+                if let loaded { self.parent.cacheHTML(loaded, url) }
+                let html = loaded ?? "<html><body><p>本章文件暂时无法读取，请切换章节后重试。</p></body></html>"
+                self.proceedWithRawHTML(rawHTML: html, url: url, opfDir: opfDir, unzippedDir: unzippedDir,
                                         settings: settings, hasNextChapter: hasNextChapter, nextChapterTitle: nextChapterTitle)
             }
         }
@@ -447,7 +457,7 @@ struct EPUBWebView: NSViewRepresentable {
                 )
 
                 // Write rendered page to disk as .html inside the book cache directory for HTML5 parsing and full sandbox read access
-                let renderURL = chapterDir.appendingPathComponent("_dreader_render.html")
+                let renderURL = unzippedDir.appendingPathComponent("_dreader_render.html")
                 do {
                     try processedHTML.write(to: renderURL, atomically: true, encoding: .utf8)
                     webView.loadFileURL(renderURL, allowingReadAccessTo: unzippedDir)
@@ -556,6 +566,7 @@ struct EPUBWebView: NSViewRepresentable {
 
             guard let jsonData = try? JSONSerialization.data(withJSONObject: [
                 "body": bodyContent,
+                "baseURL": chapterDir.absoluteString,
                 "styles": headElements,
                 "endCard": endCard,
                 "highlights": highlightItems
@@ -566,14 +577,14 @@ struct EPUBWebView: NSViewRepresentable {
             let script = "window.dreaderSetChapterContentPreservingScroll ? window.dreaderSetChapterContentPreservingScroll(\(jsonString)) : window.dreaderSetChapterContent(\(jsonString));"
             webView.evaluateJavaScript(script) { [weak self] result, error in
                 let success = (result as? Bool) ?? false
-                if success {
-                    // body 里的 <mark> 已由 Swift 端 injectHighlights 打好（本路径的 bodyContent 同样过 injectHighlights）
-                } else if error != nil {
+                guard let self, self.currentURL == url else { return }
+                if !success || error != nil {
+                    self.isPageReady = false
                     // Fall back to full reload if needed
-                    self?.loadChapter(
+                    self.loadChapter(
                         url: url,
                         opfDir: opfDir,
-                        unzippedDir: self?.parent.unzippedDirectory ?? opfDir,
+                        unzippedDir: self.parent.unzippedDirectory,
                         settings: settings,
                         hasNextChapter: hasNextChapter,
                         nextChapterTitle: nextChapterTitle
@@ -638,6 +649,7 @@ struct EPUBWebView: NSViewRepresentable {
 
             guard let jsonData = try? JSONSerialization.data(withJSONObject: [
                 "body": bodyContent,
+                "baseURL": chapterDir.absoluteString,
                 "styles": headElements,
                 "endCard": endCard,
                 "highlights": highlightItems
@@ -645,31 +657,34 @@ struct EPUBWebView: NSViewRepresentable {
                 return
             }
 
+            let generation = chapterLoadGeneration
             let script = "window.dreaderSetChapterContent(\(jsonString));"
             webView.evaluateJavaScript(script) { [weak self] result, error in
+                guard let self, self.chapterLoadGeneration == generation else { return }
                 let success = (result as? Bool) ?? false
                 if success {
-                    // body 里的 <mark> 已由 Swift 端 injectHighlights 打好，无需再走 DOM 恢复
-                    // （每条划线一次全 DOM TreeWalker，大章多划线时是双倍浪费）
+                    self.isChapterLoading = false
+                    if let url = self.currentURL { self.parent.onChapterReady?(url) }
+                    // JS 已恢复跨标签划线，此处不再重复调用。
                     // 换章后同步行引导线（DOM 重挂会移除引导元素）
                     let guideScript = settings.isLineGuide
                         ? "window.dreaderSetLineGuide && window.dreaderSetLineGuide(true, '\(settings.theme.textColorHex)');"
                         : "window.dreaderSetLineGuide && window.dreaderSetLineGuide(false);"
                     webView.evaluateJavaScript(guideScript, completionHandler: nil)
-                    if let pendingId = self?.pendingScrollHighlightId {
-                        self?.pendingScrollHighlightId = nil
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
+                    if let pendingId = self.pendingScrollHighlightId {
+                        self.pendingScrollHighlightId = nil
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { [weak self] in
                             self?.scrollToHighlight(id: pendingId)
                         }
                     }
-                } else if error != nil {
-                    // Fall back to full reload if needed
-                    self?.isPageReady = false
-                    if let url = self?.currentURL, let opf = self?.currentOpfDir {
-                        self?.loadChapter(
+                } else {
+                    // JS 返回 false（容器丢失）也需要重载，不能只检查是否抛异常。
+                    self.isPageReady = false
+                    if let url = self.currentURL, let opf = self.currentOpfDir {
+                        self.loadChapter(
                             url: url,
                             opfDir: opf,
-                            unzippedDir: self?.parent.unzippedDirectory ?? opf,
+                            unzippedDir: self.parent.unzippedDirectory,
                             settings: settings,
                             hasNextChapter: hasNextChapter,
                             nextChapterTitle: nextChapterTitle
@@ -736,8 +751,10 @@ struct EPUBWebView: NSViewRepresentable {
                   let body = message.body as? [String: Any],
                   let type = body["type"] as? String else { return }
 
+            guard !isChapterLoading else { return }
+            let generation = chapterLoadGeneration
             DispatchQueue.main.async { [weak self] in
-                guard let self = self else { return }
+                guard let self, !self.isChapterLoading, self.chapterLoadGeneration == generation else { return }
                 if type == "selection",
                    let text = body["text"] as? String,
                    let x = body["x"] as? Double,
@@ -818,14 +835,24 @@ struct EPUBWebView: NSViewRepresentable {
         }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-            isPageReady = true
-            updateStyles(settings: parent.settings)
-            // Ensure first chapter starts cleanly at the top
-            webView.evaluateJavaScript("window.scrollTo(0, 0); document.body.scrollTop = 0; document.documentElement.scrollTop = 0;", completionHandler: nil)
-            if let pendingId = pendingScrollHighlightId {
-                pendingScrollHighlightId = nil
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) { [weak self] in
-                    self?.scrollToHighlight(id: pendingId)
+            let generation = chapterLoadGeneration
+            webView.evaluateJavaScript("window.dreaderReaderReady === true") { [weak self] result, error in
+                guard let self, self.chapterLoadGeneration == generation else { return }
+                self.isPageReady = (result as? Bool) == true && error == nil
+                guard self.isPageReady else {
+                    NSLog("DReader: 正文交互脚本未就绪，翻页与划线暂不可用")
+                    return
+                }
+                self.updateStyles(settings: self.parent.settings)
+                self.restoreHighlightsInDOM(self.parent.highlights)
+                webView.evaluateJavaScript("window.dreaderScrollToStart();", completionHandler: nil)
+                self.isChapterLoading = false
+                if let url = self.currentURL { self.parent.onChapterReady?(url) }
+                if let pendingId = self.pendingScrollHighlightId {
+                    self.pendingScrollHighlightId = nil
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) { [weak self] in
+                        self?.scrollToHighlight(id: pendingId)
+                    }
                 }
             }
         }

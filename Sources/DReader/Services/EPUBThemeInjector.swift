@@ -53,11 +53,15 @@ struct EPUBThemeInjector {
             chapterIndex: chapterIndex
         )
 
+        let baseURL = chapterDir.absoluteString
+            .replacingOccurrences(of: "&", with: "&amp;")
+            .replacingOccurrences(of: "\"", with: "&quot;")
         return """
         <!DOCTYPE html>
         <html>
         <head>
             <meta charset="utf-8">
+            <base id="dreader-chapter-base" href="\(baseURL)">
             <meta name="viewport" content="width=device-width, initial-scale=1.0">
             <script id="dreader-injected-script">
             /*<![CDATA[*/
@@ -1025,6 +1029,8 @@ struct EPUBThemeInjector {
     static func generateJS() -> String {
         return """
         (function() {
+            // 模板和 WKUserScript 都会加载此脚本，只注册一套事件监听。
+            if (window.dreaderReaderReady) return;
             let lastSelectedText = '';
 
             function notifySelection() {
@@ -1074,15 +1080,29 @@ struct EPUBThemeInjector {
                 return document.body && (getComputedStyle(document.body).writingMode || '').startsWith('vertical');
             };
 
-            window.dreaderScrollPage = function(direction) {
+            // WebKit 的 vertical-rl 从 0 向负 scrollLeft 前进，统一转换为正的阅读距离。
+            window.dreaderScrollMetrics = function() {
                 const vertical = window.dreaderIsVertical();
-                const pageAdvance = (vertical ? window.innerWidth : window.innerHeight) * 0.82;
-                const currentScroll = vertical
-                    ? (window.scrollX || document.documentElement.scrollLeft)
-                    : (window.scrollY || document.documentElement.scrollTop);
+                const root = document.scrollingElement || document.documentElement;
                 const maxScroll = vertical
-                    ? Math.max(0, document.documentElement.scrollWidth - window.innerWidth)
-                    : Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
+                    ? Math.max(0, root.scrollWidth - window.innerWidth)
+                    : Math.max(0, root.scrollHeight - window.innerHeight);
+                const rawScroll = vertical ? root.scrollLeft : root.scrollTop;
+                const currentScroll = Math.max(0, Math.min(maxScroll, vertical ? -rawScroll : rawScroll));
+                return { vertical: vertical, currentScroll: currentScroll, maxScroll: maxScroll };
+            };
+
+            window.dreaderScrollToStart = function() {
+                window.scrollTo({ left: 0, top: 0, behavior: 'instant' });
+            };
+
+            window.dreaderScrollPage = function(direction) {
+                if (direction === 0) { window.dreaderScrollToStart(); return; }
+                const metrics = window.dreaderScrollMetrics();
+                const vertical = metrics.vertical;
+                const pageAdvance = (vertical ? window.innerWidth : window.innerHeight) * 0.82;
+                const currentScroll = metrics.currentScroll;
+                const maxScroll = metrics.maxScroll;
 
                 if (direction > 0) {
                     if (currentScroll >= maxScroll - 30) {
@@ -1115,14 +1135,11 @@ struct EPUBThemeInjector {
             // 仿真翻页规划：到页内边界时返回本次滚动偏移（足够滑满一屏）；
             // willTurn=false 表示还在页中（普通平滑滚动即可）或需要翻章（走 DOM 切换，不套平移动画）
             window.dreaderPageTurnPlan = function(direction) {
-                const vertical = window.dreaderIsVertical();
+                const metrics = window.dreaderScrollMetrics();
+                const vertical = metrics.vertical;
                 const pageSize = (vertical ? window.innerWidth : window.innerHeight) * 0.82;
-                const currentScroll = vertical
-                    ? (window.scrollX || document.documentElement.scrollLeft)
-                    : (window.scrollY || document.documentElement.scrollTop);
-                const maxScroll = vertical
-                    ? Math.max(0, document.documentElement.scrollWidth - window.innerWidth)
-                    : Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
+                const currentScroll = metrics.currentScroll;
+                const maxScroll = metrics.maxScroll;
                 const atEnd = direction > 0
                     ? currentScroll >= maxScroll - 30
                     : currentScroll <= 30;
@@ -1131,7 +1148,7 @@ struct EPUBThemeInjector {
                 }
                 // 页内整页跳：偏移取页长，但不超过边界（避免跳过头露白）；余量太小则不做整页翻（滑出一整页却只挪了几十像素很怪）
                 let offset = pageSize;
-                if (direction > 0 ? (maxScroll - currentScroll) : currentScroll) < 40 {
+                if ((direction > 0 ? (maxScroll - currentScroll) : currentScroll) < 40) {
                     return { willTurn: false };
                 }
                 if (direction > 0) {
@@ -1329,21 +1346,16 @@ struct EPUBThemeInjector {
                 }
             });
 
-            // Scroll Progress Reporting (optimized with requestAnimationFrame and change threshold)
-            let scrollRAF = null;
+            // 合并滚动上报；窗口被遮挡时 WebKit 会暂停动画帧，定时器仍能回传进度。
+            let scrollReportDelay = 80;
+            let scrollReportTimer = null;
             let lastReportedPct = -1.0;
             window.addEventListener('scroll', function() {
-                if (scrollRAF) return;
-                scrollRAF = requestAnimationFrame(function() {
-                    scrollRAF = null;
-                    const vertical = window.dreaderIsVertical ? window.dreaderIsVertical() : false;
-                    const currentScroll = vertical
-                        ? (window.scrollX || document.documentElement.scrollLeft)
-                        : (window.scrollY || document.documentElement.scrollTop);
-                    const maxScroll = vertical
-                        ? Math.max(1, document.documentElement.scrollWidth - window.innerWidth)
-                        : Math.max(1, document.documentElement.scrollHeight - window.innerHeight);
-                    const pct = Math.min(1.0, Math.max(0.0, currentScroll / maxScroll));
+                if (scrollReportTimer !== null) return;
+                scrollReportTimer = setTimeout(function() {
+                    scrollReportTimer = null;
+                    const metrics = window.dreaderScrollMetrics();
+                    const pct = metrics.currentScroll / Math.max(1, metrics.maxScroll);
                     // Only send IPC bridge message if progress changed by at least 1% (or reached boundaries)
                     if (Math.abs(pct - lastReportedPct) >= 0.01 || (pct === 0 && lastReportedPct !== 0) || (pct === 1 && lastReportedPct !== 1)) {
                         lastReportedPct = pct;
@@ -1354,7 +1366,7 @@ struct EPUBThemeInjector {
                             });
                         }
                     }
-                });
+                }, scrollReportDelay);
             }, { passive: true });
 
             // Instant Client-Side Highlight Function
@@ -1641,9 +1653,13 @@ struct EPUBThemeInjector {
                 const bodyEl = document.getElementById('dreader-chapter-body');
                 if (!bodyEl) return false;
 
-                // Subtle fast transition: 0ms content swap with 80ms micro ease-in
-                bodyEl.style.opacity = '0';
+                // 换章后立即可见，避免窗口被遮挡时动画帧暂停而一直透明。
+                bodyEl.style.opacity = '1';
 
+                if (payload.baseURL) {
+                    const baseEl = document.getElementById('dreader-chapter-base');
+                    if (baseEl) baseEl.href = payload.baseURL;
+                }
                 if (payload.styles !== undefined) {
                     const stylesEl = document.getElementById('dreader-chapter-styles');
                     if (stylesEl) stylesEl.innerHTML = payload.styles;
@@ -1663,20 +1679,11 @@ struct EPUBThemeInjector {
                 }
 
                 // Instant scroll to top (horizontal for vertical-rl typesetting: origin is rightmost column)
-                window.scrollTo(0, 0);
-                document.body.scrollTop = 0;
-                document.documentElement.scrollTop = 0;
-                document.documentElement.scrollLeft = document.documentElement.scrollWidth;
+                window.dreaderScrollToStart();
 
                 // Clear any leftover selection
                 const sel = window.getSelection();
                 if (sel) sel.removeAllRanges();
-
-                // Micro-easing to ensure silky smooth visual rendering without blank flashes
-                requestAnimationFrame(function() {
-                    bodyEl.style.transition = 'opacity 0.08s ease-out';
-                    bodyEl.style.opacity = '1';
-                });
 
                 if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.selectionBridge) {
                     lastReportedPct = 0.0;
@@ -1693,8 +1700,13 @@ struct EPUBThemeInjector {
                 const bodyEl = document.getElementById('dreader-chapter-body');
                 if (!bodyEl) return false;
 
-                const currentScrollY = window.scrollY || document.documentElement.scrollTop || 0;
+                const currentScrollX = window.scrollX;
+                const currentScrollY = window.scrollY;
 
+                if (payload.baseURL) {
+                    const baseEl = document.getElementById('dreader-chapter-base');
+                    if (baseEl) baseEl.href = payload.baseURL;
+                }
                 if (payload.styles !== undefined) {
                     const stylesEl = document.getElementById('dreader-chapter-styles');
                     if (stylesEl) stylesEl.innerHTML = payload.styles;
@@ -1713,9 +1725,7 @@ struct EPUBThemeInjector {
                     if (endEl) endEl.innerHTML = payload.endCard;
                 }
 
-                window.scrollTo({ top: currentScrollY, behavior: 'instant' });
-                document.body.scrollTop = currentScrollY;
-                document.documentElement.scrollTop = currentScrollY;
+                window.scrollTo({ left: currentScrollX, top: currentScrollY, behavior: 'instant' });
 
                 return true;
             };
@@ -1828,6 +1838,7 @@ struct EPUBThemeInjector {
                 div.innerHTML = '<div class="dreader-bilingual-header"><span class="dreader-bilingual-tag">译</span><span class="dreader-bilingual-agent">' + (agentName || 'AI 伴读') + ' 译文</span></div><div class="dreader-bilingual-body">' + transText + '</div>';
                 slot.parentNode.replaceChild(div, slot);
             };
+            window.dreaderReaderReady = true;
         })();
         """
     }
