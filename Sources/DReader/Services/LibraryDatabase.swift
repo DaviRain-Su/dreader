@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 import SQLite3
 
 /// Local SQLite persistence layer for user knowledge assets (highlights, bookmarks).
@@ -302,38 +303,76 @@ final class LibraryDatabase: @unchecked Sendable {
     }
 
     /// One-time migration from the legacy UserDefaults JSON blobs.
-    /// Legacy data is kept in UserDefaults untouched as a belt-and-suspenders backup.
+    /// 迁移后把旧划线移到独立 JSON；不能让数 MB 的备份继续阻塞整个偏好域。
     private func migrateLegacyUserDefaultsIfNeeded() {
         guard db != nil else { return }
         let flagKey = "dreader.librarydb.migrated.v1"
-        guard !preferences.bool(forKey: flagKey) else { return }
-
         var migrated = false
 
-        if let data = preferences.data(forKey: "dreader.highlights"),
-           let legacy = try? JSONDecoder().decode([Highlight].self, from: data),
-           !legacy.isEmpty {
-            let count = countRows(table: "highlights")
-            if count == 0 {
-                upsertHighlightsSync(legacy)
-                NSLog("DReader LibraryDB: migrated \(legacy.count) highlights from UserDefaults")
+        if !preferences.bool(forKey: flagKey) {
+            if let data = preferences.data(forKey: "dreader.highlights"),
+               let legacy = try? JSONDecoder().decode([Highlight].self, from: data),
+               !legacy.isEmpty {
+                let count = countRows(table: "highlights")
+                if count == 0 {
+                    upsertHighlightsSync(legacy)
+                    NSLog("DReader LibraryDB: migrated \(legacy.count) highlights from UserDefaults")
+                }
+                migrated = true
             }
-            migrated = true
+
+            if let data = preferences.data(forKey: "dreader.bookmarks"),
+               let legacy = try? JSONDecoder().decode([Bookmark].self, from: data),
+               !legacy.isEmpty {
+                let count = countRows(table: "bookmarks")
+                if count == 0 {
+                    upsertBookmarksSync(legacy)
+                    NSLog("DReader LibraryDB: migrated \(legacy.count) bookmarks from UserDefaults")
+                }
+                migrated = true
+            }
         }
 
-        if let data = preferences.data(forKey: "dreader.bookmarks"),
-           let legacy = try? JSONDecoder().decode([Bookmark].self, from: data),
-           !legacy.isEmpty {
-            let count = countRows(table: "bookmarks")
-            if count == 0 {
-                upsertBookmarksSync(legacy)
-                NSLog("DReader LibraryDB: migrated \(legacy.count) bookmarks from UserDefaults")
-            }
-            migrated = true
-        }
-
+        relocateLegacyHighlightsBackupIfNeeded()
+        // 大数据项必须先移走，再写迁移标记，避免整个偏好域超过 CFPreferences 上限。
         if migrated {
             preferences.set(true, forKey: flagKey)
+        }
+    }
+
+    private enum LegacyBackupError: Error {
+        case verificationFailed
+    }
+
+    /// 幂等迁移：原始字节写入内容寻址文件，读回并验证后才能删除旧偏好项。
+    /// 已存在但内容不同的备份绝不覆盖；任何失败都保留原始偏好数据。
+    private func relocateLegacyHighlightsBackupIfNeeded() {
+        let key = "dreader.highlights"
+        guard let data = preferences.data(forKey: key) else { return }
+        do {
+            _ = try JSONDecoder().decode([Highlight].self, from: data)
+            let digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+            let backupDirectory = dbURL.deletingLastPathComponent()
+                .appendingPathComponent("LegacyBackups", isDirectory: true)
+            let backupURL = backupDirectory.appendingPathComponent("highlights-v1-\(digest).json")
+            try FileManager.default.createDirectory(at: backupDirectory, withIntermediateDirectories: true)
+            if FileManager.default.fileExists(atPath: backupURL.path) {
+                guard try Data(contentsOf: backupURL) == data else {
+                    throw LegacyBackupError.verificationFailed
+                }
+            } else {
+                try data.write(to: backupURL, options: .atomic)
+            }
+            let persisted = try Data(contentsOf: backupURL)
+            guard persisted == data,
+                  (try? JSONDecoder().decode([Highlight].self, from: persisted)) != nil else {
+                throw LegacyBackupError.verificationFailed
+            }
+            preferences.removeObject(forKey: key)
+            NSLog("DReader LibraryDB: legacy highlights backup verified (\(data.count) bytes) at \(backupURL.path); old preference removed")
+        } catch {
+            // 不输出划线内容；失败时保留旧偏好，下一次启动可重试。
+            NSLog("DReader LibraryDB: legacy highlights backup not verified (\(data.count) bytes); old preference kept: \(error.localizedDescription)")
         }
     }
 

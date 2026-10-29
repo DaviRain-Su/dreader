@@ -144,7 +144,8 @@ final class KnowledgeRegressionTests: XCTestCase {
         let book = makeBook("旧书")
         let bookmark = Bookmark(bookId: book.id, bookTitle: book.title, chapterIndex: 0,
             chapterTitle: "第一章", scrollProgress: 0.5)
-        defaults.set(try JSONEncoder().encode([legacy]), forKey: "dreader.highlights")
+        let legacyData = try JSONEncoder().encode([legacy])
+        defaults.set(legacyData, forKey: "dreader.highlights")
         defaults.set(try JSONEncoder().encode([bookmark]), forKey: "dreader.bookmarks")
         database = makeDatabase()
         var vm: ReaderViewModel? = ReaderViewModel(loadLibrary: false, database: database)
@@ -158,9 +159,61 @@ final class KnowledgeRegressionTests: XCTestCase {
         let reopened = ReaderViewModel(loadLibrary: false, database: database)
         XCTAssertTrue(reopened.highlights.isEmpty)
         XCTAssertTrue(reopened.bookmarks.isEmpty)
-        // 旧 JSON 仍保留，但不能绕过数据库的迁移标记回填空库。
-        XCTAssertNotNil(defaults.data(forKey: "dreader.highlights"))
+        // 旧 JSON 已安全迁移到独立备份，不能绕过数据库的迁移标记回填空库。
+        XCTAssertNil(defaults.data(forKey: "dreader.highlights"))
         XCTAssertTrue(defaults.bool(forKey: "dreader.librarydb.migrated.v1"))
+        let backups = try FileManager.default.contentsOfDirectory(
+            at: directory.appendingPathComponent("LegacyBackups"), includingPropertiesForKeys: nil)
+        XCTAssertEqual(backups.count, 1)
+        XCTAssertEqual(try Data(contentsOf: backups[0]), legacyData)
+    }
+
+    func testOversizedLegacyHighlightsAreBackedUpBeforePreferenceRemoval() throws {
+        database = nil
+        var legacy = remote("large")
+        legacy.note = String(repeating: "旧", count: 1_500_000)
+        let data = try JSONEncoder().encode([legacy])
+        XCTAssertGreaterThan(data.count, 4 * 1024 * 1024)
+        defaults.set(data, forKey: "dreader.highlights")
+        database = makeDatabase()
+
+        XCTAssertNil(defaults.data(forKey: "dreader.highlights"))
+        XCTAssertTrue(defaults.bool(forKey: "dreader.librarydb.migrated.v1"))
+        let backupDirectory = directory.appendingPathComponent("LegacyBackups")
+        let files = try FileManager.default.contentsOfDirectory(at: backupDirectory, includingPropertiesForKeys: nil)
+        XCTAssertEqual(files.count, 1)
+        let backup = try XCTUnwrap(files.first)
+        let persisted = try Data(contentsOf: backup)
+        XCTAssertEqual(persisted, data)
+        XCTAssertEqual(try JSONDecoder().decode([Highlight].self, from: persisted).first?.id, legacy.id)
+        XCTAssertEqual(database.loadHighlights().count, 1)
+
+        database = nil
+        database = makeDatabase()
+        XCTAssertEqual(database.loadHighlights().count, 1, "重开不能重复导入或丢失原记录")
+        XCTAssertEqual(try Data(contentsOf: backup), data)
+    }
+
+    func testLegacyBackupFailureKeepsPreferenceAndCanRetry() throws {
+        database = nil
+        let legacy = remote()
+        let data = try JSONEncoder().encode([legacy])
+        defaults.set(data, forKey: "dreader.highlights")
+        let blockedDirectory = directory.appendingPathComponent("LegacyBackups")
+        try Data("blocking file".utf8).write(to: blockedDirectory)
+
+        database = makeDatabase()
+        XCTAssertEqual(defaults.data(forKey: "dreader.highlights"), data,
+                       "备份目录不可写时不能删除唯一旧数据")
+        XCTAssertEqual(database.loadHighlights().count, 1)
+
+        database = nil
+        try FileManager.default.removeItem(at: blockedDirectory)
+        database = makeDatabase()
+        XCTAssertNil(defaults.data(forKey: "dreader.highlights"))
+        let files = try FileManager.default.contentsOfDirectory(at: blockedDirectory, includingPropertiesForKeys: nil)
+        XCTAssertEqual(files.count, 1)
+        XCTAssertEqual(try Data(contentsOf: files[0]), data)
     }
 
     func testSameFilenameImportsKeepBothPersistentPayloadsAndScanAfterRestart() throws {
