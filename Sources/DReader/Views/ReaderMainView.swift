@@ -633,11 +633,10 @@ struct ReaderMainView: View {
                 vm.errorMessage = "听书已停止：\(reason)"
             }
         }
-        // Read-aloud carousel: auto-scroll the page to the paragraph being narrated
-        .onChange(of: vm.readAloud.currentParagraphIndex) { _, newIdx in
-            guard vm.readAloud.state == .playing,
-                  let anchor = vm.readAloudAnchor(for: newIdx) else { return }
-            vm.scrollToSearchMatchAction?(anchor, 0)
+        // Read-aloud carousel: use the source segment ID, not a lossy text-search anchor.
+        .onChange(of: vm.readAloud.currentSegmentID) { _, segmentID in
+            guard vm.readAloud.state == .playing, let segmentID else { return }
+            vm.scrollToReadAloudSegmentAction?(segmentID)
         }
     }
 
@@ -996,6 +995,8 @@ struct ReaderMainView: View {
                         registerUpdateThoughtAction: { action in vm.updateHighlightThoughtAction = action },
                         registerRemoveHighlightAction: { action in vm.removeHighlightAction = action },
                         registerScrollToSearchMatchAction: { action in vm.scrollToSearchMatchAction = action },
+                        registerScrollToReadAloudSegmentAction: { action in vm.scrollToReadAloudSegmentAction = action },
+                        registerReadAloudSegmentsAction: { action in vm.readAloudSegmentsProvider = action },
                         registerScrollToHighlightAction: { action in vm.scrollToHighlightAction = action },
                         getCachedHTML: { vm.getCachedHTML(for: $0) },
                         cacheHTML: { vm.cacheHTML($0, for: $1) }

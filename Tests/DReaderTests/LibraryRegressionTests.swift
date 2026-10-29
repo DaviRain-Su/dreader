@@ -104,6 +104,43 @@ final class LibraryRegressionTests: XCTestCase {
         XCTAssertEqual(jumpedSearch, "目标词")
     }
 
+    func testReadAloudWaitsForMatchingChapterAndCancelsStalePreparation() async throws {
+        let book = try makeBook(lengths: [100, 200])
+        let vm = ReaderViewModel(loadLibrary: false)
+        vm.currentBook = book
+        var requests = 0
+        vm.readAloudSegmentsProvider = {
+            requests += 1
+            try await Task.sleep(for: .seconds(10))
+            return []
+        }
+        vm.startChapterReadAloud()
+        XCTAssertEqual(requests, 0, "章节尚未就绪时不应读取旧 DOM")
+        vm.chapterDidBecomeReady(book.chapters[0].fileURL)
+        try await waitUntil { requests == 1 }
+        vm.jumpToChapter(1)
+        vm.chapterDidBecomeReady(book.chapters[0].fileURL)
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertEqual(requests, 1, "迟到的旧章节回调不能重新启动朗读")
+        XCTAssertEqual(vm.readAloud.state, .idle)
+        vm.stopChapterReadAloud()
+    }
+
+    func testCrossBookSearchKeepsQueryStateInSync() {
+        let vm = ReaderViewModel(loadLibrary: false)
+        vm.performCrossBookSearch(query: "目标词")
+        XCTAssertEqual(vm.searchQuery, "目标词")
+        vm.performCrossBookSearch(query: "")
+        XCTAssertEqual(vm.searchQuery, "")
+        XCTAssertTrue(vm.crossBookGroups.isEmpty)
+        XCTAssertFalse(vm.isCrossBookSearching)
+    }
+
+    func testSearchTextDecodesEntitiesAndSkipsRubyWithoutSplittingInlineWords() {
+        let html = "<p>数字&#20013;&#25991;与<ruby>重庆<rt>chóng qìng</rt></ruby>。</p><p>这是<strong>强调</strong>的完整正文。</p><script>关键词不应计入</script>"
+        XCTAssertEqual(stripHTMLTags(from: html), "数字中文与重庆。 这是强调的完整正文。")
+    }
+
     func testCoalescedCoverRequestsNotifyAllConsumersWithThumbnail() async throws {
         let file = directory.appendingPathComponent("cover.png")
         let bitmap = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 1200, pixelsHigh: 1800,

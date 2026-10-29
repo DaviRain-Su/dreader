@@ -194,7 +194,7 @@ final class ReaderViewModel: @unchecked Sendable {
 
     func returnToBookshelf() {
         ReadingStatsManager.shared.pauseSession()
-        readAloud.stop()
+        stopChapterReadAloud()
         withAnimation(.easeInOut(duration: 0.25)) {
             isViewingBookshelf = true
             selectionManager.clear()
@@ -453,7 +453,7 @@ final class ReaderViewModel: @unchecked Sendable {
 
     func nextChapter() {
         guard var book = currentBook, book.currentChapterIndex < book.chapters.count - 1 else { return }
-        readAloud.stop()
+        stopChapterReadAloud()
         readyChapterURL = nil
         pendingReadingDestination = nil
         book.currentChapterIndex += 1
@@ -466,7 +466,7 @@ final class ReaderViewModel: @unchecked Sendable {
 
     func prevChapter() {
         guard var book = currentBook, book.currentChapterIndex > 0 else { return }
-        readAloud.stop()
+        stopChapterReadAloud()
         readyChapterURL = nil
         pendingReadingDestination = nil
         book.currentChapterIndex -= 1
@@ -484,7 +484,7 @@ final class ReaderViewModel: @unchecked Sendable {
             scrollPageAction?(0)
             return
         }
-        readAloud.stop()
+        stopChapterReadAloud()
         readyChapterURL = nil
         pendingReadingDestination = nil
         book.currentChapterIndex = index
@@ -534,6 +534,7 @@ final class ReaderViewModel: @unchecked Sendable {
     private enum ReadingDestination {
         case highlight(String)
         case search(String, Int)
+        case readAloud
     }
     private var pendingReadingDestination: (URL, ReadingDestination)?
     private var readyChapterURL: URL?
@@ -546,6 +547,7 @@ final class ReaderViewModel: @unchecked Sendable {
         switch destination {
         case .highlight(let id): scrollToHighlightAction?(id)
         case .search(let keyword, let index): scrollToSearchMatchAction?(keyword, index)
+        case .readAloud: startChapterReadAloud()
         }
     }
 
@@ -804,6 +806,7 @@ final class ReaderViewModel: @unchecked Sendable {
     private var crossBookTask: Task<Void, Never>?
 
     func performCrossBookSearch(query rawQuery: String) {
+        searchQuery = rawQuery
         crossBookTask?.cancel()
         let trimmed = rawQuery.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
@@ -1004,24 +1007,51 @@ final class ReaderViewModel: @unchecked Sendable {
 
     // MARK: - Whole-Chapter Read Aloud (听书)
     let readAloud = ChapterReadAloudService()
-    /// Paragraph index → short text anchor for auto-scrolling while narrating
-    private var readAloudAnchors: [Int: String] = [:]
+    var scrollToReadAloudSegmentAction: ((Int) -> Void)?
+    var readAloudSegmentsProvider: (() async throws -> [ChapterReadAloudService.Segment])?
+    private var readAloudPreparationTask: Task<Void, Never>?
 
-    /// Starts continuous chapter narration from a given paragraph offset (default 0).
+    /// 从当前真实渲染的 DOM 获取正文，保留其定位标识而不是前 16 字锚点。
     func startChapterReadAloud() {
         readAloud.settingsProvider = { [settings] in settings }
-        guard let book = currentBook, let chapter = book.currentChapter else { return }
-        let raw = getCachedHTML(for: chapter.fileURL)
-            ?? (try? String(contentsOf: chapter.fileURL, encoding: .utf8)) ?? ""
-        guard !raw.isEmpty else { return }
-        let body = EPUBThemeInjector.extractBodyContent(from: raw)
-        let sanitized = EPUBThemeInjector.sanitizeAndElevateLayout(body)
-        let paras = EPUBThemeExtractor.extractParagraphs(from: sanitized)
-        guard !paras.isEmpty else { return }
-        readAloudAnchors = Dictionary(
-            uniqueKeysWithValues: paras.map { ($0.index, String($0.text.prefix(16)).replacingOccurrences(of: "\n", with: " ")) }
-        )
-        readAloud.start(bookId: book.id, paragraphs: paras.map { $0.text }, startIndex: 0, rate: 0.52)
+        guard let book = currentBook,
+              let chapter = book.currentChapter else { return }
+        readAloudPreparationTask?.cancel()
+        if case .readAloud? = pendingReadingDestination?.1 {
+            pendingReadingDestination = nil
+        }
+        let chapterIndex = book.currentChapterIndex
+        let chapterURL = chapter.fileURL
+        guard readyChapterURL == chapterURL else {
+            pendingReadingDestination = (chapterURL, .readAloud)
+            return
+        }
+        guard let readAloudSegmentsProvider else { return }
+        readAloudPreparationTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                let segments = try await readAloudSegmentsProvider()
+                guard !Task.isCancelled,
+                      self.currentBook?.id == book.id,
+                      self.currentBook?.currentChapterIndex == chapterIndex,
+                      self.currentBook?.currentChapter?.fileURL == chapterURL,
+                      self.readyChapterURL == chapterURL else { return }
+                self.readAloudPreparationTask = nil
+                guard !segments.isEmpty else {
+                    self.errorMessage = "本章没有可朗读的正文"
+                    return
+                }
+                self.readAloud.start(bookId: book.id, segments: segments, rate: 0.52)
+            } catch is CancellationError {
+                return
+            } catch {
+                guard !Task.isCancelled,
+                      self.currentBook?.id == book.id,
+                      self.currentBook?.currentChapterIndex == chapterIndex else { return }
+                self.readAloudPreparationTask = nil
+                self.errorMessage = error.localizedDescription
+            }
+        }
     }
 
     func toggleChapterReadAloud() {
@@ -1036,11 +1066,12 @@ final class ReaderViewModel: @unchecked Sendable {
     }
 
     func stopChapterReadAloud() {
+        readAloudPreparationTask?.cancel()
+        readAloudPreparationTask = nil
+        if case .readAloud? = pendingReadingDestination?.1 {
+            pendingReadingDestination = nil
+        }
         readAloud.stop()
-    }
-
-    func readAloudAnchor(for paragraphIndex: Int) -> String? {
-        readAloudAnchors[paragraphIndex]
     }
 
     // MARK: - Import File Panel

@@ -174,6 +174,29 @@ final class ReadAloudRegressionTests: XCTestCase {
         }
     }
 
+    func testReadAloudKeepsSourceSegmentIDsIndependentOfPlaybackSequence() async throws {
+        let synth = Synthesizer()
+        let players = Players()
+        let service = makeService(synth, players: players)
+        defer { service.stop() }
+        service.start(bookId: UUID(), segments: [
+            .init(id: 4, text: "甲。"), .init(id: 9, text: "第二段正文")
+        ], startSegmentID: 4)
+        try await waitUntil { await synth.allRequests().count == 1 }
+        XCTAssertEqual(service.currentSegmentID, 4)
+        XCTAssertEqual(service.currentParagraphIndex, 4)
+        await synth.succeed(0)
+        try await waitUntil {
+            let requests = await synth.allRequests()
+            return players.players.count == 1 && requests.count == 2
+        }
+        players.players[0].finish()
+        try await waitUntil { service.currentSegmentID == 9 }
+        XCTAssertEqual(service.currentParagraphIndex, 9)
+        let requests = await synth.allRequests()
+        XCTAssertEqual(requests.map(\.text), ["甲。", "第二段正文"], "短段应保留，预取顺序也不改变原始定位 ID")
+    }
+
     func testBothSynthesisFailuresStopAfterOneAttemptPerEngineAndKeepError() async throws {
         for firstEngine in [Engine.piper, .ai] {
             let synth = Synthesizer()

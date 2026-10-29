@@ -33,6 +33,8 @@ struct EPUBWebView: NSViewRepresentable {
     let registerUpdateThoughtAction: (@escaping (String, String?) -> Void) -> Void
     let registerRemoveHighlightAction: (@escaping (String) -> Void) -> Void
     var registerScrollToSearchMatchAction: ((@escaping (String, Int) -> Void) -> Void)? = nil
+    var registerScrollToReadAloudSegmentAction: ((@escaping (Int) -> Void) -> Void)? = nil
+    var registerReadAloudSegmentsAction: ((@escaping () async throws -> [ChapterReadAloudService.Segment]) -> Void)? = nil
     var registerScrollToHighlightAction: ((@escaping (String) -> Void) -> Void)? = nil
     let getCachedHTML: (URL) -> String?
     let cacheHTML: (String, URL) -> Void
@@ -83,6 +85,13 @@ struct EPUBWebView: NSViewRepresentable {
         }
         registerScrollToSearchMatchAction? { [weak coordinator = context.coordinator] keyword, matchIdx in
             coordinator?.scrollToSearchMatch(keyword: keyword, matchIndex: matchIdx)
+        }
+        registerScrollToReadAloudSegmentAction? { [weak coordinator = context.coordinator] id in
+            coordinator?.scrollToReadAloudSegment(id: id)
+        }
+        registerReadAloudSegmentsAction? { [weak coordinator = context.coordinator] in
+            guard let coordinator else { throw Coordinator.ReaderTextError.staleChapter }
+            return try await coordinator.readAloudSegments()
         }
         registerScrollToHighlightAction? { [weak coordinator = context.coordinator] id in
             coordinator?.scrollToHighlight(id: id)
@@ -736,12 +745,54 @@ struct EPUBWebView: NSViewRepresentable {
             }
         }
 
+        enum ReaderTextError: LocalizedError {
+            case notReady
+            case staleChapter
+            case invalidResponse
+
+            var errorDescription: String? {
+                switch self {
+                case .notReady: return "正文尚未加载完成"
+                case .staleChapter: return "正文已切换，已取消旧章节的朗读请求"
+                case .invalidResponse: return "无法读取当前章节的朗读正文"
+                }
+            }
+        }
+
+        func readAloudSegments() async throws -> [ChapterReadAloudService.Segment] {
+            guard isPageReady, !isChapterLoading, let webView, let url = currentURL else {
+                throw ReaderTextError.notReady
+            }
+            let generation = chapterLoadGeneration
+            let json = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<String, Error>) in
+                webView.evaluateJavaScript("JSON.stringify(window.dreaderReadAloudSegments())") { result, error in
+                    if let error {
+                        continuation.resume(throwing: error)
+                    } else if let result = result as? String {
+                        continuation.resume(returning: result)
+                    } else {
+                        continuation.resume(throwing: ReaderTextError.invalidResponse)
+                    }
+                }
+            }
+            guard isPageReady, !isChapterLoading, generation == chapterLoadGeneration, currentURL == url else {
+                throw ReaderTextError.staleChapter
+            }
+            guard let data = json.data(using: .utf8) else {
+                throw ReaderTextError.invalidResponse
+            }
+            return try JSONDecoder().decode([ChapterReadAloudService.Segment].self, from: data)
+        }
+
+        func scrollToReadAloudSegment(id: Int) {
+            webView?.evaluateJavaScript("window.dreaderScrollToReadAloudSegment(\(id));", completionHandler: nil)
+        }
+
         func scrollToSearchMatch(keyword: String, matchIndex: Int) {
-            let kwEscaped = keyword
-                .replacingOccurrences(of: "\\", with: "\\\\")
-                .replacingOccurrences(of: "\"", with: "\\\"")
-                .replacingOccurrences(of: "\n", with: " ")
-            let js = "window.dreaderScrollToSearchMatch && window.dreaderScrollToSearchMatch(\"\(kwEscaped)\", \(matchIndex));"
+            guard let data = try? JSONSerialization.data(withJSONObject: [keyword, matchIndex]),
+                  let encoded = String(data: data, encoding: .utf8) else { return }
+            let arguments = encoded.dropFirst().dropLast()
+            let js = "window.dreaderScrollToSearchMatch && window.dreaderScrollToSearchMatch(\(arguments));"
             webView?.evaluateJavaScript(js, completionHandler: nil)
         }
 

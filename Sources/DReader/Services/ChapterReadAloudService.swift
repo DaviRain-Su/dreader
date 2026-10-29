@@ -19,6 +19,12 @@ final class ChapterReadAloudService: NSObject, @unchecked Sendable, AVAudioPlaye
         var displayName: String { self == .piper ? "Piper" : "AI 语音" }
     }
 
+    /// id 是当前已渲染章节中的正文定位标识，不是播放数组的下标。
+    struct Segment: Codable, Hashable, Sendable {
+        let id: Int
+        let text: String
+    }
+
     /// 轻量播放接口；测试可替换为纯内存播放器，不打开音频设备。
     struct Playback {
         let play: () -> Bool
@@ -35,13 +41,14 @@ final class ChapterReadAloudService: NSObject, @unchecked Sendable, AVAudioPlaye
         let engine: Engine
     }
 
-    private var paragraphs: [(index: Int, firstLine: String)] = []
+    private var paragraphs: [(id: Int, text: String)] = []
     private var paragraphIndex: Int = 0
     private var rate: Double = 0.52
 
     private(set) var state: PlaybackState = .idle
-    /// Index of the paragraph currently being read (for UI / follow highlighting)
+    /// 当前正文片段的定位标识，不再因过滤短段而重新编号。
     private(set) var currentParagraphIndex: Int = 0
+    private(set) var currentSegmentID: Int?
     private(set) var currentBookId: UUID?
 
     /// 当前生效的引擎
@@ -87,14 +94,26 @@ final class ChapterReadAloudService: NSObject, @unchecked Sendable, AVAudioPlaye
 
     // MARK: - Control
 
-    /// Starts (or restarts) reading a chapter split into paragraphs.
+    /// 保留旧的纯文本入口；测试和调用方无需了解页面定位标识。
     func start(bookId: UUID, paragraphs: [String], startIndex: Int = 0, rate: Double = 0.52) {
+        let segments = paragraphs.enumerated()
+            .filter { $0.element.trimmingCharacters(in: .whitespacesAndNewlines).count >= 2 }
+            .map { Segment(id: $0.offset, text: $0.element) }
+        start(bookId: bookId, segments: segments, startSegmentID: startIndex, rate: rate)
+    }
+
+    /// 播放序号与正文身份分离，短段和非连续定位 ID 都不会改变合成队列。
+    func start(bookId: UUID, segments: [Segment], startSegmentID: Int? = nil, rate: Double = 0.52) {
         stop()
         self.rate = min(max(rate, 0.3), 0.8)
-        self.paragraphs = paragraphs.enumerated()
-            .filter { $0.element.trimmingCharacters(in: .whitespacesAndNewlines).count >= 2 }
-            .map { (index: $0.offset, firstLine: $0.element) }
-        self.paragraphIndex = self.paragraphs.firstIndex(where: { $0.index >= startIndex }) ?? 0
+        self.paragraphs = segments
+            .filter { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+            .map { (id: $0.id, text: $0.text) }
+        if let startSegmentID {
+            self.paragraphIndex = self.paragraphs.firstIndex(where: { $0.id == startSegmentID }) ?? 0
+        } else {
+            self.paragraphIndex = 0
+        }
         guard !self.paragraphs.isEmpty else { return }
         currentBookId = bookId
         state = .playing
@@ -145,6 +164,7 @@ final class ChapterReadAloudService: NSObject, @unchecked Sendable, AVAudioPlaye
         paragraphs = []
         paragraphIndex = 0
         currentParagraphIndex = 0
+        currentSegmentID = nil
         currentBookId = nil
         state = .idle
         engineError = nil
@@ -196,7 +216,8 @@ final class ChapterReadAloudService: NSObject, @unchecked Sendable, AVAudioPlaye
             return
         }
         let entry = paragraphs[paragraphIndex]
-        currentParagraphIndex = entry.index
+        currentParagraphIndex = entry.id
+        currentSegmentID = entry.id
         let attempt = Attempt(sequence: paragraphIndex, engine: activeEngine)
         guard currentAttempt != attempt else { return }
         // 已经失败的音频缓存/任务不能在恢复播放时绕过引擎上限。
@@ -227,7 +248,7 @@ final class ChapterReadAloudService: NSObject, @unchecked Sendable, AVAudioPlaye
     /// 预取失败也属于一次尝试：任务结果保留到该段前台消费，避免自动重试。
     private func synthesisTask(for attempt: Attempt) -> Task<Data, Error> {
         if let task = synthesisTasks[attempt] { return task }
-        let text = paragraphs[attempt.sequence].firstLine
+        let text = paragraphs[attempt.sequence].text
         let rate = self.rate
         let synthesizeAudio: Synthesis
         if let synthesisOverride {

@@ -118,11 +118,84 @@ final class ReaderInteractionTests: XCTestCase {
         try await Task.sleep(for: .milliseconds(100))
     }
 
+    private func loadReaderHTML(_ body: String, bilingual: Bool = false) async throws {
+        settings.isBilingualEnabled = bilingual
+        let html = "<html><head><meta charset='utf-8'></head><body>\(body)</body></html>"
+        let file = directory.appendingPathComponent("first.xhtml")
+        try html.write(to: file, atomically: true, encoding: .utf8)
+        coordinator.parent = makeReader(file: file)
+        coordinator.loadChapter(url: file, opfDir: directory, unzippedDir: directory,
+                                settings: settings, hasNextChapter: true, nextChapterTitle: "下一章")
+        try await waitUntil("document.getElementById('dreader-chapter-body') !== null && window.dreaderReaderReady === true")
+        try await Task.sleep(for: .milliseconds(100))
+    }
+
+    func testReadAloudUsesRenderedTextAndIndependentStableIDs() async throws {
+        try await loadReaderHTML("""
+            <h2>章节标题</h2><p>甲。</p><p>乙。</p>
+            <div>没有 p 标签的正文内容。</div>
+            <ul><li>第一条完整列表项。</li></ul>
+            <table><tr><td>表格中的完整文字。</td></tr></table>
+            <p>数字实体：&#20013;&#25991;。</p>
+            <p><ruby>重庆<rt>chóng qìng</rt></ruby>是一座城市。</p>
+            <p>这是<strong>强调</strong>的完整正文。</p>
+            <p id='repeat-a'>同一句话重复出现。</p><p id='repeat-b'>同一句话重复出现。</p>
+            <div id='inline-source'>直接<strong>正文</strong>文本。<p>块中段。</p>尾部文本。</div>
+            <ul><li>列表前缀<p>嵌套段落。</p><ul><li>深层项。</li></ul></li></ul>
+            <div class='dreader-classic-divider'>✦ ❦ ✦</div>
+            """, bilingual: true)
+        let expected = [
+            "章节标题", "甲。", "乙。", "没有 p 标签的正文内容。", "第一条完整列表项。",
+            "表格中的完整文字。", "数字实体：中文。", "重庆是一座城市。",
+            "这是强调的完整正文。", "同一句话重复出现。", "同一句话重复出现。",
+            "直接正文文本。", "块中段。", "尾部文本。", "列表前缀 嵌套段落。 深层项。"
+        ]
+        let segments = try await coordinator.readAloudSegments()
+        XCTAssertEqual(segments.map(\.text), expected)
+        XCTAssertEqual(segments.map(\.id), Array(0..<expected.count))
+        let inlineChildren = try await evaluate("document.getElementById('inline-source').children.length") as? Int
+        XCTAssertEqual(inlineChildren, 3, "除原有 strong、p 和双语槽外，朗读提取不能额外包裹正文")
+        let bilingualIDs = try await evaluate("Array.from(document.querySelectorAll('[data-dreader-para]')).map(e => e.getAttribute('data-dreader-para')).join(',')") as? String
+        XCTAssertEqual(bilingualIDs, "0,1,2,3,4,5,6,7,8", "朗读标识不能改变双语译文使用的段落编号")
+        _ = try await evaluate("window.dreaderRestoreHighlights([{id:'inline',text:'这是强调的完整正文。',colorHex:'#FFE066',note:''}]); true")
+        let restored = try await coordinator.readAloudSegments()
+        XCTAssertEqual(restored.map(\.text), expected, "已有划线不得改变朗读文本或顺序")
+        coordinator.scrollToReadAloudSegment(id: 11)
+        let inlineActive = try await evaluate("document.getElementById('inline-source').classList.contains('dreader-read-aloud-active')") as? Bool
+        XCTAssertEqual(inlineActive, true, "未包裹 inline 正文也应能按 Range 定位")
+        coordinator.scrollToReadAloudSegment(id: 10)
+        let active = try await evaluate("document.querySelector('.dreader-read-aloud-active')?.id") as? String
+        XCTAssertEqual(active, "repeat-b", "相同文本的第二段应使用自己的定位 ID")
+    }
+
+    func testSearchFindsHighlightedAndInlineTextWithoutDuplicatingHighlights() async throws {
+        try await loadReaderHTML("""
+            <p>已有<mark class='dreader-highlight' data-id='saved'>关键词</mark>文本。</p>
+            <p>这是<strong>强调</strong>的完整正文。</p>
+            <p id='repeat-a'>同一句话重复出现。</p><p id='repeat-b'>同一句话重复出现。</p>
+            <div class='dreader-bilingual-trans'>关键词译文</div>
+            """)
+        coordinator.scrollToSearchMatch(keyword: "关键词", matchIndex: 0)
+        var selected = try await evaluate("window.getSelection().toString()") as? String
+        XCTAssertEqual(selected, "关键词")
+        let highlights = try await evaluate("document.querySelectorAll('mark[data-id=\"saved\"]').length") as? Int
+        XCTAssertEqual(highlights, 1, "搜索不能拆开或复制已有划线")
+        coordinator.scrollToSearchMatch(keyword: "这是强调的完整正文。", matchIndex: 0)
+        selected = try await evaluate("window.getSelection().toString()") as? String
+        XCTAssertEqual(selected, "这是强调的完整正文。")
+        coordinator.scrollToSearchMatch(keyword: "同一句话重复出现。", matchIndex: 1)
+        let repeatID = try await evaluate("window.getSelection().anchorNode.parentElement.closest('p')?.id") as? String
+        XCTAssertEqual(repeatID, "repeat-b")
+        let translatedHit = try await evaluate("window.dreaderScrollToSearchMatch('关键词', 1)") as? Bool
+        XCTAssertEqual(translatedHit, false, "翻译卡片不应成为正文搜索命中")
+    }
+
     func testReaderScriptRegistersEveryInteraction() async throws {
         try await loadFixture()
         let functions = ["dreaderScrollPage", "dreaderPageTurnPlan", "dreaderApplyHighlight",
                          "dreaderSetChapterContent", "dreaderRestoreHighlights", "dreaderScrollToSearchMatch",
-                         "dreaderScrollToHighlight", "dreaderUpdateTranslation", "dreaderGoNextChapter"]
+                         "dreaderScrollToHighlight", "dreaderReadAloudSegments", "dreaderScrollToReadAloudSegment",
+                         "dreaderUpdateTranslation", "dreaderGoNextChapter"]
         for name in functions {
             let type = try await evaluate("typeof window.\(name)") as? String
             XCTAssertEqual(type, "function", "正文函数未注册：\(name)")
@@ -403,6 +476,11 @@ final class ReaderInteractionTests: XCTestCase {
                 try await waitUntil("document.getElementById('dreader-regression-marker')?.dataset.token === '\(token)' && window.dreaderReaderReady === true", timeout: 20)
                 try await waitUntil("getComputedStyle(document.getElementById('dreader-chapter-body')).opacity === '1'", timeout: 3)
                 print("真实合订本样本 \(bookIndex + 1)-\(index + 1)：\(raw.utf8.count) 字节，加载 \(String(format: "%.3f", Date().timeIntervalSince(started))) 秒")
+                let segments = try await coordinator.readAloudSegments()
+                XCTAssertFalse(segments.isEmpty, "有可见正文的真实章节应提供朗读片段")
+                XCTAssertTrue(segments.allSatisfy { !$0.text.isEmpty })
+                XCTAssertEqual(Set(segments.map(\.id)).count, segments.count)
+                XCTAssertFalse(segments.contains { $0.text.contains("下一章") }, "章末导航按钮不应进入朗读")
                 coordinator.scrollPage(direction: 1)
                 try await waitUntil("window.scrollY > 50")
                 coordinator.scrollPage(direction: 0)
@@ -445,9 +523,15 @@ final class ReaderInteractionTests: XCTestCase {
         try await waitUntil("document.getElementById('dreader-trans-slot-0') !== null")
         coordinator.updateTranslationInDOM(index: 0, translation: "测试译文", agentName: "测试伴读")
         try await waitUntil("document.querySelector('.dreader-bilingual-body')?.textContent === '测试译文'")
+        let beforeTranslation = try await coordinator.readAloudSegments()
+        XCTAssertFalse(beforeTranslation.isEmpty)
+        XCTAssertFalse(beforeTranslation.contains { $0.text.contains("测试译文") || $0.text.contains("AI 伴读翻译") })
         settings.chineseScriptMode = .simplified
         coordinator.updateScriptModeInCurrentChapter(settings: settings, hasNextChapter: true, nextChapterTitle: "下一章")
         try await Task.sleep(for: .milliseconds(100))
+        let afterConversion = try await coordinator.readAloudSegments()
+        XCTAssertEqual(afterConversion.map(\.id), beforeTranslation.map(\.id), "双语和简繁重排不应复用错位的朗读定位")
+        XCTAssertFalse(afterConversion.contains { $0.text.contains("下一章") })
         coordinator.scrollPage(direction: 1)
         try await waitUntil("window.scrollY > 100")
     }

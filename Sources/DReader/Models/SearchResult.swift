@@ -33,38 +33,56 @@ struct SearchResultItem: Identifiable, Hashable, Sendable {
     }
 }
 
-/// Fast HTML tag stripper for in-memory plain text full-text indexation
+/// 搜索使用的正文文本：保留 inline 标签两侧的原字距，在块边界规范化空白。
 func stripHTMLTags(from html: String) -> String {
-    // 1. Remove style and script tags and their contents
     var sanitized = html.replacingOccurrences(
-        of: "(?s)<(script|style)[^>]*>.*?</\\1>",
+        of: "(?is)<(script|style|noscript)\\b[^>]*>.*?</\\1>",
         with: " ",
         options: .regularExpression
     )
-    // 2. Remove all HTML tags
     sanitized = sanitized.replacingOccurrences(
-        of: "<[^>]+>",
+        of: "(?is)<(rt|rp)\\b[^>]*>.*?</\\1>",
+        with: "",
+        options: .regularExpression
+    )
+    sanitized = sanitized.replacingOccurrences(
+        of: "(?i)</?(?:p|div|h[1-6]|li|dt|dd|td|th|tr|table|ul|ol|dl|blockquote|pre|aside|section|article|nav|figure|figcaption|br)\\b[^>]*>",
         with: " ",
         options: .regularExpression
     )
-    // 3. Decode standard XML/HTML entities
-    sanitized = sanitized
-        .replacingOccurrences(of: "&nbsp;", with: " ")
-        .replacingOccurrences(of: "&amp;", with: "&")
-        .replacingOccurrences(of: "&lt;", with: "<")
-        .replacingOccurrences(of: "&gt;", with: ">")
-        .replacingOccurrences(of: "&quot;", with: "\"")
-        .replacingOccurrences(of: "&#39;", with: "'")
-        .replacingOccurrences(of: "&mdash;", with: "—")
-        .replacingOccurrences(of: "&ldquo;", with: "“")
-        .replacingOccurrences(of: "&rdquo;", with: "”")
-        .replacingOccurrences(of: "&lsquo;", with: "‘")
-        .replacingOccurrences(of: "&rsquo;", with: "’")
-
-    // 4. Normalize multiple whitespaces
-    return sanitized.replacingOccurrences(
-        of: "\\s+",
-        with: " ",
-        options: .regularExpression
+    sanitized = sanitized.replacingOccurrences(
+        of: "<[^>]+>", with: "", options: .regularExpression
+    )
+    return decodeHTMLEntities(in: sanitized).replacingOccurrences(
+        of: "\\s+", with: " ", options: .regularExpression
     ).trimmingCharacters(in: .whitespacesAndNewlines)
+}
+
+private func decodeHTMLEntities(in text: String) -> String {
+    guard text.contains("&"),
+          let regex = try? NSRegularExpression(pattern: "&(?:#[0-9]+|#[xX][0-9A-Fa-f]+|[A-Za-z][A-Za-z0-9]+);") else { return text }
+    let named = [
+        "nbsp": " ", "amp": "&", "lt": "<", "gt": ">", "quot": "\"", "apos": "'",
+        "mdash": "—", "ndash": "–", "ldquo": "“", "rdquo": "”",
+        "lsquo": "‘", "rsquo": "’", "hellip": "…", "laquo": "«", "raquo": "»",
+        "copy": "©", "reg": "®", "deg": "°", "plusmn": "±", "times": "×",
+        "divide": "÷", "frac12": "½", "shy": ""
+    ]
+    let ns = text as NSString
+    var result = text
+    for match in regex.matches(in: text, range: NSRange(location: 0, length: ns.length)).reversed() {
+        let entity = ns.substring(with: match.range)
+        let body = String(entity.dropFirst().dropLast())
+        let replacement: String?
+        if body.hasPrefix("#x") || body.hasPrefix("#X") {
+            replacement = UInt32(body.dropFirst(2), radix: 16).flatMap(UnicodeScalar.init).map(String.init)
+        } else if body.hasPrefix("#") {
+            replacement = UInt32(body.dropFirst(), radix: 10).flatMap(UnicodeScalar.init).map(String.init)
+        } else {
+            replacement = named[body]
+        }
+        guard let replacement else { continue }
+        result = (result as NSString).replacingCharacters(in: match.range, with: replacement)
+    }
+    return result
 }

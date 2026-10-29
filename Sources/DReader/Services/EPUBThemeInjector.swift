@@ -1666,6 +1666,7 @@ struct EPUBThemeInjector {
                 }
 
                 if (payload.body !== undefined) {
+                    if (window.dreaderClearReadAloudSegments) window.dreaderClearReadAloudSegments();
                     bodyEl.innerHTML = payload.body;
                 }
 
@@ -1713,6 +1714,7 @@ struct EPUBThemeInjector {
                 }
 
                 if (payload.body !== undefined) {
+                    if (window.dreaderClearReadAloudSegments) window.dreaderClearReadAloudSegments();
                     bodyEl.innerHTML = payload.body;
                 }
 
@@ -1730,64 +1732,7 @@ struct EPUBThemeInjector {
                 return true;
             };
 
-            // Scroll to and pulse highlight a search match (Apple Books style)
-            window.dreaderScrollToSearchMatch = function(keyword, matchIndex) {
-                if (!keyword) return false;
-
-                // 1. Remove previous halos
-                document.querySelectorAll('.dreader-search-halo').forEach(function(el) {
-                    const p = el.parentNode;
-                    if (p) {
-                        while (el.firstChild) {
-                            p.insertBefore(el.firstChild, el);
-                        }
-                        p.removeChild(el);
-                        p.normalize();
-                    }
-                });
-
-                const bodyEl = document.getElementById('dreader-chapter-body') || document.body;
-                const walker = document.createTreeWalker(bodyEl, NodeFilter.SHOW_TEXT, null, false);
-                let node;
-                const textNodes = [];
-                while (node = walker.nextNode()) {
-                    const p = node.parentElement;
-                    if (p && (p.tagName === 'SCRIPT' || p.tagName === 'STYLE' || p.closest('mark.dreader-highlight'))) continue;
-                    textNodes.push(node);
-                }
-
-                let currentMatch = 0;
-                const lowerKw = keyword.toLowerCase();
-
-                for (let i = 0; i < textNodes.length; i++) {
-                    const tn = textNodes[i];
-                    const val = tn.nodeValue || '';
-                    const lowerVal = val.toLowerCase();
-                    let pos = 0;
-
-                    while ((pos = lowerVal.indexOf(lowerKw, pos)) !== -1) {
-                        if (currentMatch === matchIndex) {
-                            try {
-                                const range = document.createRange();
-                                range.setStart(tn, pos);
-                                range.setEnd(tn, pos + keyword.length);
-                                const halo = document.createElement('mark');
-                                halo.className = 'dreader-search-halo';
-                                halo.appendChild(range.extractContents());
-                                range.insertNode(halo);
-
-                                halo.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                                return true;
-                            } catch(err) {
-                                console.error('Error highlighting search match:', err);
-                            }
-                        }
-                        currentMatch++;
-                        pos += keyword.length;
-                    }
-                }
-                return false;
-            };
+            // 搜索定位由 ReaderTextScripts 提供，与朗读共用同一份 DOM 文本映射。
 
             // Scroll directly to a highlight and pulse ripple glow
             window.dreaderScrollToHighlight = function(id) {
@@ -1838,6 +1783,8 @@ struct EPUBThemeInjector {
                 div.innerHTML = '<div class="dreader-bilingual-header"><span class="dreader-bilingual-tag">译</span><span class="dreader-bilingual-agent">' + (agentName || 'AI 伴读') + ' 译文</span></div><div class="dreader-bilingual-body">' + transText + '</div>';
                 slot.parentNode.replaceChild(div, slot);
             };
+            \(ReaderTextScripts.source)
+
             window.dreaderReaderReady = true;
         })();
         """
