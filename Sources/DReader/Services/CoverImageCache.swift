@@ -5,21 +5,10 @@ import ImageIO
 final class CoverImageCache: @unchecked Sendable {
     static let shared = CoverImageCache()
 
-    /// 兑现 image(for:) 的续体：方法本身 @MainActor，NSImage 不跨隔离域直传。
-    @MainActor
-    private final class CoverImageWaiter: @unchecked Sendable {
-        private let continuation: CheckedContinuation<NSImage?, Never>
-        private var fulfilled = false
-
-        init(_ continuation: CheckedContinuation<NSImage?, Never>) {
-            self.continuation = continuation
-        }
-
-        func fulfill(_ image: NSImage?) {
-            guard !fulfilled else { return }
-            fulfilled = true
-            continuation.resume(returning: image)
-        }
+    /// nonisolated(unsafe) 结果盒：写入点只在主 actor 回调内、读取点只在主 actor
+    /// 的 image(for:) 内，续体恢复建立先行关系，无数据竞争。
+    private final class ResultBox: @unchecked Sendable {
+        nonisolated(unsafe) var image: NSImage?
     }
 
     private typealias Completion = @MainActor @Sendable (NSImage?) -> Void
@@ -41,16 +30,19 @@ final class CoverImageCache: @unchecked Sendable {
         cache.object(forKey: cacheKey(for: url) as NSString)
     }
 
-    /// async 入口：经 @MainActor 持有盒兑现续体，NSImage 全程留在主 actor
-    /// 隔离内（@Sendable 闭包参数直接传 sending 会触发 Swift 6.0 竞争检查）。
+    /// async 入口：续体只传"已就绪"信号（Void），图像经结果盒取回——
+    /// resume(returning:) 的参数是 sending，主 actor 隔离的 NSImage 进不去。
     @MainActor
     func image(for url: URL) async -> NSImage? {
+        let box = ResultBox()
         await withCheckedContinuation { continuation in
-            let waiter = CoverImageWaiter(continuation)
             loadImage(for: url) { image in
-                waiter.fulfill(image)
+                // 回调在主 actor 执行；图像存入盒后只跨隔离域传 Void 信号。
+                box.image = image
+                continuation.resume()
             }
         }
+        return box.image
     }
 
     @MainActor
