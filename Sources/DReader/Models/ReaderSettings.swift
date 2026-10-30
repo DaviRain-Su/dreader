@@ -247,7 +247,7 @@ final class ReaderSettings: @unchecked Sendable {
     }() {
         didSet {
             UserDefaults.standard.set(followSystemAppearance, forKey: "dreader.follow_system_appearance")
-            if followSystemAppearance { applySystemAppearance() }
+            if followSystemAppearance { MainActor.assumeIsolated { applySystemAppearance() } }
         }
     }
 
@@ -268,6 +268,7 @@ final class ReaderSettings: @unchecked Sendable {
     }
 
     /// 按当前系统外观把主题设为昼（或夜）偏好主题；跟随模式开启时与外观变化时调用
+    @MainActor
     func applySystemAppearance() {
         let isDarkMode = NSApp.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
         theme = isDarkMode ? darkTheme : lightTheme

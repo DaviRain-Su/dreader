@@ -850,7 +850,13 @@ struct OPDSCoverImage: View {
         .task(id: LoadID(href: href, source: source)) {
             image = nil
             guard let href else { return }
-            let loaded = await OPDSService.shared.fetchImage(href: href, source: source)
+            // .task 在主 actor 上运行；fetchImage 的 async 返回 NSImage? 无法标 Sendable，
+            // Swift 6.0 拒绝跨 actor 传递。用返回值不加 await 边界的同步封装查询。
+            let loaded = await withCheckedContinuation { (continuation: CheckedContinuation<NSImage?, Never>) in
+                Task { @MainActor in
+                    continuation.resume(returning: OPDSService.shared.fetchImageCached(href: href, source: source))
+                }
+            }
             guard !Task.isCancelled else { return }
             image = loaded
         }

@@ -58,9 +58,9 @@ final class ReaderViewModel: @unchecked Sendable {
             loadPersistedBookmarks()
         }
         guard loadLibrary else { return }
-        // 跟随系统外观：启动即按当前亮暗套用昼/夜主题偏好
+        // 跟随系统外观：启动即按当前亮暗套用昼/夜主题偏好（init 总在主线程构造视图前调用）
         if settings.followSystemAppearance {
-            settings.applySystemAppearance()
+            MainActor.assumeIsolated { settings.applySystemAppearance() }
         }
         Task {
             await initializeLibrary()
@@ -80,7 +80,7 @@ final class ReaderViewModel: @unchecked Sendable {
             // 系统切换动画落定后再应用，避免主题与窗口材质闪跳
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
                 guard let self, self.settings.followSystemAppearance else { return }
-                self.settings.applySystemAppearance()
+                MainActor.assumeIsolated { self.settings.applySystemAppearance() }
             }
         }
     }

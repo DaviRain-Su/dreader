@@ -615,4 +615,13 @@ extension OPDSService {
         imageCache.setObject(image, forKey: cacheKey)
         return image
     }
+
+    /// 同步查询入口：只查内存缓存（同一封面 URL 在不同源/策略下不共享缓存）。
+    /// 缓存未命中返回 nil——调用方是 SwiftUI 封面占位场景，nil 显示占位图，
+    /// 下次 .task 重触发时会走 async 版本重新拉取。
+    func fetchImageCached(href: String, source: Source?) -> NSImage? {
+        guard let context = try? context(source) else { return nil }
+        let cacheKey = "\(context.policy.cacheID):\(href)" as NSString
+        return imageCache.object(forKey: cacheKey)
+    }
 }

@@ -81,7 +81,11 @@ enum WeReadEPUBAssembler {
             var images: [(name: String, data: Data, mime: String)] = []
             var srcMap: [String: String] = [:]
             if !chapter.tar.isEmpty {
-                (images, srcMap) = (try? await service.fetchChapterImages(bookId: bookId, chapter: chapter)) ?? ([], [:])
+                // 显式命名元组类型，避免 Swift 6.0 对 `?? ([], [:])` 的泛型推断冲突。
+                let fetched: (images: [(name: String, data: Data, mime: String)], srcMap: [String: String])? =
+                    try? await service.fetchChapterImages(bookId: bookId, chapter: chapter)
+                images = fetched?.images ?? []
+                srcMap = fetched?.srcMap ?? [:]
             }
             results.append(ChapterResult(chapter: chapter, xhtml: xhtml, images: images, srcMap: srcMap))
             // 章间 1.2s 风控缓冲

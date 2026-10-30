@@ -321,6 +321,14 @@ private struct WeReadShelfCard: View {
 
     /// 抓正文 → 组 EPUB → 主书架（与手动 bookId 导入同一管线，章间限速）
     private func downloadToShelf() async {
+        let tracker = self.tracker
+        let bookId = book.bookId
+        @Sendable func reportProgress(_ done: Int, _ total: Int) {
+            let progress = Double(done) / Double(max(1, total))
+            MainActor.assumeIsolated {
+                tracker.set(bookId, .running(status: "抓取 \(done + 1)/\(total) 章", progress: progress))
+            }
+        }
         tracker.set(book.bookId, .running(status: "验证目录…", progress: 0))
         do {
             let service = WeReadContentService.shared
@@ -333,8 +341,7 @@ private struct WeReadShelfCard: View {
                 bookId: book.bookId,
                 chapters: catalog.chapters,
                 onProgress: { done, total, chapterTitle in
-                    let progress = Double(done) / Double(max(1, total))
-                    tracker.set(book.bookId, .running(status: "抓取 \(done + 1)/\(total) 章", progress: progress))
+                    reportProgress(done, total)
                     _ = chapterTitle
                 }
             )
