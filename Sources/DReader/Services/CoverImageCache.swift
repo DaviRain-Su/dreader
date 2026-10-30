@@ -5,6 +5,23 @@ import ImageIO
 final class CoverImageCache: @unchecked Sendable {
     static let shared = CoverImageCache()
 
+    /// 兑现 image(for:) 的续体：方法本身 @MainActor，NSImage 不跨隔离域直传。
+    @MainActor
+    private final class CoverImageWaiter: @unchecked Sendable {
+        private let continuation: CheckedContinuation<NSImage?, Never>
+        private var fulfilled = false
+
+        init(_ continuation: CheckedContinuation<NSImage?, Never>) {
+            self.continuation = continuation
+        }
+
+        func fulfill(_ image: NSImage?) {
+            guard !fulfilled else { return }
+            fulfilled = true
+            continuation.resume(returning: image)
+        }
+    }
+
     private typealias Completion = @MainActor @Sendable (NSImage?) -> Void
     private let cache = NSCache<NSString, NSImage>()
     private var inflight: [String: [Completion]] = [:]
@@ -24,13 +41,14 @@ final class CoverImageCache: @unchecked Sendable {
         cache.object(forKey: cacheKey(for: url) as NSString)
     }
 
-    /// async 入口：内部仍走 loadImage 回调；回调已标注 @MainActor，
-    /// NSImage 在主 actor 闭包内交接，Swift 6.0 sending 检查可通过。
+    /// async 入口：经 @MainActor 持有盒兑现续体，NSImage 全程留在主 actor
+    /// 隔离内（@Sendable 闭包参数直接传 sending 会触发 Swift 6.0 竞争检查）。
     @MainActor
     func image(for url: URL) async -> NSImage? {
         await withCheckedContinuation { continuation in
+            let waiter = CoverImageWaiter(continuation)
             loadImage(for: url) { image in
-                continuation.resume(returning: image)
+                waiter.fulfill(image)
             }
         }
     }
