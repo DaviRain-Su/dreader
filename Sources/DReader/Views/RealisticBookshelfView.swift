@@ -15,13 +15,23 @@ struct RealisticBookshelfView: View {
     var onStartReview: (() -> Void)? = nil
     var chineseScriptMode: ChineseScriptMode = .original
 
-    private enum ShelfDisplayMode {
+    private enum ShelfDisplayMode: String {
         case classic, gallery
     }
 
-    @State private var searchText: String = ""
-    @State private var displayMode: ShelfDisplayMode = .classic
+    /// 书架模式跨启动持久化（dreader.shelf_mode）；默认经典木架。
+    @State private var displayMode: ShelfDisplayMode = {
+        let raw = UserDefaults.standard.string(forKey: "dreader.shelf_mode")
+        return raw == ShelfDisplayMode.gallery.rawValue ? .gallery : .classic
+    }()
+
     @State private var dueReviewCount: Int = 0
+    @State private var searchText: String = ""
+
+    private func setDisplayMode(_ mode: ShelfDisplayMode) {
+        displayMode = mode
+        UserDefaults.standard.set(mode.rawValue, forKey: "dreader.shelf_mode")
+    }
 
     private func refreshDueCount() {
         dueReviewCount = LibraryDatabase.shared.dueReviewCount()
@@ -168,7 +178,7 @@ struct RealisticBookshelfView: View {
             }
 
             Button {
-                displayMode = .gallery
+                setDisplayMode(.gallery)
             } label: {
                 Label("长廊预览", systemImage: "rectangle.split.2x1")
                     .font(.system(size: 11, weight: .medium))
@@ -288,7 +298,7 @@ struct RealisticBookshelfView: View {
             }
 
             Button("经典木架") {
-                displayMode = .classic
+                setDisplayMode(.classic)
             }
             .buttonStyle(.bordered)
             .controlSize(.small)

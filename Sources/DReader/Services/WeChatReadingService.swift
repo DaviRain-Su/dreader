@@ -11,7 +11,8 @@ final class WeChatReadingService: @unchecked Sendable {
     private let gatewayURL = URL(string: "https://i.weread.qq.com/api/agent/gateway")!
     private let skillVersion = "1.0.5"
 
-    // Storage Keys
+    // Storage Keys（api key 属凭据存 Keychain；时间戳留在 UserDefaults）
+    private static let apiKeyAccount = "wechat_reading.api_key"
     private let apiKeyDefaultsKey = "dreader.wechat_reading.api_key"
     private let lastSyncTimeDefaultsKey = "dreader.wechat_reading.last_sync_time"
 
@@ -29,8 +30,8 @@ final class WeChatReadingService: @unchecked Sendable {
 
     init(loadPreferences: Bool = true) {
         guard loadPreferences else { return }
-        // 1. Try reading saved key from UserDefaults
-        if let saved = UserDefaults.standard.string(forKey: apiKeyDefaultsKey), !saved.isEmpty {
+        // 1. Try saved key (Keychain，旧 UserDefaults 明文自动迁移)
+        if let saved = KeychainStore.migrate(account: Self.apiKeyAccount, defaultsKey: apiKeyDefaultsKey), !saved.isEmpty {
             self.apiKey = saved
         } else if let envKey = ProcessInfo.processInfo.environment["WEREAD_API_KEY"], !envKey.isEmpty {
             // 2. Fallback to environment variable
@@ -45,11 +46,12 @@ final class WeChatReadingService: @unchecked Sendable {
     func saveApiKey(_ key: String) {
         let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
         self.apiKey = trimmed
-        UserDefaults.standard.set(trimmed, forKey: apiKeyDefaultsKey)
+        _ = KeychainStore.write(Self.apiKeyAccount, value: trimmed)
     }
 
     func clearApiKey() {
         self.apiKey = ""
+        KeychainStore.delete(Self.apiKeyAccount)
         UserDefaults.standard.removeObject(forKey: apiKeyDefaultsKey)
         self.notebooks.removeAll()
     }

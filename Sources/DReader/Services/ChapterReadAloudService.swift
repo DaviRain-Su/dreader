@@ -258,9 +258,19 @@ final class ChapterReadAloudService: NSObject, @unchecked Sendable, AVAudioPlaye
         cancelSleepTimer()
     }
 
-    /// Reading speed 0...1 → piper length_scale /（AI 引擎暂不支持变速，下一段生效）
     func setRate(_ doubleValue: Double) {
-        rate = min(max(doubleValue, 0.3), 0.8)
+        let clamped = min(max(doubleValue, 0.3), 0.8)
+        guard clamped != rate else { return }
+        rate = clamped
+        // 播放层实时变速（0.3~0.8 → 0.58~1.30 倍速），对当前块立即生效；
+        // Piper 合成期变速保持不变，Qwen/AI 等固定语速合成由播放层补偿。
+        audioPlayer?.enableRate = true
+        audioPlayer?.rate = Self.playbackRate(for: clamped)
+    }
+
+    /// 0.3~0.8 语速值 → AVAudioPlayer 播放速率。0.52 映射为 1.0（原始自然语速）。
+    nonisolated static func playbackRate(for rate: Double) -> Float {
+        Float(rate / 0.52)
     }
 
     // MARK: - Sleep Timer
@@ -412,7 +422,11 @@ final class ChapterReadAloudService: NSObject, @unchecked Sendable, AVAudioPlaye
             } else {
                 let nativePlayer = try AVAudioPlayer(data: data)
                 nativePlayer.delegate = self
-                nativePlayer.rate = 1.0
+                nativePlayer.enableRate = true
+                // Piper 已在合成期变速，播放层按合成速率原速播放；其余引擎播放层补偿。
+                nativePlayer.rate = attempt.engine == .piper
+                    ? 1.0
+                    : Self.playbackRate(for: rate)
                 audioPlayer = nativePlayer
                 playbackCompletion = completion
                 player = Playback(play: { nativePlayer.play() }, pause: { nativePlayer.pause() },

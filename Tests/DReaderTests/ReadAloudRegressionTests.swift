@@ -174,6 +174,34 @@ final class ReadAloudRegressionTests: XCTestCase {
         }
     }
 
+    /// 语速映射：0.52 为原始自然语速（1.0 倍），两端钳制 0.3/0.8。
+    func testPlaybackRateMappingClampsAtBounds() {
+        XCTAssertEqual(ChapterReadAloudService.playbackRate(for: 0.52), 1.0, accuracy: 0.001)
+        XCTAssertEqual(ChapterReadAloudService.playbackRate(for: 0.3), Float(0.3 / 0.52), accuracy: 0.001)
+        XCTAssertEqual(ChapterReadAloudService.playbackRate(for: 0.8), Float(0.8 / 0.52), accuracy: 0.001)
+    }
+
+    /// setRate 钳制到 0.3...0.8 并不影响播放状态机：暂停/恢复/下一段照常推进。
+    func testSetRateClampsWithoutDisruptingPlayback() async throws {
+        let synth = Synthesizer()
+        let players = Players()
+        let service = makeService(synth, players: players, engine: .qwen)
+        defer { service.stop() }
+        service.start(bookId: UUID(), segments: [
+            .init(id: 1, text: "第一段正文"), .init(id: 2, text: "第二段正文")
+        ], startSegmentID: 1)
+        try await waitUntil { await synth.allRequests().count == 1 }
+        service.setRate(1.4)   // 超上限 → 钳到 0.8
+        service.setRate(0.1)   // 超下限 → 钳到 0.3
+        try await synth.succeed(0)
+        try await waitUntil { players.players.count == 1 }
+        players.players[0].finish()
+        try await waitUntil { await synth.allRequests().count == 2 }
+        XCTAssertEqual(service.currentSegmentID, 2, "变速调用不得中断下一段推进")
+        service.stop()
+        XCTAssertEqual(service.state, .idle)
+    }
+
     func testReadAloudKeepsSourceSegmentIDsIndependentOfPlaybackSequence() async throws {
         let synth = Synthesizer()
         let players = Players()

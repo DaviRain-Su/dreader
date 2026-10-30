@@ -330,9 +330,10 @@ final class ReaderSettings: @unchecked Sendable {
     }
 
     var aiTTSAPIKey: String = {
-        UserDefaults.standard.string(forKey: "dreader.readaloud.ai_key") ?? ""
+        // 密钥属凭据存 Keychain；旧 UserDefaults 明文启动时自动迁移。
+        KeychainStore.migrate(account: "readaloud.ai_tts_key", defaultsKey: "dreader.readaloud.ai_key") ?? ""
     }() {
-        didSet { UserDefaults.standard.set(aiTTSAPIKey, forKey: "dreader.readaloud.ai_key") }
+        didSet { _ = KeychainStore.write("readaloud.ai_tts_key", value: aiTTSAPIKey) }
     }
 
     var aiTTSModel: String = {

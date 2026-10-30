@@ -15,7 +15,8 @@ final class WeReadContentService: @unchecked Sendable {
 
     private let baseURL = "https://weread.qq.com"
     private let userAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36"
-    private let cookieKey = "dreader.weread.web_cookie"
+    /// Cookie 属凭据，存 Keychain；旧 UserDefaults 明文启动时自动迁移。
+    private static let cookieAccount = "weread.web_cookie"
     private let sessionLock = NSLock()
     private nonisolated(unsafe) var lastRequestTime: Date = .distantPast
     /// 分片请求最小间隔（秒），规避风控；章节间另有显式 sleep
@@ -58,14 +59,14 @@ final class WeReadContentService: @unchecked Sendable {
     static let cookieDidChangeNotification = Notification.Name("dreader.weread.cookieDidChange")
 
     var cookie: String {
-        get { UserDefaults.standard.string(forKey: cookieKey) ?? "" }
+        get { KeychainStore.migrate(account: Self.cookieAccount, defaultsKey: "dreader.weread.web_cookie") ?? "" }
         set {
             let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
             // 防御：空值不许覆盖已有登录态（历史 bug 源——清除必须走 clearCookie 显式操作）
             if trimmed.isEmpty && !cookie.isEmpty {
                 return
             }
-            UserDefaults.standard.set(trimmed, forKey: cookieKey)
+            _ = KeychainStore.write(Self.cookieAccount, value: trimmed)
             NotificationCenter.default.post(name: Self.cookieDidChangeNotification, object: nil)
         }
     }
@@ -73,7 +74,8 @@ final class WeReadContentService: @unchecked Sendable {
 
     /// 显式清除登录态（唯一合法的置空入口）
     func clearCookie() {
-        UserDefaults.standard.removeObject(forKey: cookieKey)
+        KeychainStore.delete(Self.cookieAccount)
+        UserDefaults.standard.removeObject(forKey: "dreader.weread.web_cookie")
         NotificationCenter.default.post(name: Self.cookieDidChangeNotification, object: nil)
     }
 
