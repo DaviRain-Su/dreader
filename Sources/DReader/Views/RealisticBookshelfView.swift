@@ -15,7 +15,12 @@ struct RealisticBookshelfView: View {
     var onStartReview: (() -> Void)? = nil
     var chineseScriptMode: ChineseScriptMode = .original
 
+    private enum ShelfDisplayMode {
+        case classic, gallery
+    }
+
     @State private var searchText: String = ""
+    @State private var displayMode: ShelfDisplayMode = .classic
     @State private var dueReviewCount: Int = 0
 
     private func refreshDueCount() {
@@ -48,12 +53,28 @@ struct RealisticBookshelfView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // Top Bookshelf Navigation Bar
-            bookshelfTopBar
+            if displayMode == .classic {
+                bookshelfTopBar
+            } else {
+                galleryTopBar
+            }
 
             Divider()
                 .opacity(0.2)
 
+            if displayMode == .gallery {
+                BookshelfGalleryView(
+                    books: filteredBooks,
+                    onSelectBook: onSelectBook,
+                    onImportEPUB: onImportEPUB,
+                    onOpenXRay: onOpenXRay,
+                    onResetProgress: onResetProgress,
+                    onDeleteBook: onDeleteBook,
+                    emptyMessage: searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        ? "书库暂时还没有藏书" : "没有匹配的书籍",
+                    chineseScriptMode: chineseScriptMode
+                )
+            } else {
             // Scrollable Wooden Bookshelf Racks
             ScrollView {
                 LazyVStack(spacing: 36) {
@@ -103,37 +124,29 @@ struct RealisticBookshelfView: View {
                 .padding(.horizontal, 32)
                 .padding(.top, 20)
             }
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear {
             refreshDueCount()
         }
-        .background(
-            ZStack {
-                // Dark Mahogany / Espresso Library Wall Texture
-                LinearGradient(
-                    colors: [
-                        Color(hex: "#1F1511"),
-                        Color(hex: "#180F0C"),
-                        Color(hex: "#120B08")
-                    ],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-
-                // Warm Ceiling Chandelier Spotlight
-                RadialGradient(
-                    colors: [
-                        Color(hex: "#FFEDD5").opacity(0.08),
-                        Color.clear
-                    ],
-                    center: .top,
-                    startRadius: 40,
-                    endRadius: 750
-                )
+        .background {
+            if displayMode == .gallery {
+                Color(hex: "#EDEBE6").ignoresSafeArea()
+            } else {
+                ZStack {
+                    LinearGradient(
+                        colors: [Color(hex: "#1F1511"), Color(hex: "#180F0C"), Color(hex: "#120B08")],
+                        startPoint: .top, endPoint: .bottom
+                    )
+                    RadialGradient(
+                        colors: [Color(hex: "#FFEDD5").opacity(0.08), Color.clear],
+                        center: .top, startRadius: 40, endRadius: 750
+                    )
+                }
+                .ignoresSafeArea()
             }
-            .ignoresSafeArea()
-        )
+        }
     }
 
     // MARK: - Top Bar
@@ -153,6 +166,16 @@ struct RealisticBookshelfView: View {
                         .foregroundStyle(Color(hex: "#CBB393").opacity(0.8))
                 }
             }
+
+            Button {
+                displayMode = .gallery
+            } label: {
+                Label("长廊预览", systemImage: "rectangle.split.2x1")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(Color(hex: "#E5C07B"))
+            }
+            .buttonStyle(.plain)
+            .help("以藏书长廊预览真实书籍；经典木架保持默认")
 
             Spacer()
 
@@ -246,6 +269,97 @@ struct RealisticBookshelfView: View {
         .padding(.horizontal, 24)
         .padding(.vertical, 14)
         .background(Color.black.opacity(0.25))
+    }
+
+    private var galleryTopBar: some View {
+        HStack(spacing: 14) {
+            HStack(spacing: 9) {
+                Image(systemName: "books.vertical.fill")
+                    .font(.system(size: 18))
+                    .foregroundStyle(Color(hex: "#1F3FB0"))
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("DReader")
+                        .font(.system(size: 15, weight: .bold, design: .serif))
+                        .foregroundStyle(Color(hex: "#141414"))
+                    Text("藏书长廊 · \(books.count) 卷藏书")
+                        .font(.system(size: 10, design: .serif))
+                        .foregroundStyle(Color(hex: "#6D6A63"))
+                }
+            }
+
+            Button("经典木架") {
+                displayMode = .classic
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+
+            Spacer()
+
+            HStack(spacing: 6) {
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Color(hex: "#6D6A63"))
+                TextField("在书架中搜索书名或作者...", text: $searchText)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 12))
+                    .foregroundStyle(Color(hex: "#141414"))
+                if !searchText.isEmpty {
+                    Button {
+                        searchText = ""
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundStyle(Color(hex: "#6D6A63"))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("清除搜索")
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .frame(width: 240)
+            .background(Color.white.opacity(0.45))
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .overlay(
+                RoundedRectangle(cornerRadius: 6)
+                    .stroke(Color(hex: "#6D6A63").opacity(0.25), lineWidth: 0.5)
+            )
+
+            Menu {
+                if let onOpenReadingInsights {
+                    Button("阅读统计", action: onOpenReadingInsights)
+                }
+                if let onStartReview {
+                    Button(dueReviewCount > 0 ? "今日复习（\(dueReviewCount) 待复习）" : "今日复习",
+                           action: onStartReview)
+                }
+                if let onOpenOnlineHub {
+                    Button("在线书库", action: onOpenOnlineHub)
+                }
+                if let onOpenWeChatSync {
+                    Button("微信读书", action: onOpenWeChatSync)
+                }
+                if let onOpenGlobalNotebooks {
+                    Button("划线笔记", action: onOpenGlobalNotebooks)
+                }
+            } label: {
+                Label("书库工具", systemImage: "ellipsis.circle")
+                    .font(.system(size: 11, weight: .medium))
+            }
+            .menuStyle(.borderlessButton)
+
+            Button(action: onImportEPUB) {
+                Label("导入书籍", systemImage: "plus.circle.fill")
+                    .font(.system(size: 12, weight: .semibold))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(Color(hex: "#1F3FB0"))
+            .help("导入本地 EPUB 文件 (⌘ + O)")
+        }
+        .padding(.horizontal, 24)
+        .padding(.vertical, 12)
+        .background(Color(hex: "#EDEBE6"))
     }
 
     private var streakLabel: String {
