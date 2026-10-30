@@ -5,6 +5,64 @@ import SQLite3
 /// Local SQLite persistence layer for user knowledge assets (highlights, bookmarks).
 /// Replaces UserDefaults storage with a real database (WAL mode) plus JSON backup support.
 final class LibraryDatabase: @unchecked Sendable {
+    struct ReadingPosition: Codable, Hashable, Sendable {
+        let bookId: UUID
+        var chapterIndex: Int
+        var scrollProgress: Double
+        var updatedAt: Date
+
+        init(bookId: UUID, chapterIndex: Int, scrollProgress: Double, updatedAt: Date) {
+            self.bookId = bookId
+            self.chapterIndex = chapterIndex
+            self.scrollProgress = scrollProgress
+            self.updatedAt = updatedAt
+        }
+
+        init(from decoder: any Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            bookId = try container.decode(UUID.self, forKey: .bookId)
+            chapterIndex = try container.decode(Int.self, forKey: .chapterIndex)
+            scrollProgress = try container.decode(Double.self, forKey: .scrollProgress)
+            if let string = try container.decodeIfPresent(String.self, forKey: .updatedAt) {
+                updatedAt = ISO8601DateFormatter().date(from: string) ?? Date()
+            } else {
+                updatedAt = Date(timeIntervalSince1970: try container.decodeIfPresent(Double.self, forKey: .updatedAt) ?? 0)
+            }
+        }
+    }
+
+    struct ListeningPosition: Codable, Hashable, Sendable {
+        let bookId: UUID
+        var chapterIndex: Int
+        var segmentID: Int
+        var chunkIndex: Int
+        var chunkText: String
+        var updatedAt: Date
+
+        init(bookId: UUID, chapterIndex: Int, segmentID: Int, chunkIndex: Int, chunkText: String, updatedAt: Date) {
+            self.bookId = bookId
+            self.chapterIndex = chapterIndex
+            self.segmentID = segmentID
+            self.chunkIndex = chunkIndex
+            self.chunkText = chunkText
+            self.updatedAt = updatedAt
+        }
+
+        init(from decoder: any Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            bookId = try container.decode(UUID.self, forKey: .bookId)
+            chapterIndex = try container.decode(Int.self, forKey: .chapterIndex)
+            segmentID = try container.decode(Int.self, forKey: .segmentID)
+            chunkIndex = try container.decode(Int.self, forKey: .chunkIndex)
+            chunkText = try container.decode(String.self, forKey: .chunkText)
+            if let string = try container.decodeIfPresent(String.self, forKey: .updatedAt) {
+                updatedAt = ISO8601DateFormatter().date(from: string) ?? Date()
+            } else {
+                updatedAt = Date(timeIntervalSince1970: try container.decodeIfPresent(Double.self, forKey: .updatedAt) ?? 0)
+            }
+        }
+    }
+
     static let shared = LibraryDatabase()
 
     private var db: OpaquePointer?
@@ -97,6 +155,21 @@ final class LibraryDatabase: @unchecked Sendable {
         CREATE INDEX IF NOT EXISTS idx_highlights_book ON highlights(book_id);
         CREATE INDEX IF NOT EXISTS idx_bookmarks_book ON bookmarks(book_id);
         CREATE INDEX IF NOT EXISTS idx_review_due ON review_schedule(due_at);
+
+        CREATE TABLE IF NOT EXISTS reading_positions (
+            book_id TEXT PRIMARY KEY,
+            chapter_index INTEGER NOT NULL DEFAULT 0,
+            scroll_progress REAL NOT NULL DEFAULT 0,
+            updated_at REAL NOT NULL DEFAULT 0
+        );
+        CREATE TABLE IF NOT EXISTS listening_positions (
+            book_id TEXT PRIMARY KEY,
+            chapter_index INTEGER NOT NULL DEFAULT 0,
+            segment_id INTEGER NOT NULL DEFAULT 0,
+            chunk_index INTEGER NOT NULL DEFAULT 0,
+            chunk_text TEXT NOT NULL DEFAULT '',
+            updated_at REAL NOT NULL DEFAULT 0
+        );
         """
         sqlite3_exec(db, sql, nil, nil, nil)
         // SM-2 ease 因子列（对已存在的旧表幂等——列已有时 ALTER 报错被忽略）
@@ -646,6 +719,161 @@ final class LibraryDatabase: @unchecked Sendable {
         }
     }
 
+    // MARK: - Reading & Listening Positions
+
+    func readingPosition(for bookId: UUID) -> ReadingPosition? {
+        dbQueue.sync {
+            var stmt: OpaquePointer?
+            guard let db,
+                  sqlite3_prepare_v2(db, "SELECT book_id, chapter_index, scroll_progress, updated_at FROM reading_positions WHERE book_id = ?", -1, &stmt, nil) == SQLITE_OK else { return nil }
+            defer { sqlite3_finalize(stmt) }
+            bindText(stmt, 1, bookId.uuidString)
+            guard sqlite3_step(stmt) == SQLITE_ROW,
+                  let id = text(stmt, 0).flatMap(UUID.init(uuidString:)) else { return nil }
+            return ReadingPosition(
+                bookId: id,
+                chapterIndex: Int(sqlite3_column_int64(stmt, 1)),
+                scrollProgress: sqlite3_column_double(stmt, 2),
+                updatedAt: Date(timeIntervalSince1970: sqlite3_column_double(stmt, 3))
+            )
+        }
+    }
+
+    func saveReadingPosition(_ position: ReadingPosition) {
+        dbQueue.sync {
+            upsertReadingPositionSync(position)
+            scheduleBackup()
+        }
+    }
+
+    private func upsertReadingPositionSync(_ position: ReadingPosition) {
+        guard let db else { return }
+        var stmt: OpaquePointer?
+        let sql = "INSERT OR REPLACE INTO reading_positions (book_id, chapter_index, scroll_progress, updated_at) VALUES (?,?,?,?)"
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, position.bookId.uuidString)
+        sqlite3_bind_int64(stmt, 2, Int64(position.chapterIndex))
+        sqlite3_bind_double(stmt, 3, min(max(position.scrollProgress, 0), 1))
+        sqlite3_bind_double(stmt, 4, position.updatedAt.timeIntervalSince1970)
+        _ = sqlite3_step(stmt)
+    }
+
+    private func loadReadingPositionsSync() -> [ReadingPosition] {
+        guard let db else { return [] }
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, "SELECT book_id, chapter_index, scroll_progress, updated_at FROM reading_positions", -1, &stmt, nil) == SQLITE_OK else { return [] }
+        defer { sqlite3_finalize(stmt) }
+        var result: [ReadingPosition] = []
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            guard let id = text(stmt, 0).flatMap(UUID.init(uuidString:)) else { continue }
+            result.append(ReadingPosition(
+                bookId: id,
+                chapterIndex: Int(sqlite3_column_int64(stmt, 1)),
+                scrollProgress: sqlite3_column_double(stmt, 2),
+                updatedAt: Date(timeIntervalSince1970: sqlite3_column_double(stmt, 3))
+            ))
+        }
+        return result
+    }
+
+    func listeningPosition(for bookId: UUID) -> ListeningPosition? {
+        dbQueue.sync {
+            var stmt: OpaquePointer?
+            let sql = "SELECT book_id, chapter_index, segment_id, chunk_index, chunk_text, updated_at FROM listening_positions WHERE book_id = ?"
+            guard let db, sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return nil }
+            defer { sqlite3_finalize(stmt) }
+            bindText(stmt, 1, bookId.uuidString)
+            guard sqlite3_step(stmt) == SQLITE_ROW,
+                  let id = text(stmt, 0).flatMap(UUID.init(uuidString:)) else { return nil }
+            return ListeningPosition(
+                bookId: id,
+                chapterIndex: Int(sqlite3_column_int64(stmt, 1)),
+                segmentID: Int(sqlite3_column_int64(stmt, 2)),
+                chunkIndex: Int(sqlite3_column_int64(stmt, 3)),
+                chunkText: text(stmt, 4) ?? "",
+                updatedAt: Date(timeIntervalSince1970: sqlite3_column_double(stmt, 5))
+            )
+        }
+    }
+
+    func saveListeningPosition(_ position: ListeningPosition) {
+        dbQueue.sync {
+            upsertListeningPositionSync(position)
+            scheduleBackup()
+        }
+    }
+
+    private func upsertListeningPositionSync(_ position: ListeningPosition) {
+        guard let db else { return }
+        var stmt: OpaquePointer?
+        let sql = "INSERT OR REPLACE INTO listening_positions (book_id, chapter_index, segment_id, chunk_index, chunk_text, updated_at) VALUES (?,?,?,?,?,?)"
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, position.bookId.uuidString)
+        sqlite3_bind_int64(stmt, 2, Int64(position.chapterIndex))
+        sqlite3_bind_int64(stmt, 3, Int64(position.segmentID))
+        sqlite3_bind_int64(stmt, 4, Int64(position.chunkIndex))
+        bindText(stmt, 5, position.chunkText)
+        sqlite3_bind_double(stmt, 6, position.updatedAt.timeIntervalSince1970)
+        _ = sqlite3_step(stmt)
+    }
+
+    private func loadListeningPositionsSync() -> [ListeningPosition] {
+        guard let db else { return [] }
+        var stmt: OpaquePointer?
+        let sql = "SELECT book_id, chapter_index, segment_id, chunk_index, chunk_text, updated_at FROM listening_positions"
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
+        defer { sqlite3_finalize(stmt) }
+        var result: [ListeningPosition] = []
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            guard let id = text(stmt, 0).flatMap(UUID.init(uuidString:)) else { continue }
+            result.append(ListeningPosition(
+                bookId: id,
+                chapterIndex: Int(sqlite3_column_int64(stmt, 1)),
+                segmentID: Int(sqlite3_column_int64(stmt, 2)),
+                chunkIndex: Int(sqlite3_column_int64(stmt, 3)),
+                chunkText: text(stmt, 4) ?? "",
+                updatedAt: Date(timeIntervalSince1970: sqlite3_column_double(stmt, 5))
+            ))
+        }
+        return result
+    }
+
+    func deleteReadingPosition(for bookId: UUID) {
+        dbQueue.sync {
+            deletePosition(from: "reading_positions", bookId: bookId)
+            scheduleBackup()
+        }
+    }
+
+    func deleteListeningPosition(for bookId: UUID) {
+        dbQueue.sync {
+            deletePosition(from: "listening_positions", bookId: bookId)
+            scheduleBackup()
+        }
+    }
+
+    func deletePositions(for bookId: UUID) {
+        dbQueue.sync {
+            guard let db else { return }
+            sqlite3_exec(db, "BEGIN TRANSACTION", nil, nil, nil)
+            deletePosition(from: "reading_positions", bookId: bookId)
+            deletePosition(from: "listening_positions", bookId: bookId)
+            sqlite3_exec(db, "COMMIT", nil, nil, nil)
+            scheduleBackup()
+        }
+    }
+
+    private func deletePosition(from table: String, bookId: UUID) {
+        guard let db else { return }
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, "DELETE FROM \(table) WHERE book_id = ?", -1, &stmt, nil) == SQLITE_OK else { return }
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, bookId.uuidString)
+        _ = sqlite3_step(stmt)
+    }
+
     // MARK: - JSON Backup (Export / Import)
 
     struct BackupPayload: Codable {
@@ -653,11 +881,42 @@ final class LibraryDatabase: @unchecked Sendable {
         var exportedAt: Date = Date()
         var highlights: [Highlight] = []
         var bookmarks: [Bookmark] = []
+        var readingPositions: [ReadingPosition] = []
+        var listeningPositions: [ListeningPosition] = []
+
+        init(highlights: [Highlight] = [], bookmarks: [Bookmark] = [],
+             readingPositions: [ReadingPosition] = [], listeningPositions: [ListeningPosition] = []) {
+            self.highlights = highlights
+            self.bookmarks = bookmarks
+            self.readingPositions = readingPositions
+            self.listeningPositions = listeningPositions
+        }
+
+        init(from decoder: any Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            version = try container.decodeIfPresent(Int.self, forKey: .version) ?? 1
+            if let dateString = try container.decodeIfPresent(String.self, forKey: .exportedAt) {
+                exportedAt = ISO8601DateFormatter().date(from: dateString) ?? Date()
+            } else if let timestamp = try container.decodeIfPresent(Double.self, forKey: .exportedAt) {
+                exportedAt = Date(timeIntervalSince1970: timestamp)
+            } else {
+                exportedAt = Date()
+            }
+            highlights = try container.decodeIfPresent([Highlight].self, forKey: .highlights) ?? []
+            bookmarks = try container.decodeIfPresent([Bookmark].self, forKey: .bookmarks) ?? []
+            readingPositions = try container.decodeIfPresent([ReadingPosition].self, forKey: .readingPositions) ?? []
+            listeningPositions = try container.decodeIfPresent([ListeningPosition].self, forKey: .listeningPositions) ?? []
+        }
     }
 
     func exportBackup() throws -> Data {
         let payload = dbQueue.sync { () -> BackupPayload in
-            BackupPayload(highlights: loadHighlightsSync(), bookmarks: loadBookmarksSync())
+            BackupPayload(
+                highlights: loadHighlightsSync(),
+                bookmarks: loadBookmarksSync(),
+                readingPositions: loadReadingPositionsSync(),
+                listeningPositions: loadListeningPositionsSync()
+            )
         }
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
@@ -674,6 +933,8 @@ final class LibraryDatabase: @unchecked Sendable {
         dbQueue.sync {
             upsertHighlightsSync(payload.highlights)
             upsertBookmarksSync(payload.bookmarks)
+            payload.readingPositions.forEach(upsertReadingPositionSync)
+            payload.listeningPositions.forEach(upsertListeningPositionSync)
         }
         return payload.highlights.count + payload.bookmarks.count
     }

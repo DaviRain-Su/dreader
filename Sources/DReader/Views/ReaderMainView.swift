@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 struct ReaderMainView: View {
     @Bindable var vm: ReaderViewModel
@@ -638,6 +639,9 @@ struct ReaderMainView: View {
             guard vm.readAloud.state == .playing, let segmentID else { return }
             vm.scrollToReadAloudSegmentAction?(segmentID)
         }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
+            vm.flushPositionPersistence()
+        }
     }
 
     // MARK: - Reader Top Bar (Apple Books Native Translucent Bar)
@@ -777,14 +781,14 @@ struct ReaderMainView: View {
             // Whole-Chapter Read Aloud (听书) with Right-Click Sleep Timer
             AppleToolbarButton(
                 icon: vm.readAloud.state == .playing ? "speaker.wave.3.fill" : (vm.readAloud.state == .paused ? "speaker.slash" : "headphones"),
-                title: vm.readAloud.state == .paused ? "继续" : (vm.readAloud.isPreparing ? "准备中" : (vm.readAloud.state == .playing ? "暂停" : "听书")),
+                title: vm.readAloud.state == .paused ? "继续" : (vm.readAloud.isPreparing ? "准备中" : (vm.readAloud.state == .playing ? "暂停" : (vm.hasListeningResume ? "续听" : "听书"))),
                 isActive: vm.readAloud.state != .idle,
                 action: {
                     vm.toggleChapterReadAloud()
                 },
                 helpText: vm.readAloud.isPreparing && vm.readAloud.state == .playing
                     ? "\(vm.readAloud.activeEngine.displayName) 正在加载模型并合成首段；点击可暂停"
-                    : (vm.readAloud.state == .playing ? "暂停整章朗读 (⌘+⇧+S) · \(vm.readAloud.activeEngine.displayName)" : "开始整章连续朗读 (⌘+⇧+S)")
+                    : (vm.readAloud.state == .playing ? "暂停整章朗读 (⌘+⇧+S) · \(vm.readAloud.activeEngine.displayName)" : (vm.hasListeningResume ? "从上次位置续听 (⌘+⇧+S)" : "开始整章连续朗读 (⌘+⇧+S)"))
             )
             .contextMenu {
                 Menu("定时关闭") {
@@ -989,9 +993,10 @@ struct ReaderMainView: View {
                             }
                             return false
                         },
-                        onChapterReady: { url in vm.chapterDidBecomeReady(url) },
+                        onChapterReady: { url, index in vm.chapterDidBecomeReady(url, chapterIndex: index) },
                         onScrollProgress: { pct in vm.noteChapterScrollProgress(pct) },
                         registerScrollAction: { action in vm.scrollPageAction = action },
+                        registerScrollToProgressAction: { action in vm.scrollToReadingProgressAction = action },
                         registerHighlightAction: { action in vm.applyHighlightAction = action },
                         registerUpdateColorAction: { action in vm.updateHighlightColorAction = action },
                         registerUpdateThoughtAction: { action in vm.updateHighlightThoughtAction = action },

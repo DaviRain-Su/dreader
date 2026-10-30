@@ -25,9 +25,10 @@ struct EPUBWebView: NSViewRepresentable {
     var onTranslateParagraph: ((Int, String) -> Void)? = nil
     var registerUpdateTranslationAction: ((@escaping (Int, String, String) -> Void) -> Void)? = nil
     var onChapterLinkTapped: ((URL) -> Bool)? = nil
-    var onChapterReady: ((URL) -> Void)? = nil
+    var onChapterReady: ((URL, Int) -> Void)? = nil
     let onScrollProgress: (Double) -> Void
     let registerScrollAction: (@escaping (Int) -> Void) -> Void
+    var registerScrollToProgressAction: ((@escaping (Double) -> Void) -> Void)? = nil
     let registerHighlightAction: (@escaping (String, String, String?) -> Void) -> Void
     let registerUpdateColorAction: (@escaping (String, String) -> Void) -> Void
     let registerUpdateThoughtAction: (@escaping (String, String?) -> Void) -> Void
@@ -70,6 +71,9 @@ struct EPUBWebView: NSViewRepresentable {
         context.coordinator.webView = webView
         registerScrollAction { [weak coordinator = context.coordinator] dir in
             coordinator?.scrollPage(direction: dir)
+        }
+        registerScrollToProgressAction? { [weak coordinator = context.coordinator] progress in
+            coordinator?.scrollToProgress(progress)
         }
         registerHighlightAction { [weak coordinator = context.coordinator] colorHex, id, note in
             coordinator?.applyHighlightInDOM(colorHex: colorHex, id: id, note: note)
@@ -120,7 +124,9 @@ struct EPUBWebView: NSViewRepresentable {
         let prevScriptMode = context.coordinator.lastScriptMode
         context.coordinator.lastScriptMode = settings.chineseScriptMode
 
-        if context.coordinator.currentURL != chapterURL || prevBilingual != settings.isBilingualEnabled {
+        if context.coordinator.currentURL != chapterURL
+            || context.coordinator.currentChapterIndex != chapterIndex
+            || prevBilingual != settings.isBilingualEnabled {
             context.coordinator.loadChapter(
                 url: chapterURL,
                 opfDir: opfDirectory,
@@ -155,6 +161,7 @@ struct EPUBWebView: NSViewRepresentable {
         var parent: EPUBWebView
         weak var webView: WKWebView?
         var currentURL: URL?
+        var currentChapterIndex: Int = 0
         var currentOpfDir: URL?
         var isPageReady: Bool = false
         var lastSettingsSummary: String = ""
@@ -366,6 +373,15 @@ struct EPUBWebView: NSViewRepresentable {
             }
         }
 
+        func scrollToProgress(_ progress: Double) {
+            guard progress.isFinite else { return }
+            let clamped = min(max(progress, 0), 1)
+            webView?.evaluateJavaScript(
+                "window.dreaderScrollToProgress && window.dreaderScrollToProgress(\(clamped));",
+                completionHandler: nil
+            )
+        }
+
         func restoreHighlightsInDOM(_ highlights: [Highlight]) {
             guard let webView = webView, !highlights.isEmpty else { return }
             let items: [[String: Any]] = highlights.map { h in
@@ -397,6 +413,7 @@ struct EPUBWebView: NSViewRepresentable {
             isChapterLoading = true
             parent.selectionManager.clear()
             currentURL = url
+            currentChapterIndex = parent.chapterIndex
             lastSettingsSummary = parent.settingsSummary
             lastBilingualEnabled = settings.isBilingualEnabled
             lastScriptMode = settings.chineseScriptMode
@@ -672,8 +689,9 @@ struct EPUBWebView: NSViewRepresentable {
                 guard let self, self.chapterLoadGeneration == generation else { return }
                 let success = (result as? Bool) ?? false
                 if success {
+                    self.updateStyles(settings: settings)
                     self.isChapterLoading = false
-                    if let url = self.currentURL { self.parent.onChapterReady?(url) }
+                    if let url = self.currentURL { self.parent.onChapterReady?(url, self.parent.chapterIndex) }
                     // JS 已恢复跨标签划线，此处不再重复调用。
                     // 换章后同步行引导线（DOM 重挂会移除引导元素）
                     let guideScript = settings.isLineGuide
@@ -898,7 +916,7 @@ struct EPUBWebView: NSViewRepresentable {
                 self.restoreHighlightsInDOM(self.parent.highlights)
                 webView.evaluateJavaScript("window.dreaderScrollToStart();", completionHandler: nil)
                 self.isChapterLoading = false
-                if let url = self.currentURL { self.parent.onChapterReady?(url) }
+                if let url = self.currentURL { self.parent.onChapterReady?(url, self.parent.chapterIndex) }
                 if let pendingId = self.pendingScrollHighlightId {
                     self.pendingScrollHighlightId = nil
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) { [weak self] in

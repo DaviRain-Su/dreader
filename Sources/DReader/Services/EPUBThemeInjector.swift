@@ -1096,6 +1096,20 @@ struct EPUBThemeInjector {
                 window.scrollTo({ left: 0, top: 0, behavior: 'instant' });
             };
 
+            // 阅读位置按正比例恢复；竖排从右向左的负 scrollLeft 与横排共用同一进度。
+            window.dreaderScrollToProgress = function(progress) {
+                if (!Number.isFinite(progress)) return false;
+                const metrics = window.dreaderScrollMetrics();
+                const clamped = Math.max(0, Math.min(1, progress));
+                const distance = clamped * metrics.maxScroll;
+                window.scrollTo({
+                    left: metrics.vertical ? -distance : 0,
+                    top: metrics.vertical ? 0 : distance,
+                    behavior: 'instant'
+                });
+                return true;
+            };
+
             window.dreaderScrollPage = function(direction) {
                 if (direction === 0) { window.dreaderScrollToStart(); return; }
                 const metrics = window.dreaderScrollMetrics();

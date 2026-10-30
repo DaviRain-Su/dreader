@@ -36,6 +36,21 @@ final class ChapterReadAloudService: NSObject, @unchecked Sendable, AVAudioPlaye
         let text: String
     }
 
+    /// 一个 DOM 段可能有多个 Qwen 短块，恢复必须同时携带段内序号和文本。
+    struct PlaybackPosition: Hashable, Sendable {
+        let bookId: UUID
+        let segmentID: Int
+        let chunkIndex: Int
+        let chunkText: String
+    }
+
+    private enum StopReason {
+        case manual, failed, completed
+    }
+
+    /// 位置变化在现有代次校验后发布；完成时 position 为 nil，bookId 用于清理。
+    var onPositionChanged: ((PlaybackPosition?, UUID?) -> Void)?
+
     /// 轻量播放接口；测试可替换为纯内存播放器，不打开音频设备。
     struct Playback {
         let play: () -> Bool
@@ -116,13 +131,16 @@ final class ChapterReadAloudService: NSObject, @unchecked Sendable, AVAudioPlaye
     }
 
     /// 播放序号与正文身份分离，短段和非连续定位 ID 都不会改变合成队列。
-    func start(bookId: UUID, segments: [Segment], startSegmentID: Int? = nil, rate: Double = 0.52) {
+    func start(bookId: UUID, segments: [Segment], startSegmentID: Int? = nil,
+               resume: PlaybackPosition? = nil, rate: Double = 0.52) {
         stop()
         self.rate = min(max(rate, 0.3), 0.8)
         self.paragraphs = segments
             .filter { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
             .map { (id: $0.id, text: $0.text) }
-        if let startSegmentID {
+        if let resume, resume.bookId == bookId {
+            self.paragraphIndex = indexForResume(resume)
+        } else if let startSegmentID {
             self.paragraphIndex = self.paragraphs.firstIndex(where: { $0.id == startSegmentID }) ?? 0
         } else {
             self.paragraphIndex = 0
@@ -134,17 +152,38 @@ final class ChapterReadAloudService: NSObject, @unchecked Sendable, AVAudioPlaye
         fallbackEngines = activeEngine == .qwen ? [.qwen, .piper] : [activeEngine, activeEngine.alternate]
         if activeEngine == .qwen {
             self.paragraphs = QwenTextChunker.chunks(for: segments)
-            self.paragraphIndex = startSegmentID.flatMap { id in
-                self.paragraphs.firstIndex(where: { $0.id == id })
-            } ?? 0
+            if let resume, resume.bookId == bookId {
+                self.paragraphIndex = indexForResume(resume)
+            } else {
+                self.paragraphIndex = startSegmentID.flatMap { id in
+                    self.paragraphs.firstIndex(where: { $0.id == id })
+                } ?? 0
+            }
         }
         speakCurrentParagraph()
+    }
+
+    private func indexForResume(_ resume: PlaybackPosition) -> Int {
+        let sameSegment = paragraphs.enumerated().filter { $0.element.id == resume.segmentID }
+        if let exact = sameSegment.enumerated().first(where: {
+            $0.offset == resume.chunkIndex && $0.element.element.text == resume.chunkText
+        }) {
+            return exact.element.offset
+        }
+        if let textMatch = sameSegment.first(where: { $0.element.text == resume.chunkText }) {
+            return textMatch.offset
+        }
+        if let changedDOMMatch = paragraphs.firstIndex(where: { $0.text == resume.chunkText }) {
+            return changedDOMMatch
+        }
+        return sameSegment.first?.offset ?? 0
     }
 
     func pause() {
         guard state == .playing else { return }
         state = .paused
         playback?.pause()
+        publishPosition()
     }
 
     func resume() {
@@ -172,7 +211,34 @@ final class ChapterReadAloudService: NSObject, @unchecked Sendable, AVAudioPlaye
         }
     }
 
+    private var currentPosition: PlaybackPosition? {
+        guard let currentBookId, let currentSegmentID, paragraphs.indices.contains(paragraphIndex) else { return nil }
+        let entry = paragraphs[paragraphIndex]
+        return PlaybackPosition(
+            bookId: currentBookId,
+            segmentID: currentSegmentID,
+            // chunkIndex 是段内序号；paragraphIndex 才是全章播放队列序号。
+            chunkIndex: paragraphs[..<paragraphIndex].filter { $0.id == currentSegmentID }.count,
+            chunkText: entry.text
+        )
+    }
+
+    private func publishPosition() {
+        onPositionChanged?(currentPosition, currentBookId)
+    }
+
     func stop() {
+        stop(reason: .manual)
+    }
+
+    private func stop(reason: StopReason) {
+        let snapshot = currentPosition
+        let bookId = currentBookId
+        if reason == .completed {
+            onPositionChanged?(nil, bookId)
+        } else {
+            onPositionChanged?(snapshot, bookId)
+        }
         playbackGeneration += 1
         speechTask?.cancel()
         speechTask = nil
@@ -233,7 +299,7 @@ final class ChapterReadAloudService: NSObject, @unchecked Sendable, AVAudioPlaye
     private func speakCurrentParagraph() {
         guard state == .playing, playback == nil else { return }
         guard paragraphIndex < paragraphs.count else {
-            stop()
+            stop(reason: .completed)
             return
         }
         let entry = paragraphs[paragraphIndex]
@@ -247,6 +313,7 @@ final class ChapterReadAloudService: NSObject, @unchecked Sendable, AVAudioPlaye
         isPreparing = true
         let synthesis = synthesisTask(for: attempt)
         currentAttempt = attempt
+        publishPosition()
         speechTask = Task { @MainActor [weak self] in
             do {
                 let audio = try await synthesis.value
@@ -308,7 +375,7 @@ final class ChapterReadAloudService: NSObject, @unchecked Sendable, AVAudioPlaye
             $0 != attempt.engine && failedAttempts[Attempt(sequence: attempt.sequence, engine: $0)] == nil
         }) else {
             let finalError = engineError
-            stop()
+            stop(reason: .failed)
             engineError = finalError
             return
         }
@@ -382,7 +449,7 @@ final class ChapterReadAloudService: NSObject, @unchecked Sendable, AVAudioPlaye
         if paragraphIndex < paragraphs.count {
             speakCurrentParagraph()
         } else {
-            stop()
+            stop(reason: .completed)
         }
     }
 

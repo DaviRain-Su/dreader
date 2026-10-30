@@ -195,7 +195,7 @@ final class ReaderInteractionTests: XCTestCase {
         let functions = ["dreaderScrollPage", "dreaderPageTurnPlan", "dreaderApplyHighlight",
                          "dreaderSetChapterContent", "dreaderRestoreHighlights", "dreaderScrollToSearchMatch",
                          "dreaderScrollToHighlight", "dreaderReadAloudSegments", "dreaderScrollToReadAloudSegment",
-                         "dreaderUpdateTranslation", "dreaderGoNextChapter"]
+                         "dreaderScrollToProgress", "dreaderUpdateTranslation", "dreaderGoNextChapter"]
         for name in functions {
             let type = try await evaluate("typeof window.\(name)") as? String
             XCTAssertEqual(type, "function", "正文函数未注册：\(name)")
@@ -303,6 +303,27 @@ final class ReaderInteractionTests: XCTestCase {
         coordinator.scrollPage(direction: -1)
         try await waitUntil("Math.abs(window.scrollX) < 2")
         XCTAssertEqual(previousCount, 0, "竖排后翻应回到章首，不能提前跳章")
+    }
+
+    func testReadingProgressRestoresHorizontalVerticalAndOccurrence() async throws {
+        try await loadFixture()
+        coordinator.scrollToProgress(0.5)
+        try await waitUntil("(() => { const m = window.dreaderScrollMetrics(); return Math.abs(m.currentScroll / m.maxScroll - 0.5) < 0.02; })()")
+        coordinator.scrollToProgress(0)
+        try await waitUntil("window.dreaderScrollMetrics().currentScroll < 2")
+        coordinator.scrollToProgress(1)
+        try await waitUntil("(() => { const m = window.dreaderScrollMetrics(); return Math.abs(m.currentScroll - m.maxScroll) < 2; })()")
+
+        let file = directory.appendingPathComponent("first.xhtml")
+        coordinator.parent = makeReader(file: file, index: 1)
+        coordinator.loadChapter(url: file, opfDir: directory, unzippedDir: directory,
+                                settings: settings, hasNextChapter: true, nextChapterTitle: "下一章")
+        try await waitUntil("window.dreaderReaderReady === true")
+        XCTAssertEqual(coordinator.currentChapterIndex, 1, "同 URL 的第二 occurrence 也必须进入自己的加载状态")
+
+        try await loadFixture(vertical: true)
+        coordinator.scrollToProgress(0.5)
+        try await waitUntil("(() => { const m = window.dreaderScrollMetrics(); return m.vertical && m.currentScroll > 0 && window.scrollX < 0 && Math.abs(m.currentScroll / m.maxScroll - 0.5) < 0.02; })()")
     }
 
     func testKeyboardAnnotationsAndEditableFields() async throws {

@@ -46,8 +46,13 @@ final class ReaderViewModel: @unchecked Sendable {
         ReadingStatsManager.shared.stats
     }
 
-    init(loadLibrary: Bool = true, database: LibraryDatabase? = nil) {
+    init(loadLibrary: Bool = true, database: LibraryDatabase? = nil,
+         readAloud: ChapterReadAloudService? = nil) {
         self.databaseOverride = database
+        self.readAloud = readAloud ?? ChapterReadAloudService()
+        self.readAloud.onPositionChanged = { [weak self] position, bookId in
+            self?.saveListeningPosition(position, bookId: bookId)
+        }
         if loadLibrary || database != nil {
             loadPersistedHighlights()
             loadPersistedBookmarks()
@@ -194,6 +199,7 @@ final class ReaderViewModel: @unchecked Sendable {
 
     func returnToBookshelf() {
         ReadingStatsManager.shared.pauseSession()
+        flushReadingPosition()
         stopChapterReadAloud()
         withAnimation(.easeInOut(duration: 0.25)) {
             isViewingBookshelf = true
@@ -202,27 +208,66 @@ final class ReaderViewModel: @unchecked Sendable {
     }
 
     func selectBookForReading(_ book: EPUBBook) {
+        if currentBook?.id != book.id {
+            flushReadingPosition()
+        }
+        stopChapterReadAloud()
+        readingSaveTask?.cancel()
+        pendingListeningResume = nil
+        completedReadingBookIDs.remove(book.id)
+
+        let saved = database.readingPosition(for: book.id)
+        var restored = book
+        if let saved, restored.chapters.indices.contains(saved.chapterIndex) {
+            restored.currentChapterIndex = saved.chapterIndex
+        } else {
+            restored.currentChapterIndex = 0
+        }
+        chapterScrollProgress = saved.map { min(max($0.scrollProgress, 0), 1) } ?? 0
+        hasListeningResume = database.listeningPosition(for: book.id) != nil
+
         ReadingStatsManager.shared.startSession()
+        let previousBookID = currentBook?.id
+        let previousReadyURL = readyChapterURL
+        let previousReadyIndex = readyChapterIndex
         withAnimation(.easeInOut(duration: 0.25)) {
-            readyChapterURL = nil
-            pendingReadingDestination = nil
-            currentBook = book
+            if previousBookID == restored.id,
+               previousReadyURL == restored.currentChapter?.fileURL,
+               previousReadyIndex == restored.currentChapterIndex {
+                readyChapterURL = previousReadyURL
+                readyChapterIndex = previousReadyIndex
+            } else {
+                readyChapterURL = nil
+                readyChapterIndex = nil
+            }
+            if saved != nil, let chapter = restored.currentChapter {
+                pendingReadingDestination = (chapter.fileURL, .readingPosition(chapterScrollProgress))
+            } else {
+                pendingReadingDestination = nil
+            }
+            currentBook = restored
             isViewingBookshelf = false
             isSidebarVisible = false
             selectionManager.clear()
         }
-        scheduleRecapIfAwayLong(for: book)
+        if let chapter = restored.currentChapter,
+           readyChapterURL == chapter.fileURL,
+           readyChapterIndex == restored.currentChapterIndex {
+            chapterDidBecomeReady(chapter.fileURL, chapterIndex: restored.currentChapterIndex)
+        }
+        updateBookInLibrary(restored)
+        scheduleRecapIfAwayLong(for: restored)
         // 竖排偏好：已设置按书记忆 → 恢复；未设置 → 古籍默认竖排（仅首开时写入偏好）
-        if settings.storedVertical(for: book.id) {
+        if settings.storedVertical(for: restored.id) {
             settings.isVertical = true
-        } else if !UserDefaults.standard.bool(forKey: "dreader.vertical.seen.\(book.id.uuidString)") {
-            UserDefaults.standard.set(true, forKey: "dreader.vertical.seen.\(book.id.uuidString)")
-            if ReaderSettings.looksLikeClassicalChinese(title: book.title, author: book.author) {
+        } else if !UserDefaults.standard.bool(forKey: "dreader.vertical.seen.\(restored.id.uuidString)") {
+            UserDefaults.standard.set(true, forKey: "dreader.vertical.seen.\(restored.id.uuidString)")
+            if ReaderSettings.looksLikeClassicalChinese(title: restored.title, author: restored.author) {
                 settings.isVertical = true
                 var prefs = UserDefaults.standard.string(forKey: "dreader.vertical_by_book").flatMap {
                     $0.data(using: .utf8).flatMap { try? JSONDecoder().decode([String: String].self, from: $0) }
                 } ?? [:]
-                prefs[book.id.uuidString] = "1"
+                prefs[restored.id.uuidString] = "1"
                 if let data = try? JSONEncoder().encode(prefs) {
                     UserDefaults.standard.set(String(data: data, encoding: .utf8), forKey: "dreader.vertical_by_book")
                 }
@@ -273,10 +318,14 @@ final class ReaderViewModel: @unchecked Sendable {
     /// 读完判定：最后一章滚动过 85% 即视为读完（尾页常有版权页噪声，85% 已过正文）。
     /// 每本书只庆祝一次（UserDefaults 记账）；再次打开不重复打扰。
     func noteChapterScrollProgress(_ progress: Double) {
-        chapterScrollProgress = progress
+        let clamped = min(max(progress, 0), 1)
+        // DOM 初始化先回到章首；待恢复记录被 ready 消费前，不能把旧进度写成 0。
+        if case .readingPosition? = pendingReadingDestination?.1, clamped == 0 { return }
+        chapterScrollProgress = clamped
+        scheduleReadingPositionSave()
         guard let book = currentBook,
               book.currentChapterIndex == book.chapters.count - 1,
-              progress >= 0.85
+              clamped >= 0.85
         else { return }
         let finishKey = "dreader.finish_card_shown.\(book.id.uuidString)"
         guard !UserDefaults.standard.bool(forKey: finishKey) else { return }
@@ -294,7 +343,51 @@ final class ReaderViewModel: @unchecked Sendable {
         }
     }
 
+    /// 切章、换书、返回书架或退出时同步保存；滚动期间只做短时间去抖。
+    func flushReadingPosition() {
+        readingSaveTask?.cancel()
+        readingSaveTask = nil
+        guard let book = currentBook else { return }
+        saveReadingPosition(
+            bookId: book.id,
+            chapterIndex: book.currentChapterIndex,
+            progress: chapterScrollProgress
+        )
+    }
+
+    private func scheduleReadingPositionSave() {
+        guard let book = currentBook, let chapter = book.currentChapter,
+              readyChapterURL == chapter.fileURL,
+              readyChapterIndex == book.currentChapterIndex else { return }
+        let bookId = book.id
+        let chapterIndex = book.currentChapterIndex
+        let progress = chapterScrollProgress
+        readingSaveTask?.cancel()
+        readingSaveTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(400))
+            guard !Task.isCancelled else { return }
+            self?.saveReadingPosition(bookId: bookId, chapterIndex: chapterIndex, progress: progress)
+        }
+    }
+
+    private func saveReadingPosition(bookId: UUID, chapterIndex: Int, progress: Double) {
+        guard readAloud.state == .idle,
+              !completedReadingBookIDs.contains(bookId) else { return }
+        database.saveReadingPosition(.init(
+            bookId: bookId,
+            chapterIndex: chapterIndex,
+            scrollProgress: min(max(progress, 0), 1),
+            updatedAt: Date()
+        ))
+    }
+
     func dismissFinishCard() {
+        if let bookId = currentBook?.id {
+            completedReadingBookIDs.insert(bookId)
+            readingSaveTask?.cancel()
+            database.deleteReadingPosition(for: bookId)
+        }
+        chapterScrollProgress = 0
         withAnimation(.easeOut(duration: 0.25)) {
             pendingFinishSnapshot = nil
         }
@@ -378,6 +471,10 @@ final class ReaderViewModel: @unchecked Sendable {
     var updateHighlightThoughtAction: ((String, String?) -> Void)?
     var removeHighlightAction: ((String) -> Void)?
     var scrollToHighlightAction: ((String) -> Void)?
+    var scrollToReadingProgressAction: ((Double) -> Void)?
+    private var readingSaveTask: Task<Void, Never>?
+    private var completedReadingBookIDs: Set<UUID> = []
+    var hasListeningResume = false
     var lastChosenHighlightColor: String = "#FFE066"
 
     // MARK: - Chapter & Page Navigation
@@ -453,45 +550,60 @@ final class ReaderViewModel: @unchecked Sendable {
 
     func nextChapter() {
         guard var book = currentBook, book.currentChapterIndex < book.chapters.count - 1 else { return }
+        flushReadingPosition()
         stopChapterReadAloud()
         readyChapterURL = nil
+        readyChapterIndex = nil
         pendingReadingDestination = nil
         book.currentChapterIndex += 1
         currentBook = book
         updateBookInLibrary(book)
         updateSubsequentChaptersTotalChars()
         chapterScrollProgress = 0.0
+        flushReadingPosition()
         selectionManager.clear()
     }
 
     func prevChapter() {
         guard var book = currentBook, book.currentChapterIndex > 0 else { return }
+        flushReadingPosition()
         stopChapterReadAloud()
         readyChapterURL = nil
+        readyChapterIndex = nil
         pendingReadingDestination = nil
         book.currentChapterIndex -= 1
         currentBook = book
         updateBookInLibrary(book)
         updateSubsequentChaptersTotalChars()
         chapterScrollProgress = 0.0
+        flushReadingPosition()
         selectionManager.clear()
     }
 
-    func jumpToChapter(_ index: Int) {
+    func jumpToChapter(_ index: Int, preserveReadingPosition: Bool = false) {
         guard var book = currentBook, book.chapters.indices.contains(index) else { return }
         if book.currentChapterIndex == index {
             // Smoothly scroll to the beginning of the current chapter
-            scrollPageAction?(0)
+            if !preserveReadingPosition {
+                chapterScrollProgress = 0
+                scrollPageAction?(0)
+                flushReadingPosition()
+            }
             return
         }
+        flushReadingPosition()
         stopChapterReadAloud()
         readyChapterURL = nil
+        readyChapterIndex = nil
         pendingReadingDestination = nil
         book.currentChapterIndex = index
         currentBook = book
         updateBookInLibrary(book)
         updateSubsequentChaptersTotalChars()
         chapterScrollProgress = 0.0
+        if !preserveReadingPosition {
+            flushReadingPosition()
+        }
         selectionManager.clear()
     }
 
@@ -535,20 +647,36 @@ final class ReaderViewModel: @unchecked Sendable {
         case highlight(String)
         case search(String, Int)
         case readAloud
+        case readingPosition(Double)
     }
     private var pendingReadingDestination: (URL, ReadingDestination)?
     private var readyChapterURL: URL?
+    private var readyChapterIndex: Int?
 
-    func chapterDidBecomeReady(_ url: URL) {
-        guard currentBook?.currentChapter?.fileURL == url else { return }
+    func chapterDidBecomeReady(_ url: URL, chapterIndex: Int) {
+        guard currentBook?.currentChapterIndex == chapterIndex,
+              currentBook?.currentChapter?.fileURL == url else { return }
         readyChapterURL = url
+        readyChapterIndex = chapterIndex
         guard let (targetURL, destination) = pendingReadingDestination, targetURL == url else { return }
         pendingReadingDestination = nil
         switch destination {
         case .highlight(let id): scrollToHighlightAction?(id)
         case .search(let keyword, let index): scrollToSearchMatchAction?(keyword, index)
         case .readAloud: startChapterReadAloud()
+        case .readingPosition(let progress):
+            chapterScrollProgress = progress
+            scrollToReadingProgressAction?(progress)
+            if let book = currentBook {
+                saveReadingPosition(bookId: book.id, chapterIndex: chapterIndex, progress: progress)
+            }
         }
+    }
+
+    /// 兼容旧测试和内部调用；生产 ready 回调携带 spine occurrence。
+    func chapterDidBecomeReady(_ url: URL) {
+        guard let index = currentBook?.currentChapterIndex else { return }
+        chapterDidBecomeReady(url, chapterIndex: index)
     }
 
     func jumpToHighlight(_ highlight: Highlight) {
@@ -1006,10 +1134,31 @@ final class ReaderViewModel: @unchecked Sendable {
     }
 
     // MARK: - Whole-Chapter Read Aloud (听书)
-    let readAloud = ChapterReadAloudService()
+    let readAloud: ChapterReadAloudService
     var scrollToReadAloudSegmentAction: ((Int) -> Void)?
     var readAloudSegmentsProvider: (() async throws -> [ChapterReadAloudService.Segment])?
     private var readAloudPreparationTask: Task<Void, Never>?
+    private var pendingListeningResume: LibraryDatabase.ListeningPosition?
+
+    private func saveListeningPosition(_ position: ChapterReadAloudService.PlaybackPosition?, bookId: UUID?) {
+        guard let bookId else { return }
+        guard let position else {
+            database.deleteListeningPosition(for: bookId)
+            if currentBook?.id == bookId { hasListeningResume = false }
+            return
+        }
+        // 只由当前书章产生新记录；过期回调不能把别章写进这本书。
+        guard currentBook?.id == bookId, let chapterIndex = currentBook?.currentChapterIndex else { return }
+        database.saveListeningPosition(.init(
+            bookId: bookId,
+            chapterIndex: chapterIndex,
+            segmentID: position.segmentID,
+            chunkIndex: position.chunkIndex,
+            chunkText: position.chunkText,
+            updatedAt: Date()
+        ))
+        hasListeningResume = true
+    }
 
     /// 从当前真实渲染的 DOM 获取正文，保留其定位标识而不是前 16 字锚点。
     func startChapterReadAloud() {
@@ -1020,9 +1169,26 @@ final class ReaderViewModel: @unchecked Sendable {
         if case .readAloud? = pendingReadingDestination?.1 {
             pendingReadingDestination = nil
         }
+        var resume = pendingListeningResume
+        if let saved = resume, !book.chapters.indices.contains(saved.chapterIndex) {
+            database.deleteListeningPosition(for: book.id)
+            hasListeningResume = false
+            pendingListeningResume = nil
+            resume = nil
+        }
+        if let resume, resume.chapterIndex != book.currentChapterIndex {
+            // 只有这次明确点击才改变当前章节；原阅读位置先独立保存。
+            flushReadingPosition()
+            pendingListeningResume = resume
+            jumpToChapter(resume.chapterIndex, preserveReadingPosition: true)
+            if let target = currentBook?.currentChapter {
+                pendingReadingDestination = (target.fileURL, .readAloud)
+            }
+            return
+        }
         let chapterIndex = book.currentChapterIndex
         let chapterURL = chapter.fileURL
-        guard readyChapterURL == chapterURL else {
+        guard readyChapterURL == chapterURL, readyChapterIndex == chapterIndex else {
             pendingReadingDestination = (chapterURL, .readAloud)
             return
         }
@@ -1035,13 +1201,24 @@ final class ReaderViewModel: @unchecked Sendable {
                       self.currentBook?.id == book.id,
                       self.currentBook?.currentChapterIndex == chapterIndex,
                       self.currentBook?.currentChapter?.fileURL == chapterURL,
-                      self.readyChapterURL == chapterURL else { return }
+                      self.readyChapterURL == chapterURL,
+                      self.readyChapterIndex == chapterIndex else { return }
                 self.readAloudPreparationTask = nil
                 guard !segments.isEmpty else {
                     self.errorMessage = "本章没有可朗读的正文"
                     return
                 }
-                self.readAloud.start(bookId: book.id, segments: segments, rate: 0.52)
+                self.pendingListeningResume = nil
+                let playbackResume = resume.map {
+                    ChapterReadAloudService.PlaybackPosition(
+                        bookId: $0.bookId,
+                        segmentID: $0.segmentID,
+                        chunkIndex: $0.chunkIndex,
+                        chunkText: $0.chunkText
+                    )
+                }
+                self.readAloud.start(bookId: book.id, segments: segments,
+                                     resume: playbackResume, rate: 0.52)
             } catch is CancellationError {
                 return
             } catch {
@@ -1061,6 +1238,9 @@ final class ReaderViewModel: @unchecked Sendable {
         case .paused:
             readAloud.resume()
         case .idle:
+            if let book = currentBook {
+                pendingListeningResume = database.listeningPosition(for: book.id)
+            }
             startChapterReadAloud()
         }
     }
@@ -1072,6 +1252,11 @@ final class ReaderViewModel: @unchecked Sendable {
             pendingReadingDestination = nil
         }
         readAloud.stop()
+    }
+
+    func flushPositionPersistence() {
+        flushReadingPosition()
+        stopChapterReadAloud()
     }
 
     // MARK: - Import File Panel
@@ -1094,6 +1279,16 @@ final class ReaderViewModel: @unchecked Sendable {
     }
 
     func removeBook(id: UUID) {
+        if currentBook?.id == id {
+            readingSaveTask?.cancel()
+            stopChapterReadAloud()
+            pendingReadingDestination = nil
+            readyChapterURL = nil
+            readyChapterIndex = nil
+            hasListeningResume = false
+        }
+        database.deletePositions(for: id)
+        completedReadingBookIDs.remove(id)
         if let idx = books.firstIndex(where: { $0.id == id }) {
             let removedBook = books.remove(at: idx)
             if currentBook?.id == removedBook.id {
@@ -1107,6 +1302,16 @@ final class ReaderViewModel: @unchecked Sendable {
     }
 
     func resetBookProgress(id: UUID) {
+        readingSaveTask?.cancel()
+        if currentBook?.id == id {
+            stopChapterReadAloud()
+            pendingReadingDestination = nil
+            readyChapterURL = nil
+            readyChapterIndex = nil
+            hasListeningResume = false
+        }
+        database.deletePositions(for: id)
+        completedReadingBookIDs.remove(id)
         if let idx = books.firstIndex(where: { $0.id == id }) {
             var b = books[idx]
             b.currentChapterIndex = 0

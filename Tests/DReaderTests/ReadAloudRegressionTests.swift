@@ -528,4 +528,67 @@ final class ReadAloudRegressionTests: XCTestCase {
         XCTAssertTrue(requests.allSatisfy { $0.engine == .qwen })
         XCTAssertEqual(requests.map(\.text).joined(), String(repeating: "朗读内容。", count: 50) + "下一段正文")
     }
+
+    func testResumePositionUsesSecondChunkWithSameDOMID() async throws {
+        let synth = Synthesizer()
+        let players = Players()
+        let service = makeService(synth, players: players, engine: .qwen)
+        defer { service.stop() }
+        let bookId = UUID()
+        let text = String(repeating: "同一 DOM 段需要拆成多个短块，续听必须返回正确块。", count: 20)
+        let chunks = QwenTextChunker.chunks(for: text)
+        XCTAssertGreaterThan(chunks.count, 1)
+        var snapshots: [ChapterReadAloudService.PlaybackPosition] = []
+        service.onPositionChanged = { position, _ in
+            if let position { snapshots.append(position) }
+        }
+        service.start(bookId: bookId, segments: [.init(id: 7, text: text)],
+                      resume: .init(bookId: bookId, segmentID: 7, chunkIndex: 1, chunkText: chunks[1]))
+        try await waitUntil { await synth.allRequests().count == 1 }
+        let requests = await synth.allRequests()
+        XCTAssertEqual(requests.first?.text, chunks[1])
+        service.pause()
+        XCTAssertEqual(snapshots.last?.chunkIndex, 1)
+        XCTAssertEqual(snapshots.last?.chunkText, chunks[1])
+        service.stop()
+        XCTAssertEqual(snapshots.last?.chunkIndex, 1, "手动停止也保留可恢复短块")
+    }
+
+    func testCompletedPlaybackClearsPositionButFailureRetainsIt() async throws {
+        let bookId = UUID()
+        let synth = Synthesizer()
+        let players = Players()
+        let service = makeService(synth, players: players, engine: .qwen)
+        defer { service.stop() }
+        var cleared: [UUID] = []
+        var lastPosition: ChapterReadAloudService.PlaybackPosition?
+        service.onPositionChanged = { position, bookId in
+            if let bookId, position == nil { cleared.append(bookId) }
+            lastPosition = position
+        }
+        service.start(bookId: bookId, paragraphs: ["播完这一段"])
+        try await waitUntil { await synth.allRequests().count == 1 }
+        await synth.succeed(0)
+        try await waitUntil { players.players.count == 1 }
+        players.players[0].finish()
+        try await waitUntil { service.state == .idle }
+        XCTAssertTrue(cleared.contains(bookId))
+        XCTAssertNil(lastPosition)
+
+        let failureSynth = Synthesizer()
+        let failurePlayers = Players()
+        let failed = makeService(failureSynth, players: failurePlayers, engine: .qwen)
+        defer { failed.stop() }
+        var failedPosition: ChapterReadAloudService.PlaybackPosition?
+        failed.onPositionChanged = { position, _ in
+            if let position { failedPosition = position }
+        }
+        failed.start(bookId: bookId, paragraphs: ["失败时保留恢复点"])
+        try await waitUntil { await failureSynth.allRequests().count == 1 }
+        await failureSynth.fail(0)
+        try await waitUntil { await failureSynth.allRequests().count == 2 }
+        await failureSynth.fail(1)
+        try await waitUntil { failed.state == .idle }
+        XCTAssertEqual(failedPosition?.chunkText, "失败时保留恢复点")
+    }
 }
