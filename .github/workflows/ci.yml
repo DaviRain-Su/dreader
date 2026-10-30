@@ -1,0 +1,72 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Build & Test (macOS)
+    runs-on: macos-14
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode_16.4.app/Contents/Developer || true
+
+      - name: Swift version
+        run: swift --version
+
+      - name: Build (debug)
+        run: swift build
+
+      - name: Build dreader-mcp
+        run: swift build --product dreader-mcp
+
+      - name: Run tests
+        # 真实 Qwen 模型（DREADER_QWEN_REAL_TEST）与本地合订本
+        # （DREADER_REGRESSION_BOOK_ROOTS）依赖大体积 fixture，CI 不设，
+        # 相关用例按设计 XCTSkip；其余全量运行。
+        run: swift test 2>&1 | tee test-output.log
+
+      - name: Summarize test results
+        if: always()
+        run: |
+          echo "## Test summary" >> "$GITHUB_STEP_SUMMARY"
+          grep -E "Executed .* tests" test-output.log | tail -2 >> "$GITHUB_STEP_SUMMARY" || echo "未找到统计行" >> "$GITHUB_STEP_SUMMARY"
+          if grep -qE "with [1-9][0-9]* failures" test-output.log; then
+            echo ":x: 存在失败用例" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          echo ":white_check_mark: 0 失败" >> "$GITHUB_STEP_SUMMARY"
+
+  release-build:
+    name: Release build check
+    runs-on: macos-14
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode_16.4.app/Contents/Developer || true
+
+      - name: Build release
+        run: swift build -c release
+
+      # 打包脚本会生成本地 ad-hoc 签名的 DReader.app，验证脚本可执行。
+      - name: Package app bundle
+        run: ./build-app.sh
+
+      - name: Verify app bundle
+        run: |
+          test -x DReader.app/Contents/MacOS/DReader
+          plutil -lint DReader.app/Contents/Info.plist
+          codesign --verify --deep --strict DReader.app
