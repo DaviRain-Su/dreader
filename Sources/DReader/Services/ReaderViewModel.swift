@@ -400,7 +400,21 @@ final class ReaderViewModel: @unchecked Sendable {
         errorMessage = nil
 
         do {
-            var book = try await EPUBParser.shared.parse(fileURL: url)
+            var parseURL = url
+            if Self.isKindleStream(url) {
+                // MOBI/AZW3 → 标准 EPUB，然后走现有 EPUBParser 管线。
+                do {
+                    let parsed = try await Task.detached(priority: .userInitiated) {
+                        try Self.convertMOBIEPUB(from: url)
+                    }.value
+                    parseURL = parsed
+                } catch {
+                    isLoadingBook = false
+                    errorMessage = "《\(url.deletingPathExtension().lastPathComponent)》导入失败 — \(error.localizedDescription)"
+                    return
+                }
+            }
+            var book = try await EPUBParser.shared.parse(fileURL: parseURL)
             book.fileURL = try await Task.detached(priority: .userInitiated) {
                 try Self.persistShelfCopy(for: url)
             }.value
@@ -417,6 +431,38 @@ final class ReaderViewModel: @unchecked Sendable {
             let fileName = url.deletingPathExtension().lastPathComponent
             self.errorMessage = "《\(fileName)》导入失败 — \(error.localizedDescription)"
         }
+    }
+
+    /// 文件点选项在打开面板里的类型集合。
+    static var importableContentTypes: [UTType] {
+        var types: [UTType?] = [UTType(filenameExtension: "epub"),
+                                UTType(filenameExtension: "mobi"),
+                                UTType(filenameExtension: "azw3")]
+        return types.compactMap { $0 } + [UTType.data]
+    }
+
+    /// 扩展名或 PalmDB 魔数（"BOOK"/"TEXt"，PDB 头 0x3C 偏移处）判定 Kindle 流文件。
+    static func isKindleStream(_ url: URL) -> Bool {
+        let ext = url.pathExtension.lowercased()
+        if ["mobi", "azw3", "azw", "prc"].contains(ext) { return true }
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return false }
+        defer { try? handle.close() }
+        try? handle.seek(toOffset: 0x3C)
+        guard let header = try? handle.read(upToCount: 8), header.count >= 4 else { return false }
+        return header.prefix(4) == Data("BOOK".utf8) || header.prefix(4) == Data("TEXt".utf8)
+    }
+
+    /// 解析 MOBI → 组装标准 EPUB，输出到 Application Support 的转换缓存目录。
+    static func convertMOBIEPUB(from url: URL) throws -> URL {
+        let parsed = try MOBIParser.parse(fileURL: url)
+        let stem = url.deletingPathExtension().lastPathComponent
+            .replacingOccurrences(of: "/", with: "-")
+        let root = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+            .appendingPathComponent("DReader/ConvertedBooks", isDirectory: true)
+        var output = root.appendingPathComponent("\(stem).epub")
+        if output.path == url.path { output = root.appendingPathComponent("\(stem)-converted.epub") }
+        try MOBIEpubAssembler.assemble(book: parsed, outputURL: output)
+        return output
     }
 
     @discardableResult
@@ -1263,10 +1309,8 @@ final class ReaderViewModel: @unchecked Sendable {
     @MainActor
     func showImportOpenPanel() {
         let panel = NSOpenPanel()
-        panel.title = "选择 EPUB 电子书"
-        panel.allowedContentTypes = [
-            UTType(filenameExtension: "epub") ?? .data
-        ]
+        panel.title = "选择电子书"
+        panel.allowedContentTypes = Self.importableContentTypes
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
         panel.canCreateDirectories = false
