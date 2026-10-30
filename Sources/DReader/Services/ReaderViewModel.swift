@@ -401,11 +401,14 @@ final class ReaderViewModel: @unchecked Sendable {
 
         do {
             var parseURL = url
-            if Self.isKindleStream(url) {
-                // MOBI/AZW3 → 标准 EPUB，然后走现有 EPUBParser 管线。
+            let needsConversion = Self.isKindleStream(url) || MarkdownImporter.isMarkdown(fileURL: url)
+            if needsConversion {
+                let convert: @Sendable (URL) throws -> URL = MarkdownImporter.isMarkdown(fileURL: url)
+                    ? Self.convertMarkdownEPUB
+                    : Self.convertMOBIEPUB
                 do {
                     let parsed = try await Task.detached(priority: .userInitiated) {
-                        try Self.convertMOBIEPUB(from: url)
+                        try convert(url)
                     }.value
                     parseURL = parsed
                 } catch {
@@ -433,12 +436,10 @@ final class ReaderViewModel: @unchecked Sendable {
         }
     }
 
-    /// 文件点选项在打开面板里的类型集合。
+    /// 文件点选项在打开面板里的类型集合（EPUB / Kindle 流 / Markdown）。
     static var importableContentTypes: [UTType] {
-        var types: [UTType?] = [UTType(filenameExtension: "epub"),
-                                UTType(filenameExtension: "mobi"),
-                                UTType(filenameExtension: "azw3")]
-        return types.compactMap { $0 } + [UTType.data]
+        let extensions = ["epub", "mobi", "azw3", "md", "markdown"]
+        return extensions.compactMap { UTType(filenameExtension: $0) } + [UTType.data]
     }
 
     /// 扩展名或 PalmDB 魔数（"BOOK"/"TEXt"，PDB 头 0x3C 偏移处）判定 Kindle 流文件。
@@ -455,13 +456,24 @@ final class ReaderViewModel: @unchecked Sendable {
     /// 解析 MOBI → 组装标准 EPUB，输出到 Application Support 的转换缓存目录。
     static func convertMOBIEPUB(from url: URL) throws -> URL {
         let parsed = try MOBIParser.parse(fileURL: url)
+        return try convertParsedToEPUB(parsed, from: url)
+    }
+
+    /// Markdown → 组装标准 EPUB（标题切章、frontmatter 提元数据）。
+    static func convertMarkdownEPUB(from url: URL) throws -> URL {
+        let parsed = try MarkdownImporter.parse(fileURL: url)
+        return try convertParsedToEPUB(parsed, from: url)
+    }
+
+    /// 解析产物 → ConvertedBooks 里的 EPUB；重导入覆盖转换件（幂等）。
+    private static func convertParsedToEPUB(_ parsed: ParsedBook, from url: URL) throws -> URL {
         let stem = url.deletingPathExtension().lastPathComponent
             .replacingOccurrences(of: "/", with: "-")
         let root = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
             .appendingPathComponent("DReader/ConvertedBooks", isDirectory: true)
         var output = root.appendingPathComponent("\(stem).epub")
         if output.path == url.path { output = root.appendingPathComponent("\(stem)-converted.epub") }
-        try MOBIEpubAssembler.assemble(book: parsed, outputURL: output)
+        try EpubAssembler.assemble(book: parsed, outputURL: output)
         return output
     }
 

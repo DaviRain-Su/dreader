@@ -12,6 +12,12 @@ let package = Package(
     ],
     dependencies: [],
     targets: [
+        // Vendored cmark 0.31.1（BSD-2，https://github.com/commonmark/cmark），MD→HTML 参考实现。
+        .target(
+            name: "Cmark",
+            path: "Vendor/Cmark",
+            publicHeadersPath: "."
+        ),
         // Vendored libmobi 0.12 (LGPL-3.0-or-later, https://github.com/bfabiszewski/libmobi)。
         // 静态链接：仓库附带 COPYING-LGPL 与版本说明，源码可得即满足其重链接义务。
         .target(
@@ -21,7 +27,7 @@ let package = Package(
         ),
         .executableTarget(
             name: "DReader",
-            dependencies: ["Cmobi"],
+            dependencies: ["Cmobi", "Cmark"],
             path: "Sources/DReader"
         ),
         .executableTarget(

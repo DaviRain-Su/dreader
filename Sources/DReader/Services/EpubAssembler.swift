@@ -8,10 +8,10 @@ import Foundation
 /// - OEBPS/content.opf、OEBPS/toc.ncx
 /// - OEBPS/cNNNNN.xhtml（各章正文）
 /// - OEBPS/aNNNNN.ext（图片/CSS/字体资源，文件名沿用 libmobi 的 resource uid）
-enum MOBIEpubAssembler {
+enum EpubAssembler {
     /// 并发导入竞态安全：每个导入一个独立 staging 目录。
     @discardableResult
-    static func assemble(book: MOBIParsedBook, outputURL: URL) throws -> URL {
+    static func assemble(book: ParsedBook, outputURL: URL) throws -> URL {
         let fm = FileManager.default
         let staging = fm.temporaryDirectory
             .appendingPathComponent("DReaderMobiImport-\(UUID().uuidString)", isDirectory: true)
@@ -194,7 +194,7 @@ enum MOBIEpubAssembler {
         try process.run()
         process.waitUntilExit()
         guard process.terminationStatus == 0 else {
-            throw NSError(domain: "MOBIEpubAssembler", code: Int(process.terminationStatus),
+            throw NSError(domain: "EpubAssembler", code: Int(process.terminationStatus),
                           userInfo: [NSLocalizedDescriptionKey: "\(executable) failed"])
         }
     }

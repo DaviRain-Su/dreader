@@ -4,7 +4,7 @@ import Cmobi
 // MARK: - MOBI 数据模型
 
 /// 一个从书内数据接出来的二进制资源；uid 与 libmobi 重建引用 `resource%05u` / `flow%05u` 对齐。
-struct MOBIResource {
+struct BookResource {
     let uid: Int
     /// 不带点，如 jpg/png/css/otf。
     let ext: String
@@ -14,20 +14,20 @@ struct MOBIResource {
 }
 
 /// 一个章的正文片段。KF8 为完整文档字节流；KF7 为重建 HTML 的 `<body>` 内部片段。
-struct MOBIChapterData {
+struct BookChapterData {
     let title: String?
     let utf8Fragment: Data
     /// true：片段是完整文档（含 <html> 外壳），组装层不再包壳。
     let isWholeDocument: Bool
 }
 
-struct MOBIParsedBook {
+struct ParsedBook {
     let title: String
     let author: String
     let language: String
-    let chapters: [MOBIChapterData]
+    let chapters: [BookChapterData]
     /// key 为 resource uid。
-    let resources: [Int: MOBIResource]
+    let resources: [Int: BookResource]
     /// 封面资源 uid（可能为 nil：无图 MOBI）。
     let coverUID: Int?
     /// 正文流的 CSS 资源 uid（EPUB 内会连进每章 <head>）。
@@ -60,7 +60,7 @@ enum MOBIParseError: LocalizedError {
 /// - KF8：NCX posfid 落在 skel 段内，part 序号即 markup part 序号；
 /// - 无 NCX 退回 `<mbp:pagebreak/>` 切分；再无则单章。
 enum MOBIParser {
-    static func parse(fileURL: URL) throws -> MOBIParsedBook {
+    static func parse(fileURL: URL) throws -> ParsedBook {
         guard FileManager.default.fileExists(atPath: fileURL.path) else {
             throw MOBIParseError.fileNotFound
         }
@@ -90,7 +90,7 @@ enum MOBIParser {
         let author = readEXTH(m: m, tag: MOBIExthTag(rawValue: 100)) ?? "未知作者"
         let language = readEXTH(m: m, tag: MOBIExthTag(rawValue: 524)) ?? nil
 
-        var resources: [Int: MOBIResource] = [:]
+        var resources: [Int: BookResource] = [:]
         var cssUIDs: [Int] = []
         var coverUID: Int?
         var firstImageSeen = false
@@ -111,7 +111,7 @@ enum MOBIParser {
         guard !chapters.isEmpty else {
             throw MOBIParseError.rawmlFailed("未找到正文内容")
         }
-        return MOBIParsedBook(title: title, author: author, language: language ?? "zh",
+        return ParsedBook(title: title, author: author, language: language ?? "zh",
                               chapters: chapters, resources: resources, coverUID: coverUID, cssUIDs: cssUIDs)
     }
 
@@ -136,7 +136,7 @@ enum MOBIParser {
 
     // MARK: 资源
 
-    private static func makeResource(from part: UnsafeMutablePointer<MOBIPart>) -> MOBIResource? {
+    private static func makeResource(from part: UnsafeMutablePointer<MOBIPart>) -> BookResource? {
         guard let meta = fileMeta(part.pointee.type) else { return nil }
         let size = Int(part.pointee.size)
         guard size > 0, let data = part.pointee.data else { return nil }
@@ -147,7 +147,7 @@ enum MOBIParser {
         default:
             break
         }
-        return MOBIResource(uid: Int(part.pointee.uid), ext: meta.ext, mediaType: meta.mime,
+        return BookResource(uid: Int(part.pointee.uid), ext: meta.ext, mediaType: meta.mime,
                             data: Data(bytes: data, count: size),
                             isImage: ["jpg", "jpeg", "png", "gif", "bmp", "svg"].contains(meta.ext))
     }
@@ -179,72 +179,16 @@ enum MOBIParser {
 
     // MARK: 章节切分
 
-    private static func buildChapters(rawml: UnsafeMutablePointer<MOBIRawml>, fallbackTitle: String) -> [MOBIChapterData] {
+    private static func buildChapters(rawml: UnsafeMutablePointer<MOBIRawml>, fallbackTitle: String) -> [BookChapterData] {
         let toc = readNCX(rawml: rawml)
         let chapters = mobi_is_rawml_kf8(rawml)
             ? kf8Chapters(rawml: rawml, toc: toc)
             : kf7Chapters(rawml: rawml, toc: toc, fallbackTitle: fallbackTitle)
-        return splitOversizedChapters(chapters)
+        return ChapterSplitter.split(chapters)
     }
 
-    // MARK: 超长章切分
-
-    /// 无 NCX 的书常把全书挤成一章（实测 1MB+），WKWebView 装载/注入/划线标定都对
-    /// 巨型 DOM 跑，打开与滚动都会明显卡顿。超过上限的章按标签边界切成小段。
-    private static let maxChapterBytes = 200_000
-    private static let targetChunkBytes = 120_000
-
-    private static func splitOversizedChapters(_ chapters: [MOBIChapterData]) -> [MOBIChapterData] {
-        guard chapters.contains(where: { $0.utf8Fragment.count > maxChapterBytes }) else { return chapters }
-        var result: [MOBIChapterData] = []
-        result.reserveCapacity(chapters.count + 8)
-        for chapter in chapters {
-            guard chapter.utf8Fragment.count > maxChapterBytes else {
-                result.append(chapter)
-                continue
-            }
-            let bytes = Array(chapter.utf8Fragment)
-            // Kafka 完整文档先剥到 body inner，切完的段都走 wrapFragment 路径。
-            let inner: (start: Int, end: Int)
-            if chapter.isWholeDocument {
-                inner = bodyInnerOf(bytes: bytes) ?? (0, bytes.count)
-            } else {
-                inner = (0, bytes.count)
-            }
-            var lower = inner.start
-            var first = true
-            while lower < inner.end {
-                let goal = min(lower + targetChunkBytes, inner.end)
-                let cut = goal >= inner.end ? inner.end : tagBoundaryNear(bytes: bytes, goal: goal)
-                let count = cut - lower
-                guard count > 0 else { lower = min(lower + targetChunkBytes, inner.end); continue }
-                result.append(MOBIChapterData(
-                    title: first ? chapter.title : nil,
-                    utf8Fragment: Data(bytes[lower..<cut]),
-                    isWholeDocument: false
-                ))
-                first = false
-                lower = cut
-            }
-        }
-        return result
-    }
-
-    /// 从 goal 向前（最多 40KB）找最近的标签边界 '>' 之后作为切点；找不到就在 goal 硬切。
-    private static func tagBoundaryNear(bytes: [UInt8], goal: Int, window: Int = 40_000) -> Int {
-        let floorIndex = max(1, goal - window)
-        var i = goal
-        while i >= floorIndex {
-            if bytes[i - 1] == UInt8(ascii: ">") {
-                return i
-            }
-            i -= 1
-        }
-        return goal
-    }
-
-    /// 对独立字节缓冲体的 body inner 定位（与 C 指针版 bodyInnerRange 同语义）。
-    private static func bodyInnerOf(bytes: [UInt8]) -> (start: Int, end: Int)? {
+    // bodyInnerRange 供 ChapterSplitter 做字节级 body 定位（独立缓冲体场景）。
+    static func bodyInnerOf(bytes: [UInt8]) -> (start: Int, end: Int)? {
         if bytes.isEmpty { return nil }
         return bytes.withUnsafeBufferPointer { buffer -> (start: Int, end: Int)? in
             guard let base = buffer.baseAddress else { return nil }
@@ -317,7 +261,7 @@ enum MOBIParser {
     /// KF8 章切分，对齐 mobi_get_offset_by_posoff：
     /// pos_fid 是 frag 数组序号；offset_in_part = frag.label(十进制) − skel[fileNr].position + pos_off；
     /// part 即 markup 第 file_nr 个 T_HTML part。
-    private static func kf8Chapters(rawml: UnsafeMutablePointer<MOBIRawml>, toc: [NcxEntry]) -> [MOBIChapterData] {
+    private static func kf8Chapters(rawml: UnsafeMutablePointer<MOBIRawml>, toc: [NcxEntry]) -> [BookChapterData] {
         var parts: [(uid: Int, base: UnsafePointer<UInt8>, size: Int)] = []
         var cursor = rawml.pointee.markup
         while let part = cursor {
@@ -343,24 +287,24 @@ enum MOBIParser {
             chapterPoints.append((partIndex, base, entry.title))
         }
 
-        var chapters: [MOBIChapterData] = []
+        var chapters: [BookChapterData] = []
         for (index, part) in parts.enumerated() {
             let points = chapterPoints
                 .filter { $0.partIndex == index && $0.offset > 0 && $0.offset < part.size }
                 .sorted { $0.offset < $1.offset }
             if points.isEmpty {
-                chapters.append(MOBIChapterData(title: nil, utf8Fragment: Data(UnsafeBufferPointer(start: part.base, count: part.size)), isWholeDocument: true))
+                chapters.append(BookChapterData(title: nil, utf8Fragment: Data(UnsafeBufferPointer(start: part.base, count: part.size)), isWholeDocument: true))
                 continue
             }
             var lower = 0
             for point in points where point.offset > lower {
                 if let fragment = midBytesFrom(base: part.base, size: part.size, from: lower, to: point.offset) {
-                    chapters.append(MOBIChapterData(title: point.title, utf8Fragment: fragment, isWholeDocument: true))
+                    chapters.append(BookChapterData(title: point.title, utf8Fragment: fragment, isWholeDocument: true))
                 }
                 lower = point.offset
             }
             if let tail = midBytesFrom(base: part.base, size: part.size, from: lower, to: part.size) {
-                chapters.append(MOBIChapterData(title: nil, utf8Fragment: tail, isWholeDocument: true))
+                chapters.append(BookChapterData(title: nil, utf8Fragment: tail, isWholeDocument: true))
             }
         }
         return chapters
@@ -418,7 +362,7 @@ enum MOBIParser {
     // MARK: KF7
 
     /// KF7：单 part HTML；优先 NCX filepos 切，退回 pagebreak，单章兜底。
-    private static func kf7Chapters(rawml: UnsafeMutablePointer<MOBIRawml>, toc: [NcxEntry], fallbackTitle: String) -> [MOBIChapterData] {
+    private static func kf7Chapters(rawml: UnsafeMutablePointer<MOBIRawml>, toc: [NcxEntry], fallbackTitle: String) -> [BookChapterData] {
         guard let firstPart = rawml.pointee.markup, firstPart.pointee.type == T_HTML,
               let data = firstPart.pointee.data, Int(firstPart.pointee.size) > 0 else {
             return []
@@ -437,17 +381,17 @@ enum MOBIParser {
                 }
                 return dict
             }()
-            var segments: [MOBIChapterData] = []
+            var segments: [BookChapterData] = []
             var lower = inner.start
             for cut in fileposs where cut > lower && cut < inner.end {
                 if let fragment = midBytesFrom(base: base, size: size, from: lower, to: cut) {
                     let title: String? = titlesByPos[cut] ?? nil
-                    segments.append(MOBIChapterData(title: title, utf8Fragment: fragment, isWholeDocument: false))
+                    segments.append(BookChapterData(title: title, utf8Fragment: fragment, isWholeDocument: false))
                 }
                 lower = cut
             }
             if let tail = midBytesFrom(base: base, size: size, from: lower, to: inner.end) {
-                segments.append(MOBIChapterData(title: nil, utf8Fragment: tail, isWholeDocument: false))
+                segments.append(BookChapterData(title: nil, utf8Fragment: tail, isWholeDocument: false))
             }
             if segments.count >= 2 {
                 return segments
@@ -471,13 +415,13 @@ enum MOBIParser {
                 }
                 .filter { !$0.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines).isEmpty }
             if pieces.count >= 2 {
-                return pieces.map { MOBIChapterData(title: nil, utf8Fragment: Data($0.utf8), isWholeDocument: false) }
+                return pieces.map { BookChapterData(title: nil, utf8Fragment: Data($0.utf8), isWholeDocument: false) }
             }
         }
 
         // 单章兜底。
         guard let whole = midBytesFrom(base: base, size: size, from: inner.start, to: inner.end) else { return [] }
-        return [MOBIChapterData(title: fallbackTitle, utf8Fragment: whole, isWholeDocument: false)]
+        return [BookChapterData(title: fallbackTitle, utf8Fragment: whole, isWholeDocument: false)]
     }
 
     // MARK: 字节工具

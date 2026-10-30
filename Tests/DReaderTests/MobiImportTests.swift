@@ -45,7 +45,7 @@ final class MobiImportTests: XCTestCase {
     func testAssembledEPUBReparsableByEPUBParser() async throws {
         let parsed = try MOBIParser.parse(fileURL: try fixture("sample-unicode-uncompressed"))
         let output = tempOutput()
-        try MOBIEpubAssembler.assemble(book: parsed, outputURL: output)
+        try EpubAssembler.assemble(book: parsed, outputURL: output)
         defer { try? FileManager.default.removeItem(at: output) }
         XCTAssertTrue(FileManager.default.fileExists(atPath: output.path))
 
@@ -91,7 +91,7 @@ final class MobiImportTests: XCTestCase {
             XCTAssertGreaterThan(parsed.title.count, 0, "\(path) 标题非空")
             XCTAssertGreaterThanOrEqual(parsed.chapters.count, 1, "\(path) 至少一章")
             let output = tempOutput()
-            try MOBIEpubAssembler.assemble(book: parsed, outputURL: output)
+            try EpubAssembler.assemble(book: parsed, outputURL: output)
             let t2 = DispatchTime.now()
             let book = try await EPUBParser.shared.parse(fileURL: output)
             let t3 = DispatchTime.now()
