@@ -275,19 +275,50 @@ final class ReaderSettings: @unchecked Sendable {
 
     // MARK: - 听书引擎（Read-Aloud）
 
-    /// 听书语音来源：Piper 本地神经网络（默认，离线）或 OpenAI 兼容 TTS API（在线大模型）
+    /// 默认是已在本机通过真实试听验证的 Qwen；Piper 保留为本地回退，AI 始终需显式选择。
     enum ReadAloudEngine: String, Codable, CaseIterable, Identifiable {
-        case piper = "Piper 本地语音（免费离线）"
+        case qwen = "Qwen 本地语音（自然中文）"
+        case piper = "Piper 本地语音（轻量回退）"
         case ai = "AI 大模型语音（在线拟人）"
         var id: String { rawValue }
+
+        var engine: ChapterReadAloudService.Engine {
+            switch self {
+            case .qwen: return .qwen
+            case .piper: return .piper
+            case .ai: return .ai
+            }
+        }
+
+        static func migrated(from raw: String?, migrationDone: Bool) -> ReadAloudEngine {
+            if raw == ReadAloudEngine.ai.rawValue { return .ai }
+            if migrationDone, let raw, let engine = ReadAloudEngine(rawValue: raw) { return engine }
+            return .qwen
+        }
+    }
+
+    enum QwenVoice: String, Codable, CaseIterable, Identifiable, Sendable {
+        case serena = "Serena · 温和女声"
+        case uncleFu = "Uncle_Fu · 成熟男声"
+        var id: String { rawValue }
+        var backendName: String { self == .serena ? "Serena" : "Uncle_Fu" }
     }
 
     var readAloudEngine: ReadAloudEngine = {
-        if let raw = UserDefaults.standard.string(forKey: "dreader.readaloud.engine"),
-           let e = ReadAloudEngine(rawValue: raw) { return e }
-        return .piper
+        let defaults = UserDefaults.standard
+        return ReadAloudEngine.migrated(
+            from: defaults.string(forKey: "dreader.readaloud.engine"),
+            migrationDone: defaults.bool(forKey: "dreader.readaloud.qwen_default_v1")
+        )
     }() {
         didSet { UserDefaults.standard.set(readAloudEngine.rawValue, forKey: "dreader.readaloud.engine") }
+    }
+
+    var qwenVoice: QwenVoice = {
+        UserDefaults.standard.string(forKey: "dreader.readaloud.qwen_voice")
+            .flatMap(QwenVoice.init(rawValue:)) ?? .serena
+    }() {
+        didSet { UserDefaults.standard.set(qwenVoice.rawValue, forKey: "dreader.readaloud.qwen_voice") }
     }
 
     /// OpenAI 兼容 /v1/audio/speech 端点（OpenAI、硅基流动等）
@@ -321,7 +352,13 @@ final class ReaderSettings: @unchecked Sendable {
     /// 记住每本书的竖排偏好（bookId → "1"/"0"），切书时恢复
     private static let verticalPrefsKey = "dreader.vertical_by_book"
 
-    init() {}
+    init() {
+        let key = "dreader.readaloud.qwen_default_v1"
+        if !UserDefaults.standard.bool(forKey: key) {
+            if readAloudEngine != .ai { readAloudEngine = .qwen }
+            UserDefaults.standard.set(true, forKey: key)
+        }
+    }
 
     // MARK: - Vertical Preference (per-book persistence)
 

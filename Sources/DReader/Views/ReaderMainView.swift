@@ -777,12 +777,14 @@ struct ReaderMainView: View {
             // Whole-Chapter Read Aloud (听书) with Right-Click Sleep Timer
             AppleToolbarButton(
                 icon: vm.readAloud.state == .playing ? "speaker.wave.3.fill" : (vm.readAloud.state == .paused ? "speaker.slash" : "headphones"),
-                title: vm.readAloud.state == .playing ? "暂停" : (vm.readAloud.state == .paused ? "继续" : "听书"),
+                title: vm.readAloud.state == .paused ? "继续" : (vm.readAloud.isPreparing ? "准备中" : (vm.readAloud.state == .playing ? "暂停" : "听书")),
                 isActive: vm.readAloud.state != .idle,
                 action: {
                     vm.toggleChapterReadAloud()
                 },
-                helpText: vm.readAloud.state == .playing ? "暂停整章朗读 (⌘+⇧+S)" : "开始整章连续朗读 (⌘+⇧+S)"
+                helpText: vm.readAloud.isPreparing && vm.readAloud.state == .playing
+                    ? "\(vm.readAloud.activeEngine.displayName) 正在加载模型并合成首段；点击可暂停"
+                    : (vm.readAloud.state == .playing ? "暂停整章朗读 (⌘+⇧+S) · \(vm.readAloud.activeEngine.displayName)" : "开始整章连续朗读 (⌘+⇧+S)")
             )
             .contextMenu {
                 Menu("定时关闭") {

@@ -482,4 +482,50 @@ final class ReadAloudRegressionTests: XCTestCase {
         players.players[0].finish()
         try await waitUntil { service.state == .idle }
     }
+
+    func testQwenFailureFallsBackOnlyToPiperWithoutAI() async throws {
+        let synth = Synthesizer()
+        let players = Players()
+        let service = makeService(synth, players: players, engine: .qwen)
+        defer { service.stop() }
+        service.start(bookId: UUID(), paragraphs: ["离线朗读失败回退"])
+        try await waitUntil { await synth.allRequests().count == 1 }
+        await synth.fail(0, message: "Qwen 不可用")
+        try await waitUntil { await synth.allRequests().count == 2 }
+        await synth.fail(1, message: "Piper 也不可用")
+        try await waitUntil { service.state == .idle }
+        let requests = await synth.allRequests()
+        XCTAssertEqual(requests.map(\.engine), [.qwen, .piper])
+        XCTAssertTrue(service.engineError?.contains("Qwen 不可用") == true)
+        XCTAssertTrue(service.engineError?.contains("Piper 也不可用") == true)
+        XCTAssertFalse(requests.contains { $0.engine == .ai }, "默认离线失败不得上传正文")
+    }
+
+    func testQwenChunksKeepDOMIDAcrossPlaybackAndPrefetch() async throws {
+        let synth = Synthesizer()
+        let players = Players()
+        let service = makeService(synth, players: players, engine: .qwen)
+        defer { service.stop() }
+        service.start(bookId: UUID(), segments: [
+            .init(id: 42, text: String(repeating: "朗读内容。", count: 50)),
+            .init(id: 43, text: "下一段正文"),
+        ])
+        try await waitUntil { await synth.allRequests().count == 1 }
+        XCTAssertEqual(service.currentSegmentID, 42)
+        XCTAssertTrue(service.isPreparing)
+        await synth.succeed(0)
+        try await waitUntil { players.players.count == 1 }
+        try await settleCallbacks()
+        XCTAssertFalse(service.isPreparing, "首个音频开始播放后应退出准备状态")
+        players.players[0].finish()
+        try await waitUntil { await synth.allRequests().count == 2 }
+        XCTAssertEqual(service.currentSegmentID, 42, "同一原段的短块不能改变跟读位置")
+        await synth.succeed(1)
+        try await waitUntil { players.players.count == 2 }
+        players.players[1].finish()
+        try await waitUntil { service.currentSegmentID == 43 }
+        let requests = await synth.allRequests()
+        XCTAssertTrue(requests.allSatisfy { $0.engine == .qwen })
+        XCTAssertEqual(requests.map(\.text).joined(), String(repeating: "朗读内容。", count: 50) + "下一段正文")
+    }
 }

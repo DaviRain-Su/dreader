@@ -2,9 +2,7 @@ import Foundation
 import AVFoundation
 
 /// Whole-chapter read-aloud (听书) service.
-/// 双引擎均为神经网络语音（系统 AVSpeechSynthesizer 已按用户要求移除）：
-/// - piper（默认）：本地开源 TTS（KOReader/Home Assistant 同款），首次自动下载 ~80MB 后永久离线
-/// - ai：OpenAI 兼容 /v1/audio/speech 在线大模型 TTS（硅基流动 CosyVoice2 等）
+/// 默认 Qwen 本地自然中文，Piper 仅作本地回退；AI 仅在用户明确选择时使用。
 @Observable
 final class ChapterReadAloudService: NSObject, @unchecked Sendable, AVAudioPlayerDelegate {
     enum PlaybackState: String {
@@ -12,11 +10,24 @@ final class ChapterReadAloudService: NSObject, @unchecked Sendable, AVAudioPlaye
     }
 
     enum Engine: String, Hashable, Sendable {
+        case qwen
         case piper
         case ai
 
-        var alternate: Engine { self == .piper ? .ai : .piper }
-        var displayName: String { self == .piper ? "Piper" : "AI 语音" }
+        var alternate: Engine {
+            switch self {
+            case .qwen: return .piper
+            case .piper: return .ai
+            case .ai: return .piper
+            }
+        }
+        var displayName: String {
+            switch self {
+            case .qwen: return "Qwen"
+            case .piper: return "Piper"
+            case .ai: return "AI 语音"
+            }
+        }
     }
 
     /// id 是当前已渲染章节中的正文定位标识，不是播放数组的下标。
@@ -52,7 +63,9 @@ final class ChapterReadAloudService: NSObject, @unchecked Sendable, AVAudioPlaye
     private(set) var currentBookId: UUID?
 
     /// 当前生效的引擎
-    private(set) var activeEngine: Engine = .piper
+    private(set) var activeEngine: Engine = .qwen
+    private(set) var isPreparing = false
+    private var fallbackEngines: [Engine] = [.piper, .ai]
     /// 当前段的失败原因；双引擎耗尽后停止并保留，供 UI 显示。
     private(set) var engineError: String?
 
@@ -117,7 +130,14 @@ final class ChapterReadAloudService: NSObject, @unchecked Sendable, AVAudioPlaye
         guard !self.paragraphs.isEmpty else { return }
         currentBookId = bookId
         state = .playing
-        activeEngine = preferredEngine ?? (settingsProvider().readAloudEngine == .ai ? .ai : .piper)
+        activeEngine = preferredEngine ?? settingsProvider().readAloudEngine.engine
+        fallbackEngines = activeEngine == .qwen ? [.qwen, .piper] : [activeEngine, activeEngine.alternate]
+        if activeEngine == .qwen {
+            self.paragraphs = QwenTextChunker.chunks(for: segments)
+            self.paragraphIndex = startSegmentID.flatMap { id in
+                self.paragraphs.firstIndex(where: { $0.id == id })
+            } ?? 0
+        }
         speakCurrentParagraph()
     }
 
@@ -167,6 +187,7 @@ final class ChapterReadAloudService: NSObject, @unchecked Sendable, AVAudioPlaye
         currentSegmentID = nil
         currentBookId = nil
         state = .idle
+        isPreparing = false
         engineError = nil
         cancelSleepTimer()
     }
@@ -223,6 +244,7 @@ final class ChapterReadAloudService: NSObject, @unchecked Sendable, AVAudioPlaye
         // 已经失败的音频缓存/任务不能在恢复播放时绕过引擎上限。
         guard failedAttempts[attempt] == nil else { return }
         let generation = playbackGeneration
+        isPreparing = true
         let synthesis = synthesisTask(for: attempt)
         currentAttempt = attempt
         speechTask = Task { @MainActor [weak self] in
@@ -257,6 +279,7 @@ final class ChapterReadAloudService: NSObject, @unchecked Sendable, AVAudioPlaye
             let settings = settingsProvider()
             synthesizeAudio = { engine, text, rate in
                 switch engine {
+                case .qwen: return try await QwenWorker.shared.synthesize(text: text, voice: settings.qwenVoice)
                 case .piper: return try await Self.piperSynthesize(text: text, rate: rate)
                 case .ai: return try await Self.synthesize(text: text, settings: settings)
                 }
@@ -278,17 +301,19 @@ final class ChapterReadAloudService: NSObject, @unchecked Sendable, AVAudioPlaye
         guard isCurrent(attempt, generation: generation), failedAttempts[attempt] == nil else { return }
         clearPlayback()
         failedAttempts[attempt] = "\(attempt.engine.displayName)：\(reason)"
-        engineError = [Engine.piper, .ai].compactMap {
+        engineError = [Engine.qwen, .piper, .ai].compactMap {
             failedAttempts[Attempt(sequence: attempt.sequence, engine: $0)]
         }.joined(separator: "；")
-        let alternate = Attempt(sequence: attempt.sequence, engine: attempt.engine.alternate)
-        guard failedAttempts[alternate] == nil else {
+        guard let next = fallbackEngines.first(where: {
+            $0 != attempt.engine && failedAttempts[Attempt(sequence: attempt.sequence, engine: $0)] == nil
+        }) else {
             let finalError = engineError
             stop()
             engineError = finalError
             return
         }
-        activeEngine = alternate.engine
+        activeEngine = next
+        isPreparing = false
         // paused 时只切换记录；resume 统一驱动下一次尝试。
         speakCurrentParagraph()
     }
@@ -305,6 +330,7 @@ final class ChapterReadAloudService: NSObject, @unchecked Sendable, AVAudioPlaye
 
     private func playAudio(_ data: Data, attempt: Attempt, generation: Int) {
         guard isCurrent(attempt, generation: generation), state == .playing else { return }
+        isPreparing = false
         let id = UUID()
         playbackID = id
         let completion: PlaybackCompletion = { [weak self] success in

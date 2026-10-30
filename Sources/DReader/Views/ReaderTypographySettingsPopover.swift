@@ -318,7 +318,9 @@ struct ReaderTypographySettingsPopover: View {
                     .frame(width: 190)
                 }
 
-                if settings.readAloudEngine == .piper {
+                if settings.readAloudEngine == .qwen {
+                    qwenStatusArea
+                } else if settings.readAloudEngine == .piper {
                     piperStatusArea
                 } else {
                     // AI 大模型语音：OpenAI 兼容 TTS 配置
@@ -428,6 +430,38 @@ struct ReaderTypographySettingsPopover: View {
         .padding(16)
         .frame(width: 310)
         .background(.ultraThinMaterial)
+    }
+
+    // MARK: - Qwen 本地引擎状态区
+
+    @ViewBuilder
+    private var qwenStatusArea: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(spacing: 6) {
+                Text("中文音色")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Picker("", selection: $settings.qwenVoice) {
+                    ForEach(ReaderSettings.QwenVoice.allCases) { voice in
+                        Text(voice.rawValue).tag(voice)
+                    }
+                }
+                .pickerStyle(.menu)
+                .frame(width: 178)
+            }
+            HStack(spacing: 5) {
+                Image(systemName: QwenInstallation.status() == .ready ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                    .foregroundStyle(QwenInstallation.status() == .ready ? .green : .orange)
+                Text(QwenInstallation.status().rawValue)
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(.secondary)
+            }
+            Text("Qwen 1.7B CustomVoice 6bit · 本地生成，不上传正文。首次加载需要数秒；不可用时仅回退 Piper。")
+                .font(.system(size: 9.5))
+                .foregroundStyle(.secondary.opacity(0.8))
+                .fixedSize(horizontal: false, vertical: true)
+        }
     }
 
     // MARK: - Piper 本地引擎状态区
