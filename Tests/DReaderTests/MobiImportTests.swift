@@ -85,12 +85,20 @@ final class MobiImportTests: XCTestCase {
         try XCTSkipUnless(!paths.isEmpty, "所列路径均不存在")
         for path in paths {
             let url = URL(fileURLWithPath: path)
+            let t0 = DispatchTime.now()
             let parsed = try MOBIParser.parse(fileURL: url)
+            let t1 = DispatchTime.now()
             XCTAssertGreaterThan(parsed.title.count, 0, "\(path) 标题非空")
             XCTAssertGreaterThanOrEqual(parsed.chapters.count, 1, "\(path) 至少一章")
             let output = tempOutput()
             try MOBIEpubAssembler.assemble(book: parsed, outputURL: output)
+            let t2 = DispatchTime.now()
             let book = try await EPUBParser.shared.parse(fileURL: output)
+            let t3 = DispatchTime.now()
+            func ms(_ a: DispatchTime, _ b: DispatchTime) -> Int {
+                Int(Double(b.uptimeNanoseconds - a.uptimeNanoseconds) / 1_000_000)
+            }
+            print("[perf] \(url.lastPathComponent): parse=\(ms(t0, t1))ms assemble=\(ms(t1, t2))ms reparse=\(ms(t2, t3))ms chapters=\(parsed.chapters.count)")
             XCTAssertEqual(book.title, parsed.title, "\(path) 书名一致性")
             XCTAssertGreaterThanOrEqual(book.chapters.count, 1, "\(path) 复解析出章")
             try? FileManager.default.removeItem(at: output)

@@ -181,10 +181,75 @@ enum MOBIParser {
 
     private static func buildChapters(rawml: UnsafeMutablePointer<MOBIRawml>, fallbackTitle: String) -> [MOBIChapterData] {
         let toc = readNCX(rawml: rawml)
-        if mobi_is_rawml_kf8(rawml) {
-            return kf8Chapters(rawml: rawml, toc: toc)
+        let chapters = mobi_is_rawml_kf8(rawml)
+            ? kf8Chapters(rawml: rawml, toc: toc)
+            : kf7Chapters(rawml: rawml, toc: toc, fallbackTitle: fallbackTitle)
+        return splitOversizedChapters(chapters)
+    }
+
+    // MARK: 超长章切分
+
+    /// 无 NCX 的书常把全书挤成一章（实测 1MB+），WKWebView 装载/注入/划线标定都对
+    /// 巨型 DOM 跑，打开与滚动都会明显卡顿。超过上限的章按标签边界切成小段。
+    private static let maxChapterBytes = 200_000
+    private static let targetChunkBytes = 120_000
+
+    private static func splitOversizedChapters(_ chapters: [MOBIChapterData]) -> [MOBIChapterData] {
+        guard chapters.contains(where: { $0.utf8Fragment.count > maxChapterBytes }) else { return chapters }
+        var result: [MOBIChapterData] = []
+        result.reserveCapacity(chapters.count + 8)
+        for chapter in chapters {
+            guard chapter.utf8Fragment.count > maxChapterBytes else {
+                result.append(chapter)
+                continue
+            }
+            let bytes = Array(chapter.utf8Fragment)
+            // Kafka 完整文档先剥到 body inner，切完的段都走 wrapFragment 路径。
+            let inner: (start: Int, end: Int)
+            if chapter.isWholeDocument {
+                inner = bodyInnerOf(bytes: bytes) ?? (0, bytes.count)
+            } else {
+                inner = (0, bytes.count)
+            }
+            var lower = inner.start
+            var first = true
+            while lower < inner.end {
+                let goal = min(lower + targetChunkBytes, inner.end)
+                let cut = goal >= inner.end ? inner.end : tagBoundaryNear(bytes: bytes, goal: goal)
+                let count = cut - lower
+                guard count > 0 else { lower = min(lower + targetChunkBytes, inner.end); continue }
+                result.append(MOBIChapterData(
+                    title: first ? chapter.title : nil,
+                    utf8Fragment: Data(bytes[lower..<cut]),
+                    isWholeDocument: false
+                ))
+                first = false
+                lower = cut
+            }
         }
-        return kf7Chapters(rawml: rawml, toc: toc, fallbackTitle: fallbackTitle)
+        return result
+    }
+
+    /// 从 goal 向前（最多 40KB）找最近的标签边界 '>' 之后作为切点；找不到就在 goal 硬切。
+    private static func tagBoundaryNear(bytes: [UInt8], goal: Int, window: Int = 40_000) -> Int {
+        let floorIndex = max(1, goal - window)
+        var i = goal
+        while i >= floorIndex {
+            if bytes[i - 1] == UInt8(ascii: ">") {
+                return i
+            }
+            i -= 1
+        }
+        return goal
+    }
+
+    /// 对独立字节缓冲体的 body inner 定位（与 C 指针版 bodyInnerRange 同语义）。
+    private static func bodyInnerOf(bytes: [UInt8]) -> (start: Int, end: Int)? {
+        if bytes.isEmpty { return nil }
+        return bytes.withUnsafeBufferPointer { buffer -> (start: Int, end: Int)? in
+            guard let base = buffer.baseAddress else { return nil }
+            return bodyInnerRange(base: base, size: buffer.count)
+        }
     }
 
     private struct NcxEntry {
