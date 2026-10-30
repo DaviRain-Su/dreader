@@ -24,6 +24,17 @@ final class CoverImageCache: @unchecked Sendable {
         cache.object(forKey: cacheKey(for: url) as NSString)
     }
 
+    /// async 入口：内部仍走 loadImage 回调；回调已标注 @MainActor，
+    /// NSImage 在主 actor 闭包内交接，Swift 6.0 sending 检查可通过。
+    @MainActor
+    func image(for url: URL) async -> NSImage? {
+        await withCheckedContinuation { continuation in
+            loadImage(for: url) { image in
+                continuation.resume(returning: image)
+            }
+        }
+    }
+
     @MainActor
     func loadImage(for url: URL, completion: @escaping @MainActor @Sendable (NSImage?) -> Void) {
         let key = cacheKey(for: url)

@@ -119,11 +119,8 @@ struct BookshelfBookDetailView: View {
         .task(id: book.coverImageURL) {
             cover = nil
             guard let url = book.coverImageURL else { return }
-            let image = await withCheckedContinuation { continuation in
-                CoverImageCache.shared.loadImage(for: url) { image in
-                    continuation.resume(returning: image)
-                }
-            }
+            // 同 BookshelfGalleryBookView：经 CoverImageCache.image(for:) 异步入口。
+            let image = await CoverImageCache.shared.image(for: url)
             guard !Task.isCancelled else { return }
             cover = image
         }

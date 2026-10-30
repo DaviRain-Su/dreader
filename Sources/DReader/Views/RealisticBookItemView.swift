@@ -238,11 +238,7 @@ struct RealisticBookItemView: View {
         .task(id: book.coverImageURL) {
             loadedCover = nil
             guard let url = book.coverImageURL else { return }
-            let image = await withCheckedContinuation { continuation in
-                CoverImageCache.shared.loadImage(for: url) { image in
-                    continuation.resume(returning: image)
-                }
-            }
+            let image = await CoverImageCache.shared.image(for: url)
             guard !Task.isCancelled else { return }
             loadedCover = image
         }

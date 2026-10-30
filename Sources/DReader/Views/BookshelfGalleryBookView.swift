@@ -85,11 +85,9 @@ struct BookshelfGalleryBookView: View {
         .task(id: book.coverImageURL) {
             loadedCover = nil
             guard let url = book.coverImageURL else { return }
-            let image = await withCheckedContinuation { continuation in
-                CoverImageCache.shared.loadImage(for: url) { image in
-                    continuation.resume(returning: image)
-                }
-            }
+            // loadImage 回调标注 @MainActor；经 CoverImageCache.image(for:) 异步入口，
+            // NSImage 在主 actor 闭包内交接，避免 Swift 6.0 的 sending 检查。
+            let image = await CoverImageCache.shared.image(for: url)
             guard !Task.isCancelled else { return }
             loadedCover = image
         }
