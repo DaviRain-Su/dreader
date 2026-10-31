@@ -676,6 +676,9 @@ final class ReaderViewModel: @unchecked Sendable {
         marginNoteChapterKey = payload.chapterKey
         var rects: [UUID: CGRect] = [:]
         for item in payload.items {
+            // 拍板语义：页边只显示有思考的划线（note 非空）；纯划线不出壳卡
+            guard let highlight = highlights.first(where: { $0.id == item.id }),
+                  !(highlight.note?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true) else { continue }
             if let anchor = MarginNotesLayout.resolveAnchor(frags: item.frags, viewportHeight: payload.viewport.height) {
                 rects[item.id] = anchor
             }
