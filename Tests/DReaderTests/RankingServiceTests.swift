@@ -192,6 +192,18 @@ final class RankingServiceTests: XCTestCase {
             } else {
                 XCTFail("豆瓣条目缺外链：\(book.title)")
             }
+            // v2:封面直链(m 尺码)与 ISBN
+            guard let cover = book.coverURL else {
+                XCTFail("豆瓣条目缺封面：\(book.title)")
+                continue
+            }
+            XCTAssertTrue(cover.host?.contains("doubanio") == true, "\(book.title) 封面 host 异常")
+            XCTAssertTrue(cover.absoluteString.contains("/view/subject/m/"),
+                          "\(book.title) 封面非 m 尺码")
+            if let isbn = book.isbn {
+                XCTAssertTrue((10...13).contains(isbn.count) && Int(isbn) != nil,
+                              "ISBN 异常：\(book.title) \(isbn)")
+            }
         }
         // 头部钉住：榜单招牌前三仍是这些书（快照换版时提醒校对）
         XCTAssertEqual(doubanTop250[0].title, "红楼梦")
@@ -221,6 +233,17 @@ final class RankingServiceTests: XCTestCase {
             XCTAssertNotNil(RankingsRegistry.staticBooks(catalogID: catalog.id),
                             "目录 \(catalog.id) 没有对应静态数据")
         }
+        // 封面覆盖表的键都必须落在奖项书目里(防止生成脚本错键静默失落)
+        let allCurated = Set((nobelWorldClassics + bookerWinners + pulitzerFictionWinners).map(\.id))
+        for kid in RankingCoverOverrides.ids.keys {
+            XCTAssertTrue(allCurated.contains(kid), "覆盖表键不存在于奖项书目:\(kid)")
+        }
+        // 奖项榜 89% 以上条款有封面(gutenberg/OL 覆盖;缺的以字牌兜底)
+        let withCover = (nobelWorldClassics + bookerWinners + pulitzerFictionWinners)
+            .filter { $0.coverURL != nil }.count
+        let total = nobelWorldClassics.count + bookerWinners.count + pulitzerFictionWinners.count
+        XCTAssertGreaterThan(Double(withCover) / Double(total), 0.85,
+                             "奖项榜封面覆盖率不足:\(withCover)/\(total)")
     }
 
     // MARK: - TTL 与 slug

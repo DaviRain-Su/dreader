@@ -679,7 +679,13 @@ struct RankingsDirectoryView: View {
 
     @ViewBuilder
     private func cover(_ book: RankingBook) -> some View {
-        if let url = book.displayCoverURL {
+        let url = book.displayCoverURL
+        if let url, url.host?.contains("doubanio") == true {
+            // 豆瓣 CDN 拒绝无 Referer 直连(418),AsyncImage 不可配头 → 走专用加载器
+            DoubanCoverImage(url: url) {
+                coverPlaceholder(book)
+            }
+        } else if let url {
             AsyncImage(url: url) { phase in
                 if let image = phase.image {
                     image.resizable().scaledToFill()
@@ -761,7 +767,8 @@ struct RankingsDirectoryView: View {
                         book.readersText,
                         book.year.map { "\($0) 年" },
                         book.honor,
-                        book.language == .mixed ? nil : book.language.badgeText
+                        book.language == .mixed ? nil : book.language.badgeText,
+                        book.isbn.map { "ISBN \($0)" }
                     ].compactMap { $0 }
                     if !chips.isEmpty {
                         FlowLayoutChips(items: chips, onSelect: { _ in })
@@ -921,5 +928,52 @@ struct RankingsDirectoryView: View {
             )
         }
         .buttonStyle(.plain)
+    }
+}
+
+/// 豆瓣 CDN(doubanio)封面加载:直连必须带 book.douban.com Referer(否则 418),
+/// 而 AsyncImage 无法配置请求头 → 自管 URLSession + 内存缓存。
+/// 其余来源(微信/gutenberg/Open Library)仍走 AsyncImage。
+@MainActor
+private enum DoubanCoverContext {
+    static let cache = NSCache<NSURL, NSImage>()
+    static let session: URLSession = {
+        let cfg = URLSessionConfiguration.ephemeral
+        cfg.httpAdditionalHeaders = [
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36",
+            "Referer": "https://book.douban.com/"
+        ]
+        cfg.timeoutIntervalForRequest = 20
+        cfg.waitsForConnectivity = false
+        return URLSession(configuration: cfg)
+    }()
+}
+
+private struct DoubanCoverImage<Placeholder: View>: View {
+    let url: URL
+    @ViewBuilder let placeholder: () -> Placeholder
+
+    @State private var image: NSImage?
+
+    var body: some View {
+        Group {
+            if let image {
+                Image(nsImage: image).resizable().scaledToFill()
+            } else {
+                placeholder()
+            }
+        }
+        .task(id: url) {
+            if let hit = DoubanCoverContext.cache.object(forKey: url as NSURL) {
+                image = hit
+                return
+            }
+            guard let (data, resp) = try? await DoubanCoverContext.session.data(from: url),
+                  (200..<300).contains((resp as? HTTPURLResponse)?.statusCode ?? 0),
+                  let img = NSImage(data: data)
+            else { return }
+            DoubanCoverContext.cache.setObject(img, forKey: url as NSURL)
+            image = img
+        }
     }
 }

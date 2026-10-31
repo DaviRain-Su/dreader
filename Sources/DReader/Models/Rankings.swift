@@ -77,6 +77,7 @@ struct RankingBook: Identifiable, Hashable, Codable, Sendable {
     var honor: String? = nil            // 奖项信息，e.g. "诺贝尔文学奖 1958"
     var tag: String? = nil              // 短标签，e.g. "长篇小说"
     var tintColors: [String]? = nil     // 无封面字牌渐变色对（hex）
+    var isbn: String? = nil             // 物书 ISBN（豆瓣快照带；仅浏览/暂不可入架的条目给读者留检索方向）
 
     /// 微信 CDN 的 s_ 缩略封面换 t9_ 高清
     var displayCoverURL: URL? {

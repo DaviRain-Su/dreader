@@ -55,9 +55,10 @@ private func curatedBook(
     RankingBook(
         id: id, catalogID: catalogID, rank: rank, title: title, author: author,
         rating: nil, readersCount: nil, language: language,
-        coverURL: gutenbergID.map { gid in
-            URL(string: "https://www.gutenberg.org/cache/epub/\(gid)/pg\(gid).cover.medium.jpg")
-        } ?? nil,
+        coverURL: RankingCoverOverrides.ids[id]
+            ?? gutenbergID.map { gid in
+                URL(string: "https://www.gutenberg.org/cache/epub/\(gid)/pg\(gid).cover.medium.jpg")
+            } ?? nil,
         summary: nil, year: year, externalURL: externalURL,
         wereadBookId: nil, gutenbergID: gutenbergID,
         honor: honor, tag: nil, tintColors: nil
