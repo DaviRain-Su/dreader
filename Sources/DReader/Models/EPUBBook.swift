@@ -109,6 +109,10 @@ struct Highlight: Identifiable, Codable, Hashable, Sendable {
     var colorHex: String
     let createdAt: Date
     var note: String?
+    /// 划线时的选区前后文快照(各 ~24 字符):重现/重排后按前缀尾匹配消歧同文本多处,
+    /// 参考经典划线锚定的 textSnapshot+重锚设计;旧记录为 nil
+    var prefix: String?
+    var suffix: String?
     var updatedAt: Date?
     var source: String? // "wechat_read" or nil (local)
     var wechatBookId: String?
@@ -136,6 +140,8 @@ struct Highlight: Identifiable, Codable, Hashable, Sendable {
         colorHex: String = "#FFE066",
         createdAt: Date = Date(),
         note: String? = nil,
+        prefix: String? = nil,
+        suffix: String? = nil,
         updatedAt: Date? = nil,
         source: String? = nil,
         wechatBookId: String? = nil,
@@ -153,6 +159,8 @@ struct Highlight: Identifiable, Codable, Hashable, Sendable {
         self.colorHex = colorHex
         self.createdAt = createdAt
         self.note = note
+        self.prefix = prefix
+        self.suffix = suffix
         self.updatedAt = updatedAt
         self.source = source
         self.wechatBookId = wechatBookId
@@ -164,6 +172,7 @@ struct Highlight: Identifiable, Codable, Hashable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case id, bookId, bookTitle, chapterIndex, chapterTitle, text, colorHex, createdAt, note, updatedAt
+        case prefix, suffix
         case source, wechatBookId, wechatBookmarkId, wechatAuthor
         case isNoteLocallyEdited, isColorLocallyEdited
     }

@@ -258,6 +258,37 @@ final class ReaderInteractionTests: XCTestCase {
         XCTAssertEqual(found, true)
     }
 
+    /// 同文本在多处出现时,按划线快照的前后文把 mark 放回各自的段落(而非全部落第一处)
+    func testRestoreHighlightsDisambiguateByContextSnapshot() async throws {
+        try await loadReaderHTML(
+            "<p>甲前文重复句。</p><p>乙前文重复句。</p><p>丙前文重复句。</p>")
+        // 三条划线同文本,前缀不同(划线时各自记录的 ~24 字前文)
+        _ = try await evaluate("""
+            window.dreaderRestoreHighlights([
+                {id:'h1', text:'重复句。', colorHex:'#FFE066', note:'', prefix:'乙前文', suffix:''},
+                {id:'h2', text:'重复句。', colorHex:'#FFE066', note:'', prefix:'丙前文', suffix:''},
+                {id:'h3', text:'重复句。', colorHex:'#FFE066', note:'', suffix:''}
+            ]); true
+            """)
+        let placements = try await evaluate("""
+            JSON.stringify(Array.from(document.querySelectorAll('mark[data-id]')).map(m => {
+                const row = m.closest('p[data-dreader-para]');
+                return { id: m.getAttribute('data-id'), para: row ? row.getAttribute('data-dreader-para') : null };
+            }))
+            """) as? String
+        guard let placements,
+              let data = placements.data(using: .utf8),
+              let rows = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
+            return XCTFail("划线位置解析失败")
+        }
+        func para(_ id: String) -> String { rows.first { $0["id"] as? String == id }?["para"] as? String ?? "missing" }
+        XCTAssertEqual(para("h1"), "1", "前缀『乙前文』的划线必须落在第二段")
+        XCTAssertEqual(para("h2"), "2", "前缀『丙前文』的划线必须落在第三段")
+        XCTAssertEqual(para("h3"), "0", "无前缀的划线保持旧行为落第一处")
+        // 三条都在,没有互相覆盖漏标
+        XCTAssertEqual(rows.count, 3)
+    }
+
     func testBookChapterLinkUsesNativeNavigation() async throws {
         try await loadFixture()
         try "<html><body>目标章节</body></html>".write(to: directory.appendingPathComponent("second.xhtml"), atomically: true, encoding: .utf8)

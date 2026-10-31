@@ -9,6 +9,9 @@ struct SelectionInfo: Equatable, Sendable {
     let bottomY: CGFloat
     let width: CGFloat
     let height: CGFloat
+    /// 选区前后各 ~24 字符(JS 端从所在文本节点截取):恢复划线时消歧同文本多处
+    var prefix: String?
+    var suffix: String?
 }
 
 /// Active highlight card (when clicking an existing highlight)

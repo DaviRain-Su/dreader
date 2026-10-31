@@ -485,12 +485,15 @@ struct EPUBWebView: NSViewRepresentable {
         func restoreHighlightsInDOM(_ highlights: [Highlight]) {
             guard let webView = webView, !highlights.isEmpty else { return }
             let items: [[String: Any]] = highlights.map { h in
-                [
+                var item: [String: Any] = [
                     "id": h.id.uuidString,
                     "text": h.text,
                     "colorHex": h.colorHex,
                     "note": h.note ?? ""
                 ]
+                if let prefix = h.prefix, !prefix.isEmpty { item["prefix"] = prefix }
+                if let suffix = h.suffix, !suffix.isEmpty { item["suffix"] = suffix }
+                return item
             }
             if let data = try? JSONSerialization.data(withJSONObject: items),
                let jsonString = String(data: data, encoding: .utf8) {
@@ -976,7 +979,9 @@ struct EPUBWebView: NSViewRepresentable {
                         y: CGFloat(y),
                         bottomY: CGFloat(bottomY),
                         width: CGFloat(width),
-                        height: CGFloat(height)
+                        height: CGFloat(height),
+                        prefix: body["contextPrefix"] as? String,
+                        suffix: body["contextSuffix"] as? String
                     )
                 } else if type == "clear" {
                     self.parent.selectionManager.activeSelection = nil

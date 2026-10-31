@@ -1202,6 +1202,26 @@ struct EPUBThemeInjector {
             if (window.dreaderReaderReady) return;
             let lastSelectedText = '';
 
+            // 选区前后文快照(各 ~24 字符,起点/终点所在文本节点内截取):
+            // 存进划线记录,重排/重开后按「前缀尾匹配」把同文本多处划线放回各自位置
+            function textContextAroundRange(range) {
+                function sliceAround(node, offset, backward) {
+                    const s = (node && node.nodeValue) ? node.nodeValue : '';
+                    const L = 24;
+                    return backward ? s.slice(Math.max(0, offset - L), offset)
+                                    : s.slice(offset, Math.min(s.length, offset + L));
+                }
+                if (!range
+                    || range.startContainer.nodeType !== 3
+                    || range.endContainer.nodeType !== 3) {
+                    return { prefix: '', suffix: '' };
+                }
+                return {
+                    prefix: sliceAround(range.startContainer, range.startOffset, true) || '',
+                    suffix: sliceAround(range.endContainer, range.endOffset, false) || ''
+                };
+            }
+
             function notifySelection() {
                 const sel = window.getSelection();
                 if (!sel || sel.isCollapsed || sel.rangeCount === 0) {
@@ -1222,6 +1242,7 @@ struct EPUBThemeInjector {
                 lastSelectedText = text;
                 const range = sel.getRangeAt(0);
                 const rect = range.getBoundingClientRect();
+                const context = textContextAroundRange(range);
 
                 if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.selectionBridge) {
                     window.webkit.messageHandlers.selectionBridge.postMessage({
@@ -1231,7 +1252,9 @@ struct EPUBThemeInjector {
                         y: rect.y,
                         bottomY: rect.bottom,
                         width: rect.width,
-                        height: rect.height
+                        height: rect.height,
+                        contextPrefix: context.prefix,
+                        contextSuffix: context.suffix
                     });
                 }
             }
@@ -1649,7 +1672,7 @@ struct EPUBThemeInjector {
             };
 
             // Highlight arbitrary text in the rendered DOM (Robust matching for reopening / switching)
-            window.dreaderHighlightTextInDOM = function(searchText, id, colorHex, note) {
+            window.dreaderHighlightTextInDOM = function(searchText, id, colorHex, note, contextPrefix, contextSuffix) {
                 if (!searchText) return;
                 const bodyEl = document.getElementById('dreader-chapter-body') || document.body;
                 if (document.querySelector('mark[data-id="' + id + '"]')) return;
@@ -1668,6 +1691,7 @@ struct EPUBThemeInjector {
                     if (p && (p.tagName === 'SCRIPT' || p.tagName === 'STYLE' || p.closest('mark.dreader-highlight'))) {
                         continue;
                     }
+                    node.__tnIdx = textNodes.length; // 候选去重键
                     textNodes.push(node);
                 }
 
@@ -1695,16 +1719,35 @@ struct EPUBThemeInjector {
                     }
                 }
 
+                // 全部候选统一收集,再按划线快照(前缀尾/后缀头匹配得分)选位;
+                // 无快照或全零分时保持旧行为取第一个——同文本多处划线不再都落到第一处
+                const candidates = [];
+                const seenCandidates = {};
+                function rangeFor(node, start, end) {
+                    try {
+                        const r = document.createRange();
+                        r.setStart(node, start);
+                        r.setEnd(node, end);
+                        return r;
+                    } catch (e) { return null; }
+                }
+                function pushCandidate(range) {
+                    if (!range) return;
+                    const key = (range.startContainer === range.endContainer)
+                        ? (range.startContainer.__tnIdx || 0) + ':' + range.startOffset + ':' + range.endOffset
+                        : null;
+                    if (key && seenCandidates[key]) return;
+                    if (key) seenCandidates[key] = true;
+                    candidates.push(range);
+                }
+
                 // 1. Single text node exact match
                 for (let i = 0; i < textNodes.length; i++) {
                     const tn = textNodes[i];
                     const val = tn.nodeValue || '';
                     const idx = val.indexOf(searchText);
                     if (idx !== -1) {
-                        const range = document.createRange();
-                        range.setStart(tn, idx);
-                        range.setEnd(tn, idx + searchText.length);
-                        if (wrapRange(range)) return;
+                        pushCandidate(rangeFor(tn, idx, idx + searchText.length));
                     }
                 }
 
@@ -1718,10 +1761,7 @@ struct EPUBThemeInjector {
                         const regex = new RegExp(escaped, 'i');
                         const match = regex.exec(val);
                         if (match) {
-                            const range = document.createRange();
-                            range.setStart(tn, match.index);
-                            range.setEnd(tn, match.index + match[0].length);
-                            if (wrapRange(range)) return;
+                            pushCandidate(rangeFor(tn, match.index, match.index + match[0].length));
                         }
                     }
                 }
@@ -1764,12 +1804,54 @@ struct EPUBThemeInjector {
                     }
 
                     if (startNodeInfo && endNodeInfo) {
-                        const range = document.createRange();
-                        range.setStart(startNodeInfo.node, matchStart - startNodeInfo.start);
-                        range.setEnd(endNodeInfo.node, matchEnd - endNodeInfo.start);
-                        wrapRange(range);
+                        if (endNodeInfo.node === startNodeInfo.node) {
+                            pushCandidate(rangeFor(startNodeInfo.node,
+                                                   matchStart - startNodeInfo.start,
+                                                   matchEnd - startNodeInfo.start));
+                        } else {
+                            const crossRange = rangeFor(startNodeInfo.node, matchStart - startNodeInfo.start, 0);
+                            if (crossRange) {
+                                crossRange.setEnd(endNodeInfo.node, matchEnd - endNodeInfo.start);
+                                candidates.push(crossRange);
+                            }
+                        }
                     }
                 }
+
+                if (candidates.length === 0) return;
+
+                function fullOffsetOf(node, offset) {
+                    for (const entry of nodeMap) {
+                        if (entry.node === node) return entry.start + offset;
+                    }
+                    return -1;
+                }
+
+                let chosen = candidates[0];
+                if (candidates.length > 1 && (contextPrefix || contextSuffix)) {
+                    let bestScore = -1;
+                    for (const range of candidates) {
+                        const si = fullOffsetOf(range.startContainer, range.startOffset);
+                        const ei = fullOffsetOf(range.endContainer, range.endOffset);
+                        if (si < 0 || ei < 0) continue;
+                        let score = 0;
+                        if (contextPrefix) {
+                            const before = fullText.slice(Math.max(0, si - 24), si);
+                            for (let L = Math.min(contextPrefix.length, before.length); L > 0; L--) {
+                                if (before.slice(-L) === contextPrefix.slice(-L)) { score += L; break; }
+                            }
+                        }
+                        if (contextSuffix) {
+                            const after = fullText.slice(ei, Math.min(fullText.length, ei + 24));
+                            for (let L = Math.min(contextSuffix.length, after.length); L > 0; L--) {
+                                if (after.slice(0, L) === contextSuffix.slice(0, L)) { score += L; break; }
+                            }
+                        }
+                        if (score > bestScore) { bestScore = score; chosen = range; }
+                    }
+                    if (bestScore < 0) chosen = candidates[0]; // 打分全失败保底旧行为
+                }
+                wrapRange(chosen);
             };
 
             // Restore all highlights passed as JSON array
@@ -1778,7 +1860,7 @@ struct EPUBThemeInjector {
                 for (let i = 0; i < items.length; i++) {
                     const it = items[i];
                     if (!it || !it.id || !it.text) continue;
-                    window.dreaderHighlightTextInDOM(it.text, it.id, it.colorHex || '#FFE066', it.note);
+                    window.dreaderHighlightTextInDOM(it.text, it.id, it.colorHex || '#FFE066', it.note, it.prefix, it.suffix);
                 }
             };
 
