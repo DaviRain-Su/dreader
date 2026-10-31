@@ -40,6 +40,28 @@ final class BilingualChapterQueueTests: XCTestCase {
         try await waitUntil(!queue.hasPendingWork)
     }
 
+    func testScheduleTranslatesCurrentOnly() async throws {
+        let queue = BilingualChapterQueue()
+        let recorder = TranslationRecorder()
+        queue.isTranslated = { _, _ in false }
+        queue.translateHandler = { _, index in
+            recorder.append(index)
+            return true
+        }
+        queue.schedule(bookKey: "单章书", chapterCount: 8, fromIndex: 3)
+        try await waitUntil(recorder.snapshotIndices.contains(3))
+        // 当前章翻完即停:相邻章(2/4)不得自动开翻(用户口径:开双语只翻当前章)
+        try await Task.sleep(for: .milliseconds(350))
+        XCTAssertEqual(recorder.snapshotIndices, [3], "开双语只翻当前章,不辐射相邻章")
+        // 切章到未译的新章:单章模式继续只排新章
+        queue.reprioritize(fromIndex: 6)
+        try await waitUntil(recorder.snapshotIndices.contains(6))
+        try await Task.sleep(for: .milliseconds(350))
+        XCTAssertEqual(recorder.snapshotIndices, [3, 6], "切章只补翻新当前章")
+        queue.cancel(forKey: nil)
+        try await waitUntil(!queue.hasPendingWork)
+    }
+
     func testScheduleSkipsAlreadyTranslatedChapters() async throws {
         let queue = BilingualChapterQueue()
         let recorder = TranslationRecorder()

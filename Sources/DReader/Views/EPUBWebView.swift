@@ -100,6 +100,9 @@ struct EPUBWebView: NSViewRepresentable {
     var agentName: String = "AI 伴读"
     var onTranslateParagraph: ((Int, String) -> Void)? = nil
     var registerUpdateTranslationAction: ((@escaping (Int, String, String) -> Void) -> Void)? = nil
+    /// 批翻批次开始:页面里对应段的空槽点亮「正在翻译…」呼吸提示
+    /// (vm 回调携带 书|章|段号,makeNSView 的桥只放行**本页章**的批次,后台章广播不误点亮)
+    var registerBatchPendingAction: ((@escaping (String, Int, [Int]) -> Void) -> Void)? = nil
     var onChapterLinkTapped: ((URL) -> Bool)? = nil
     var onChapterReady: ((URL, Int) -> Void)? = nil
     let onScrollProgress: (Double) -> Void
@@ -184,6 +187,12 @@ struct EPUBWebView: NSViewRepresentable {
         }
         registerUpdateTranslationAction? { [weak coordinator = context.coordinator] index, text, agentName in
             coordinator?.updateTranslationInDOM(index: index, translation: text, agentName: agentName)
+        }
+        registerBatchPendingAction? { [weak coordinator = context.coordinator] book, chapterIndex, indices in
+            guard let coordinator,
+                  coordinator.parent.bookTitle == book,
+                  coordinator.parent.chapterIndex == chapterIndex else { return }
+            coordinator.setBilingualBatchPending(indices)
         }
 
         context.coordinator.loadChapter(
@@ -1035,6 +1044,13 @@ struct EPUBWebView: NSViewRepresentable {
             } else {
                 js = "window.dreaderUpdateTranslation(\(index), \(jsonText)[0], \(jsonAgent)[0]);"
             }
+            webView.evaluateJavaScript(js, completionHandler: nil)
+        }
+
+        /// 批翻批次开始(或空数组=全清):对应段的空槽点「正在翻译…」提示
+        func setBilingualBatchPending(_ indices: [Int]) {
+            guard let webView else { return }
+            let js = "window.dreaderBilingualSetPending && window.dreaderBilingualSetPending(\(indices));"
             webView.evaluateJavaScript(js, completionHandler: nil)
         }
 

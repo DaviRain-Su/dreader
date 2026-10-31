@@ -2,23 +2,27 @@
 //  BilingualChapterQueue.swift
 //  DReader
 //
-//  章级双语接力队列:开双语后按「当前章 → 相邻章辐射」顺序后台逐章批翻,
-//  切章把新章置顶插队;换书/关双语/退书即 cancel。「翻译全书」= 全量重排(幂等,
-//  已译章由 isTranslated 过滤)。本章体验优先:队列只写缓存,不触碰渲染状态。
+//  章级双语队列:开双语/切章只自动翻**当前章**(用户口径,消除后台乱翻的混乱感);
+//  「翻译全书」= 全量入队按辐射序推进(幂等,已译章由 isTranslated 过滤)。换书/关双语/
+//  退书即 cancel。本章体验优先:队列只写缓存,不触碰渲染状态。
 //
 
 import Foundation
 
 /// 反隔离:与 BookIndexService 同模式(状态小、单 Task 消费、调用方全是主线程 UI 动作),
-/// 状态由一把 NSLock 保护,避免把 MainActor 隔离反传染到调用点。
-@Observable
+/// 状态由一把 NSLock 保护。刻意不用 @Observable——锁临界区里的 submitted 写会同步触发
+/// SwiftUI 重排并重入同一把锁造成死锁;弹窗接力状态行改由批翻进度的观察侧通道刷新。
 final class BilingualChapterQueue: @unchecked Sendable {
     static let shared = BilingualChapterQueue()
+
+    /// 排队模式:开双语/切章只排当前章;「翻译全书」其余未译章全量入队
+    private enum Mode { case chapterOnly, fullBook }
 
     private var bookKey: String? = nil
     private var chapterCount: Int = 0
     private var activeChapterIndex: Int? = nil
     private var pendingQueue: [Int] = []
+    private var mode: Mode = .chapterOnly
     /// 本队列已推进章数(面板显示)
     private var completedChaptersCount: Int = 0
 
@@ -45,7 +49,11 @@ final class BilingualChapterQueue: @unchecked Sendable {
     var queueDescription: String {
         lock.lock(); defer { lock.unlock() }
         guard let active = activeChapterIndex else {
-            return pendingQueue.isEmpty ? "" : "待译 \(pendingQueue.count) 章"
+            if mode == .chapterOnly || pendingQueue.isEmpty { return "" }
+            return "待译 \(pendingQueue.count) 章"
+        }
+        if mode == .chapterOnly {
+            return "正在翻译第 \(active + 1) 章"
         }
         return "第 \(active + 1)/\(chapterCount) 章 · 后台待译 \(pendingQueue.count) 章"
     }
@@ -57,7 +65,7 @@ final class BilingualChapterQueue: @unchecked Sendable {
 
     // MARK: - 对外 API
 
-    /// 开双语/「翻译全书」统一入口;幂等:同一本书重复 schedule 只按 fromIndex 重排优先级
+    /// 开双语/重排入口:回到单章模式,只翻当前章(「翻译全书」另行 requestFullBook)
     func schedule(bookKey newBook: String, chapterCount: Int, fromIndex: Int) {
         lock.lock()
         if self.bookKey != newBook {
@@ -66,36 +74,51 @@ final class BilingualChapterQueue: @unchecked Sendable {
         }
         self.bookKey = newBook
         self.chapterCount = max(chapterCount, 1)
+        self.mode = .chapterOnly
         lock.unlock()
         reprioritize(fromIndex: fromIndex)
     }
 
-    /// 切章:未执行章按新章辐射序整列重排(已开始的章不打断;已译章过滤)
+    /// 切章:未译的新当前章插队。单章模式只排本章;全书模式仍按辐射序整列重排
+    /// (已开始的章不打断,已译章过滤)
     func reprioritize(fromIndex index: Int) {
         lock.lock()
         defer { lock.unlock() }
         guard let key = bookKey, chapterCount > 0 else { return }
-        var order = Self.radiatingOrder(current: index, count: chapterCount)
-            .filter { idx in !(isTranslated?(key, idx) ?? false) }
-        // 去重;正在翻的章不重排队(等它跑完,后续摘取新序)
-        var seen = Set<Int>()
-        order = order.filter { seen.insert($0).inserted }
-        if let active = activeChapterIndex {
-            order.removeAll { $0 == active }
-        }
-        pendingQueue = order
-        scheduledKeys = Set(order)
-        if let active = activeChapterIndex {
-            scheduledKeys.insert(active)
+        guard !(isTranslated?(key, index) ?? false) else { return }
+        if mode == .fullBook {
+            var order = Self.radiatingOrder(current: index, count: chapterCount)
+                .filter { idx in !(isTranslated?(key, idx) ?? false) }
+            // 去重;正在翻的章不重排队(等它跑完,后续摘取新序)
+            var seen = Set<Int>()
+            order = order.filter { seen.insert($0).inserted }
+            if let active = activeChapterIndex {
+                order.removeAll { $0 == active }
+            }
+            pendingQueue = order
+            scheduledKeys = Set(order)
+            if let active = activeChapterIndex {
+                scheduledKeys.insert(active)
+            }
+        } else {
+            // 单章模式:只排当前章;本章已在翻则什么都不做
+            guard activeChapterIndex != index else { return }
+            pendingQueue = [index]
+            scheduledKeys = [index]
+            if let active = activeChapterIndex {
+                // 在翻的别章(全书遗留)保持不动,等它跑完再翻本章
+                scheduledKeys.insert(active)
+            }
         }
         ensureLoopRunningLocked()
     }
 
-    /// 「翻译全书」:未译章全量重排(当前章已在队首,不打断现翻章)
+    /// 「翻译全书」:切全书模式,未译章全量重排(当前章已在队首,不打断现翻章)
     func requestFullBook(fromIndex index: Int) {
         lock.lock()
         defer { lock.unlock() }
         guard let key = bookKey, chapterCount > 0 else { return }
+        mode = .fullBook
         let order = (0..<chapterCount).filter { idx in
             idx != index && !scheduledKeys.contains(idx) && !(isTranslated?(key, idx) ?? false)
         }
@@ -119,6 +142,7 @@ final class BilingualChapterQueue: @unchecked Sendable {
         activeChapterIndex = nil
         pendingQueue = []
         scheduledKeys = []
+        mode = .chapterOnly
         bookKey = nil
         chapterCount = 0
     }

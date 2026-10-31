@@ -916,6 +916,7 @@ struct ReaderMainView: View {
                     agentName: vm.agentService.currentPreset.name,
                     isTranslating: vm.isTranslatingChapter,
                     translationProgress: vm.chapterTranslationProgress,
+                    bilingualBatchDescription: vm.bilingualBatchDescription,
                     bilingualQueueDescription: vm.bilingualQueueDescription,
                     hasBilingualQueueWork: vm.hasBilingualQueueWork,
                     onTranslateChapter: {
@@ -1081,6 +1082,9 @@ struct ReaderMainView: View {
                         },
                         registerUpdateTranslationAction: { action in
                             vm.updateTranslationAction = action
+                        },
+                        registerBatchPendingAction: { action in
+                            vm.updateBatchPendingAction = action
                         },
                         onChapterLinkTapped: { targetURL in
                             // 页内目录/交叉引用链接：定位目标章节并走完整渲染管线跳转

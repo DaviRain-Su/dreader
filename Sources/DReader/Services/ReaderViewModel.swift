@@ -1714,6 +1714,7 @@ final class ReaderViewModel: @unchecked Sendable {
         guard let vmBook = currentBook, vmBook.title == book,
               vmBook.chapters.indices.contains(chapterIndex) else { return false }
         let paragraphs = chapterParagraphs(book: vmBook, chapterIndex: chapterIndex)
+        NSLog("[双语] 接力开翻：书=%@ 章=%d 段数=%d", book, chapterIndex, paragraphs.count)
         guard !paragraphs.isEmpty else { return false }
         let agentName = agentService.currentPreset.name
         let chapterTitle = vmBook.chapters[chapterIndex].title
@@ -1725,6 +1726,9 @@ final class ReaderViewModel: @unchecked Sendable {
             agentService: agentService,
             onParagraphTranslated: { idx, trans in
                 self.updateTranslationAction?(idx, trans, agentName)
+            },
+            onBatchStarted: { [weak self] indices in
+                self?.updateBatchPendingAction?(book, chapterIndex, indices)
             },
             isCancelled: { [weak self] () -> Bool in
                 // 只看当前书:关双语/换书由队列 cancel(连带 Task.cancel)终止;
@@ -1739,11 +1743,26 @@ final class ReaderViewModel: @unchecked Sendable {
     }
 
     var updateTranslationAction: ((Int, String, String) -> Void)?
+    /// 批翻批次开始桥(书|章|段号):EPUBWebView 按本页章匹配后再点亮「正在翻译…」槽
+    var updateBatchPendingAction: ((String, Int, [Int]) -> Void)?
+    /// 当前书|章的批翻会话身份,与 service.activeBatchKey 对齐(弹窗只跟踪本页章)
+    private var bilingualBatchKey: String {
+        guard let book = currentBook else { return "|" }
+        return "\(book.title)|\(book.currentChapterIndex)"
+    }
+    /// 仅本章在批翻时才亮进度(后台章在翻不干扰本页)
     var isTranslatingChapter: Bool {
-        BilingualTranslationService.shared.isTranslatingChapter
+        let service = BilingualTranslationService.shared
+        return service.isTranslatingChapter && service.activeBatchKey == bilingualBatchKey
     }
     var chapterTranslationProgress: Double {
-        BilingualTranslationService.shared.currentProgressRatio
+        let service = BilingualTranslationService.shared
+        guard service.isTranslatingChapter, service.activeBatchKey == bilingualBatchKey else { return 0 }
+        return service.currentProgressRatio
+    }
+    /// 弹窗批翻状态行:「正在翻译 P3–P8、P12」
+    var bilingualBatchDescription: String {
+        BilingualTranslationService.shared.batchActivityDescription
     }
 
     func currentChapterBilingualTranslations() -> [Int: String]? {
@@ -1799,9 +1818,19 @@ final class ReaderViewModel: @unchecked Sendable {
 
     func translateCurrentChapterWithAgent() {
         guard let book = currentBook, let chapter = book.currentChapter else { return }
+        let chapterIndex = book.currentChapterIndex
+        // 单车道检查:别的章在翻时不硬抢(会被 service 跳过),改走队列把本章置顶接续
+        let service = BilingualTranslationService.shared
+        if service.isTranslatingChapter, service.activeBatchKey != "\(book.title)|\(chapterIndex)" {
+            BilingualChapterQueue.shared.schedule(
+                bookKey: book.title,
+                chapterCount: book.chapters.count,
+                fromIndex: chapterIndex
+            )
+            return
+        }
         let bookTitle = book.title
         let chapterTitle = chapter.title
-        let chapterIndex = book.currentChapterIndex
         let agentName = agentService.currentPreset.name
 
         // 与 DOM 锚点(data-dreader-para)同源的抽取:sanitize 后再数段——

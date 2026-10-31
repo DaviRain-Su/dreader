@@ -131,6 +131,7 @@ final class ReaderInteractionTests: XCTestCase {
     }
 
     func testReadAloudUsesRenderedTextAndIndependentStableIDs() async throws {
+        settings.bilingualMode = .interlinear
         try await loadReaderHTML("""
             <h2>章节标题</h2><p>甲。</p><p>乙。</p>
             <div>没有 p 标签的正文内容。</div>
@@ -531,6 +532,7 @@ final class ReaderInteractionTests: XCTestCase {
     }
 
     func testThemeBilingualAndScriptModeKeepInteractionsWorking() async throws {
+        settings.bilingualMode = .interlinear
         try await loadFixture()
         settings.theme = .dark
         settings.fontSize = 22
@@ -601,6 +603,35 @@ final class ReaderInteractionTests: XCTestCase {
         let segments = try await coordinator.readAloudSegments()
         XCTAssertTrue(segments.contains { $0.text.contains("第一段原文但愿各自安好") }, "双栏行内原文仍要保持正文可听")
         XCTAssertFalse(segments.contains { $0.text.contains("第二段译文") }, "译文右列不进朗读")
+    }
+
+    func testSideBySideBatchPendingHintsTrackInFlightParagraphs() async throws {
+        settings.bilingualMode = .sideBySide
+        try await loadReaderHTML(
+            "<p>提示段落一原文。</p><p>提示段落二原文。</p><p>提示段落三原文。</p>",
+            bilingual: true)
+        settings.bilingualMode = .interlinear
+
+        // 批次开始:对应段空槽点亮「正在翻译…」提示(呼吸点 + 文案)
+        coordinator.setBilingualBatchPending([0, 2])
+        try await waitUntil(
+            "document.querySelectorAll('.dreader-bilingual-pending-hint').length === 2")
+        let pendingSlots = try await evaluate(
+            "Array.from(document.querySelectorAll('.dreader-bilingual-pending')).map(e => e.getAttribute('data-para-index')).join(',')") as? String
+        XCTAssertEqual(pendingSlots, "0,2", "pending 标记只落在批次覆盖的段上")
+
+        // 译文落地(右列直填)清掉该段提示;未落地段保留
+        coordinator.updateTranslationInDOM(index: 0, translation: "第零段译文", agentName: "AI")
+        try await waitUntil(
+            "document.querySelectorAll('.dreader-bilingual-pending-hint').length === 1")
+        let remaining = try await evaluate(
+            "Array.from(document.querySelectorAll('.dreader-bilingual-pending')).map(e => e.getAttribute('data-para-index')).join(',')") as? String
+        XCTAssertEqual(remaining, "2", "已译段的提示必须清干净,未译段留住")
+
+        // 空数组=全清(批会话结束/整章完成)
+        coordinator.setBilingualBatchPending([])
+        try await waitUntil(
+            "document.querySelectorAll('.dreader-bilingual-pending-hint').length === 0")
     }
 
     func testSideBySideSearchDoesNotHitTranslationText() async throws {

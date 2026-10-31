@@ -202,7 +202,8 @@ final class ReaderSettings: @unchecked Sendable {
 
     // Bilingual Reading
     var isBilingualEnabled: Bool = false
-    var bilingualMode: BilingualDisplayMode = .interlinear
+    /// 默认左右分栏对照(用户主诉求);竖排/双页等场景自动回退段落下对照
+    var bilingualMode: BilingualDisplayMode = .sideBySide
 
     /// 双语生效版式:竖排/双页对开下左右分栏与正文排版冲突,自动回退逐段对照
     var effectiveBilingualMode: BilingualDisplayMode {

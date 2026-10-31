@@ -1088,6 +1088,42 @@ struct EPUBThemeInjector {
             min-height: 1.1em !important;
         }
 
+        /* 批翻进行指示:空槽上的「正在翻译…」呼吸点 */
+        .dreader-bilingual-pending-hint {
+            display: inline-flex !important;
+            align-items: center !important;
+            gap: 6px !important;
+            font-size: 10.5px !important;
+            color: \(theme.secondaryTextColorHex) !important;
+            opacity: 0.65 !important;
+            animation: dreader-bilingual-pulse 1.3s ease-in-out infinite !important;
+            user-select: none !important;
+            -webkit-user-select: none !important;
+        }
+
+        .dreader-bilingual-pending-dot {
+            width: 7px !important;
+            height: 7px !important;
+            border-radius: 50% !important;
+            background: linear-gradient(135deg, #4F46E5, #7C3AED) !important;
+            animation: dreader-bilingual-dot 1.3s ease-in-out infinite !important;
+        }
+
+        .dreader-bilingual-pending .dreader-bilingual-translate-btn {
+            opacity: 0.55 !important;
+            pointer-events: none !important;
+        }
+
+        @keyframes dreader-bilingual-dot {
+            0%, 100% { opacity: 0.35; transform: scale(0.82); }
+            50% { opacity: 1; transform: scale(1.05); }
+        }
+
+        @keyframes dreader-bilingual-pulse {
+            0%, 100% { opacity: 0.45; }
+            50% { opacity: 0.85; }
+        }
+
         /* Apple Books Style Search Match Glowing Halo */
         .dreader-search-halo {
             background-color: #FFE066 !important;
@@ -2001,18 +2037,39 @@ struct EPUBThemeInjector {
                 slot.parentNode.replaceChild(div, slot);
             };
 
-            // 左右分栏对照:译文直接落到右列(textContent 免转义);slot 缺失自动 no-op
+            // 左右分栏对照:译文直接落到右列(textContent 免转义);slot 缺失自动 no-op。
+            // 落地同时清掉「正在翻译…」提示的 pending class 与 hint 子元素
             window.dreaderUpdateSideTranslation = function(paraIndex, transText) {
                 if (!transText) return;
                 var target = document.getElementById('dreader-trans-slot-' + paraIndex);
                 if (target) {
                     if (!target.classList.contains('dreader-bilingual-side-slot')) return;
-                    target.classList.remove('dreader-bilingual-side-slot');
+                    target.classList.remove('dreader-bilingual-side-slot', 'dreader-bilingual-pending');
                     target.classList.add('dreader-bilingual-side-trans');
                 } else {
                     target = document.querySelector('.dreader-bilingual-side-trans[data-para-index="' + paraIndex + '"]');
                 }
-                if (target) target.textContent = transText;
+                if (target) {
+                    target.textContent = transText;
+                }
+            };
+
+            // 批翻批次进行指示:把「正在翻译…」提示放到对应段的空槽上(空数组=全清)
+            window.dreaderBilingualSetPending = function(indices) {
+                document.querySelectorAll('.dreader-bilingual-pending-hint').forEach(function(e) { e.remove(); });
+                document.querySelectorAll('.dreader-bilingual-pending').forEach(function(e) {
+                    e.classList.remove('dreader-bilingual-pending');
+                });
+                for (var i = 0; i < (indices || []).length; i++) {
+                    var idx = indices[i];
+                    var el = document.querySelector('.dreader-bilingual-side-slot[data-para-index="' + idx + '"], .dreader-bilingual-slot[data-para-index="' + idx + '"]');
+                    if (!el) continue;
+                    el.classList.add('dreader-bilingual-pending');
+                    var hint = document.createElement('div');
+                    hint.className = 'dreader-bilingual-pending-hint';
+                    hint.innerHTML = '<span class="dreader-bilingual-pending-dot"></span><span>正在翻译…</span>';
+                    el.appendChild(hint);
+                }
             };
             \(ReaderTextScripts.source)
 

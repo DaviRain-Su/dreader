@@ -182,4 +182,61 @@ final class BatchTranslationTests: XCTestCase {
         try await Task.sleep(for: .milliseconds(50))
         XCTAssertEqual(service.currentProgressRatio, 1.0, accuracy: 0.0001)
     }
+
+    func testDescribeRangesCoalescesConsecutiveParagraphs() {
+        XCTAssertEqual(
+            BilingualTranslationService.describeRanges([3, 4, 5, 8, 12]),
+            "正在翻译 P3–P5、P8、P12")
+        XCTAssertEqual(BilingualTranslationService.describeRanges([]), "")
+        XCTAssertEqual(BilingualTranslationService.describeRanges([7]), "正在翻译 P7")
+        XCTAssertEqual(BilingualTranslationService.describeRanges([9, 10]), "正在翻译 P9–P10")
+    }
+
+    func testBatchStartedNotifiesMergedInFlightSet() async throws {
+        let service = BilingualTranslationService(cacheDirectory: makeTempCacheDirectory())
+        let agent = AIAgentService(testBatchDriverOverride: { items in
+            try await Task.sleep(for: .milliseconds(30))
+            return Dictionary(items.map { ($0.index, "译\($0.index)") }, uniquingKeysWith: { a, _ in a })
+        })
+        let recorder = TranslationRecorder()
+        // 65 段(超 60 段/包上限)→ 至少两包,并发执行时批次开始通知必须是
+        // 合并后的在飞全集(页面提示是「全清重画」,单批通知会清掉另一批的提示)
+        let startNotifications = BatchStartRecorder()
+        await service.translateChapterBatch(
+            paragraphs: (0..<65).map { (index: $0, text: "并发合并段落原文\($0)") },
+            bookTitle: "批翻合并通知书",
+            chapterTitle: "第一章",
+            chapterIndex: 1,
+            agentService: agent,
+            onParagraphTranslated: { idx, trans in recorder.append(idx, trans) },
+            onBatchStarted: { indices in startNotifications.record(indices) }
+        )
+        let snapshots = startNotifications.all()
+        XCTAssertFalse(snapshots.isEmpty, "每包开始必须有通知")
+        XCTAssertGreaterThanOrEqual(
+            snapshots.map(\.count).max() ?? 0, 60,
+            "通知必须为合并后的在飞全集(含并发另一包的段),而非单批段号")
+        // 所有通知在各自时刻已是升序(页面画序稳定)
+        for snapshot in snapshots {
+            XCTAssertEqual(snapshot, snapshot.sorted(), "通知必须升序")
+        }
+    }
+}
+
+/// 批次开始通知记录器(仿 TranslationRecorder 的锁结构)
+final class BatchStartRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var snapshots: [[Int]] = []
+
+    func record(_ indices: [Int]) {
+        lock.lock()
+        snapshots.append(indices)
+        lock.unlock()
+    }
+
+    func all() -> [[Int]] {
+        lock.lock()
+        defer { lock.unlock() }
+        return snapshots
+    }
 }

@@ -7,6 +7,8 @@ struct ReaderTypographySettingsPopover: View {
     var agentName: String = "AI 伴读"
     var isTranslating: Bool = false
     var translationProgress: Double = 0.0
+    /// 本章批翻进行中的段号描述:「正在翻译 P3–P8、P12」
+    var bilingualBatchDescription: String = ""
     var bilingualQueueDescription: String = ""
     var hasBilingualQueueWork: Bool = false
     var onTranslateChapter: (() -> Void)? = nil
@@ -452,6 +454,12 @@ struct ReaderTypographySettingsPopover: View {
                                     .progressViewStyle(.linear)
                                 Text("\(Int(translationProgress * 100))%")
                                     .font(.system(size: 9.5, design: .monospaced))
+                                    .foregroundStyle(.secondary)
+                            }
+                            // 本章批翻进行到哪几段:「正在翻译 P3–P8、P12」
+                            if !bilingualBatchDescription.isEmpty {
+                                Text(bilingualBatchDescription)
+                                    .font(.system(size: 9.5))
                                     .foregroundStyle(.secondary)
                             }
                         } else if let onTranslate = onTranslateChapter {

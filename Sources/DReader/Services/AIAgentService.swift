@@ -515,8 +515,19 @@ final class AIAgentService: @unchecked Sendable {
         guard !items.isEmpty else { return [:] }
         let system = Self.batchSystemPrompt(bookTitle: bookTitle, chapterTitle: chapterTitle)
         let user = Self.batchUserPrompt(items)
+        let startedAt = Date().timeIntervalSince1970
         let raw = try await runDriverCollect(systemPrompt: system, userPrompt: user)
-        return Self.parseBatchResponse(raw, validIndices: Set(items.map(\.index)))
+        let parsed = Self.parseBatchResponse(raw, validIndices: Set(items.map(\.index)))
+        NSLog("[双语] 驱动输出 %d 字 → 解析命中 %d/%d 段（%.1fs，驱动=%@）",
+              raw.count, parsed.count, items.count,
+              Date().timeIntervalSince1970 - startedAt, currentPreset.name)
+        if parsed.count < items.count {
+            let head = raw.prefix(260).replacingOccurrences(of: "\n", with: "⏎")
+            let tail = raw.suffix(120).replacingOccurrences(of: "\n", with: "⏎")
+            NSLog("[双语] 批翻输出样例（首%d字）：%@", head.count, head)
+            NSLog("[双语] 批翻输出样例（尾%d字）：%@", tail.count, tail)
+        }
+        return parsed
     }
 
     /// 一次 agent 调用收集完整输出（批翻路径，进程登记走 translation 槽）

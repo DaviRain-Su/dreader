@@ -6,12 +6,21 @@ final class BilingualTranslationService: @unchecked Sendable {
     static let shared = BilingualTranslationService()
 
     // In-memory cache: [bookTitle: [chapterIndex: [paragraphIndex: Chinese translation]]]
-    private var memoryCache: [String: [Int: [Int: String]]] = [:]
-    private let cacheDirectory: URL
-    private let lock = NSLock()
+    // @ObservationIgnored 严肃隔离:锁临界区内写被观察属性会同步触发 SwiftUI 重排,
+    // 而视图会重入读同一把 NSLock(非重入)→ 主线程死锁(实测过)。
+    @ObservationIgnored private var memoryCache: [String: [Int: [Int: String]]] = [:]
+    @ObservationIgnored private let cacheDirectory: URL
+    @ObservationIgnored private let lock = NSLock()
 
+    /// 这两个观察属性只在 MainActor 上写(不持 service 锁),供弹窗进度条观察
     var isTranslatingChapter: Bool = false
     var currentProgressRatio: Double = 0.0 // 0.0 to 1.0
+    /// 当前批翻会话身份「书|章」:同一时刻只跑一个会话(单车道),同章重触发不叠加
+    var activeBatchKey: String? = nil
+    /// 弹窗接力/批翻状态行:「正在翻译 P3–P8、P12–P15」(MainActor 写,观察安全)
+    var batchActivityDescription: String = ""
+    /// 在飞批次的段号(service 锁保护,只描 UI 值用)
+    @ObservationIgnored private var inFlightIndices: Set<Int> = []
 
     /// cacheDirectory 注入缝：测试用临时目录隔离磁盘（仿 RankingService.init(configuration:) 先例）
     init(cacheDirectory: URL? = nil) {
@@ -164,18 +173,27 @@ final class BilingualTranslationService: @unchecked Sendable {
         chapterIndex: Int,
         agentService: AIAgentService,
         onParagraphTranslated: @escaping @MainActor (Int, String) -> Void,
+        onBatchStarted: (@MainActor ([Int]) -> Void)? = nil,
         isCancelled: (@MainActor @Sendable () -> Bool)? = nil
     ) async {
         guard !paragraphs.isEmpty else { return }
 
-        await MainActor.run {
+        // 单车道登记(MainActor 原子判断):同一时刻只跑一个批翻会话,防重复触发/手动与接力并发互踩进度
+        let nowKey = "\(bookTitle)|\(chapterIndex)"
+        let proceed = await MainActor.run { () -> Bool in
+            if self.isTranslatingChapter { return false }
             self.isTranslatingChapter = true
             self.currentProgressRatio = 0.0
+            self.activeBatchKey = nowKey
+            return true
+        }
+        guard proceed else {
+            NSLog("[双语] 单车道跳过:书=%@ 章=%d 已有会话在翻(%@)", bookTitle, chapterIndex, activeBatchKey ?? "nil")
+            return
         }
         defer {
-            Task { @MainActor in
-                self.isTranslatingChapter = false
-                self.currentProgressRatio = 1.0
+            Task { @MainActor [key = nowKey] in
+                self.finishBatchSession(key)
             }
         }
 
@@ -193,6 +211,9 @@ final class BilingualTranslationService: @unchecked Sendable {
         // 超巨段按句边界拆块后同编号多行进同一包；批翻缺编号时逐段兜底要用整段原文
         let fullTextByIndex = Dictionary(pending.map { ($0.index, $0.text) }, uniquingKeysWith: { a, _ in a })
         let batches = AIAgentService.planChapterBatches(pending)
+        NSLog("[双语] 批翻开始：书=%@ 章=%d 段数=%d(缓存命中 %d) 包数=%d 驱动=%@",
+              bookTitle, chapterIndex, paragraphs.count, cached.count, batches.count,
+              agentService.currentPreset.name)
         let semaphore = AsyncSemaphore(permits: Self.batchConcurrency)
         let counter = ProgressCounter()
         let bookTitle = bookTitle
@@ -200,6 +221,8 @@ final class BilingualTranslationService: @unchecked Sendable {
         let agent = agentService
         let service = self
         let cancelled: (@MainActor @Sendable () -> Bool)? = isCancelled
+        let startedAt = Date()
+        let batch_notifier: (@MainActor ([Int]) -> Void)? = onBatchStarted
 
         await withTaskGroup(of: Void.self) { group in
             for batch in batches {
@@ -211,10 +234,15 @@ final class BilingualTranslationService: @unchecked Sendable {
                         bookTitle: bookTitle, chapterTitle: chapterTitle, chapterIndex: chapterIndex,
                         agent: agent, counter: counter,
                         onParagraphTranslated: onParagraphTranslated,
+                        onBatchStarted: batch_notifier,
                         isCancelled: cancelled
                     )
                 }
             }
+        }
+        NSLog("[双语] 批翻整章收尾：书=%@ 章=%d 耗时=%.1fs", bookTitle, chapterIndex, Date().timeIntervalSince(startedAt))
+        await MainActor.run {
+            self.finishBatchSession(nowKey)
         }
     }
 
@@ -229,8 +257,18 @@ final class BilingualTranslationService: @unchecked Sendable {
         agent: AIAgentService,
         counter: ProgressCounter,
         onParagraphTranslated: @escaping @MainActor (Int, String) -> Void,
+        onBatchStarted: (@MainActor ([Int]) -> Void)?,
         isCancelled: (@MainActor @Sendable () -> Bool)?
     ) async {
+        let batchIndices = batch.map(\.index)
+        await MainActor.run {
+            self.registerBatchStart(batchIndices, notifier: onBatchStarted)
+        }
+        defer {
+            Task { @MainActor in
+                self.registerBatchEnd(batchIndices)
+            }
+        }
         var mapped: [Int: String] = [:]
         for attempt in 0..<2 {
             if let cancelledFn = isCancelled, await cancelledFn() { return }
@@ -240,9 +278,13 @@ final class BilingualTranslationService: @unchecked Sendable {
                     bookTitle: bookTitle,
                     chapterTitle: chapterTitle
                 )
+                NSLog("[双语] 包(\(batch.count)段) 批翻尝试\(attempt + 1) 完成：命中 %d/%d",
+                      mapped.count, batch.count)
                 break
             } catch {
                 mapped = [:]
+                NSLog("[双语] 包(%d段) 批翻尝试%d 失败：%@", batch.count, attempt + 1,
+                      error.localizedDescription)
                 if attempt == 0 {
                     try? await Task.sleep(nanoseconds: 300_000_000)
                 }
@@ -262,6 +304,10 @@ final class BilingualTranslationService: @unchecked Sendable {
             if trans.isEmpty {
                 missing.append((index: idx, text: fullTextByIndex[idx] ?? ""))
             }
+        }
+        if !missing.isEmpty {
+            NSLog("[双语] 批翻缺 %d 段，开始逐段兜底：%d", missing.count,
+                  missing.first?.index ?? -1)
         }
         guard !missing.isEmpty else { return }
 
@@ -311,7 +357,69 @@ final class BilingualTranslationService: @unchecked Sendable {
         title.replacingOccurrences(of: "/", with: "_")
             .replacingOccurrences(of: ":", with: "_")
             .replacingOccurrences(of: " ", with: "_")
+            .replacingOccurrences(of: "　", with: "_")
             .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    // MARK: - 批次进行状态(段号在飞)
+
+    /// 会话收尾:只清 activeBatchKey 归属自己的状态(defer Task 晚到不会误清接力新章的会话)
+    @MainActor
+    private func finishBatchSession(_ key: String?) {
+        guard key == nil || activeBatchKey == key else { return }
+        isTranslatingChapter = false
+        currentProgressRatio = 1.0
+        activeBatchKey = nil
+        clearInFlightAndResetDescription()
+    }
+
+    /// 包开始:登记在飞段号,发布「正在翻译 P3–P8、P12」给页面提示与弹窗状态行
+    @MainActor
+    private func registerBatchStart(_ indices: [Int], notifier: (@MainActor ([Int]) -> Void)?) {
+        lock.lock()
+        indices.forEach { inFlightIndices.insert($0) }
+        lock.unlock()
+        batchActivityDescription = Self.describeRanges(inFlightIndices)
+        // 页面提示画**全量在飞集合**(setPending 是全清重画模型;并发包后到合并先到,不许互相清)
+        notifier?(Array(inFlightIndices).sorted())
+    }
+
+    /// 包收尾:摘除在飞段号并续描(先落地的段由 onParagraphTranslated 直填,提示随之消失)
+    @MainActor
+    private func registerBatchEnd(_ indices: [Int]) {
+        lock.lock()
+        indices.forEach { inFlightIndices.remove($0) }
+        lock.unlock()
+        batchActivityDescription = Self.describeRanges(inFlightIndices)
+    }
+
+    /// 整章收尾:清空在飞与描述
+    @MainActor
+    private func clearInFlightAndResetDescription() {
+        lock.lock()
+        inFlightIndices = []
+        lock.unlock()
+        batchActivityDescription = ""
+    }
+
+    /// 段号集合 → 「P3–P8、P12」连续段合并描述(纯函数可单测)
+    static func describeRanges(_ indices: Set<Int>) -> String {
+        guard !indices.isEmpty else { return "" }
+        let sorted = indices.sorted()
+        var parts: [String] = []
+        var start = sorted[0]
+        var prev = sorted[0]
+        for idx in sorted.dropFirst() {
+            if idx == prev + 1 {
+                prev = idx
+                continue
+            }
+            parts.append(start == prev ? "P\(start)" : "P\(start)–P\(prev)")
+            start = idx
+            prev = idx
+        }
+        parts.append(start == prev ? "P\(start)" : "P\(start)–P\(prev)")
+        return "正在翻译 " + parts.joined(separator: "、")
     }
 }
 
