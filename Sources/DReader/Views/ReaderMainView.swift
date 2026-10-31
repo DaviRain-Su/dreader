@@ -477,6 +477,12 @@ struct ReaderMainView: View {
                             let areaW = geo.size.width
                             let areaH = geo.size.height
 
+                            // 0. 页边批注层：有思考的划线贴在正文两侧空白（微信读书点开才见 → 直接长在页边）
+                            if vm.settings.isMarginNotes && !vm.settings.isZenMode && !vm.settings.isVertical {
+                                MarginNotesOverlay(vm: vm, areaSize: geo.size)
+                                    .zIndex(20)
+                            }
+
                             // 1. Floating Selection Toolbar
                             if let selection = vm.selectionManager.activeSelection {
                                 let barW: CGFloat = min(340, max(280, areaW - 24))
@@ -641,6 +647,12 @@ struct ReaderMainView: View {
                                     }
                                 }
                             }
+                        }
+                        // 窗口缩放即时响应：workspace 尺寸变化 → 页边 rect 重拉并按新留白重排
+                        .onGeometryChange(for: CGSize.self) { proxy in
+                            proxy.size
+                        } action: { _ in
+                            vm.requestMarginRects(.resize)
                         }
                     }
 
@@ -1064,6 +1076,9 @@ struct ReaderMainView: View {
                         registerScrollToReadAloudSegmentAction: { action in vm.scrollToReadAloudSegmentAction = action },
                         registerReadAloudSegmentsAction: { action in vm.readAloudSegmentsProvider = action },
                         registerScrollToHighlightAction: { action in vm.scrollToHighlightAction = action },
+                        registerCollectMarginRectsAction: { action in vm.marginRectsProvider = action },
+                        // 划线增删改/字号宽度等 settingsSummary 刷新 → DOM 布局已变，页边 rect 需重拉
+                        onChromeRelayout: { vm.requestMarginRects(.relayout) },
                         getCachedHTML: { vm.getCachedHTML(for: $0) },
                         cacheHTML: { vm.cacheHTML($0, for: $1) }
                     )

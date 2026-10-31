@@ -94,6 +94,7 @@ struct KeyboardCheatSheetView: View {
             .init(keys: "⌘+ ⌘-", label: "放大 / 缩小字号"),
             .init(keys: "⌘⇧D", label: "单页 / 双页对开"),
             .init(keys: "⌘Return", label: "禅意模式（全屏沉浸）"),
+            .init(keys: "⌘⇧M", label: "显示 / 隐藏页边批注"),
             .init(keys: "⌘⇧L", label: "白天 / 夜间主题"),
             .init(keys: "⌘⇧C", label: "繁体 → 简体"),
         ]

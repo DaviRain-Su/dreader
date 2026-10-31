@@ -261,6 +261,17 @@ struct ReaderTypographySettingsPopover: View {
             }
             .help("Apple Books 同款：鼠标所在文本行显示一条淡引导线，方便通读古籍长行")
 
+            // 页边批注
+            Toggle(isOn: $settings.isMarginNotes) {
+                HStack(spacing: 4) {
+                    Image(systemName: "text.quote")
+                        .foregroundStyle(Color.primary.opacity(0.75))
+                    Text("页边批注 (有思考的划线贴在两侧)")
+                        .font(.system(size: 11.5))
+                }
+            }
+            .help("Tufte margin notes：横排阅读时，划线下的思考直接以批注卡显示在正文两侧空白")
+
             // 仿真翻页
             Toggle(isOn: $settings.isPageTurnAnimation) {
                 HStack(spacing: 4) {

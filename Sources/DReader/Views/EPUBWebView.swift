@@ -1,6 +1,82 @@
 import SwiftUI
 import WebKit
 
+/// 页边批注桥载荷：单个划线元素的可视矩形碎片（getClientRects，坐标已由 JS 钳到 viewport）
+struct MarginRectItem: Codable, Sendable {
+    let id: UUID
+    let frags: [CGRect]
+
+    private enum CodingKeys: String, CodingKey { case id, frags = "f" }
+
+    init(id: UUID, frags: [CGRect]) {
+        self.id = id
+        self.frags = frags
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        let quads = try container.decode([[Double]].self, forKey: .frags)
+        frags = quads.map { quad in
+            Self.rect(from: quad)
+        }
+    }
+
+    private static func rect(from quad: [Double]) -> CGRect {
+        guard quad.count >= 4 else { return .zero }
+        return CGRect(x: CGFloat(quad[0]), y: CGFloat(quad[1]), width: CGFloat(quad[2]), height: CGFloat(quad[3]))
+    }
+}
+
+/// 页边批注桥载荷：JS `dreaderCollectHighlightRects()` 的 JSON 输出
+struct MarginRectPayload: Codable, Sendable {
+    var chapterKey: String
+    let items: [MarginRectItem]
+
+    private let bodyRect: [Double]?
+    private let vw: Double?
+    private let vh: Double?
+
+    init(chapterKey: String, bodyFrame: CGRect, viewport: CGSize, items: [MarginRectItem]) {
+        self.chapterKey = chapterKey
+        self.bodyRect = [bodyFrame.origin.x, bodyFrame.origin.y, bodyFrame.size.width, bodyFrame.size.height]
+        self.vw = Double(viewport.width)
+        self.vh = Double(viewport.height)
+        self.items = items
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        chapterKey = try container.decode(String.self, forKey: .chapterKey)
+        items = (try? container.decode([MarginRectItem].self, forKey: .items)) ?? []
+        bodyRect = try? container.decode([Double].self, forKey: .bodyRect)
+        vw = try? container.decode(Double.self, forKey: .vw)
+        vh = try? container.decode(Double.self, forKey: .vh)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(chapterKey, forKey: .chapterKey)
+        try container.encode(items, forKey: .items)
+        try container.encode(bodyRect, forKey: .bodyRect)
+        try container.encode(vw, forKey: .vw)
+        try container.encode(vh, forKey: .vh)
+    }
+
+    private enum CodingKeys: String, CodingKey { case chapterKey, bodyRect, vw, vh, items }
+
+    /// 正文盒 rect（CSS px，JS 实测 body.getBoundingClientRect）
+    var bodyFrame: CGRect {
+        guard let bodyRect, bodyRect.count >= 4 else { return .zero }
+        return CGRect(x: CGFloat(bodyRect[0]), y: CGFloat(bodyRect[1]), width: CGFloat(bodyRect[2]), height: CGFloat(bodyRect[3]))
+    }
+
+    /// WebKit 视口尺寸
+    var viewport: CGSize {
+        CGSize(width: vw ?? 0, height: vh ?? 0)
+    }
+}
+
 struct EPUBWebView: NSViewRepresentable {
     let chapterURL: URL
     let opfDirectory: URL
@@ -37,6 +113,9 @@ struct EPUBWebView: NSViewRepresentable {
     var registerScrollToReadAloudSegmentAction: ((@escaping (Int) -> Void) -> Void)? = nil
     var registerReadAloudSegmentsAction: ((@escaping () async throws -> [ChapterReadAloudService.Segment]) -> Void)? = nil
     var registerScrollToHighlightAction: ((@escaping (String) -> Void) -> Void)? = nil
+    var registerCollectMarginRectsAction: ((@escaping () async -> MarginRectPayload?) -> Void)? = nil
+    /// 页边批注：settingsSummary 刷新（划线增删改/字号宽度等）后触发的重拉钩子
+    var onChromeRelayout: (() -> Void)? = nil
     let getCachedHTML: (URL) -> String?
     let cacheHTML: (String, URL) -> Void
 
@@ -100,6 +179,9 @@ struct EPUBWebView: NSViewRepresentable {
         registerScrollToHighlightAction? { [weak coordinator = context.coordinator] id in
             coordinator?.scrollToHighlight(id: id)
         }
+        registerCollectMarginRectsAction? { [weak coordinator = context.coordinator] in
+            await coordinator?.collectMarginRects() ?? nil
+        }
         registerUpdateTranslationAction? { [weak coordinator = context.coordinator] index, text, agentName in
             coordinator?.updateTranslationInDOM(index: index, translation: text, agentName: agentName)
         }
@@ -145,6 +227,8 @@ struct EPUBWebView: NSViewRepresentable {
         } else if context.coordinator.lastSettingsSummary != settingsSummary {
             context.coordinator.updateStyles(settings: settings)
             context.coordinator.refreshCurrentChapterHighlights(highlights: highlights)
+            // 划线增删改/排版变化都会改 DOM 布局 → 页边批注 rect 需重拉（开关本身不走此分支）
+            context.coordinator.parent.onChromeRelayout?()
         }
     }
 
@@ -800,6 +884,39 @@ struct EPUBWebView: NSViewRepresentable {
                 throw ReaderTextError.invalidResponse
             }
             return try JSONDecoder().decode([ChapterReadAloudService.Segment].self, from: data)
+        }
+
+        /// 页边批注：枚举当前章全部划线元素 rect 碎片；失败/过期静默返回 nil（UI 忽略本轮）
+        func collectMarginRects() async -> MarginRectPayload? {
+            guard isPageReady, !isChapterLoading, let webView, let url = currentURL else { return nil }
+            let generation = chapterLoadGeneration
+            do {
+                let json = try await evaluateCollectJSON(webView: webView)
+                guard isPageReady, !isChapterLoading, generation == chapterLoadGeneration, currentURL == url else {
+                    return nil
+                }
+                guard let data = json.data(using: .utf8) else { return nil }
+                // chapterKey 以 Swift 侧 currentURL.path 为准（B5 对账基准），不信任 JS decodeURIComponent 结果
+                var payload = try JSONDecoder().decode(MarginRectPayload.self, from: data)
+                payload.chapterKey = url.path
+                return payload
+            } catch {
+                return nil
+            }
+        }
+
+        private func evaluateCollectJSON(webView: WKWebView) async throws -> String {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<String, Error>) in
+                webView.evaluateJavaScript("JSON.stringify(window.dreaderCollectHighlightRects())") { result, error in
+                    if let error {
+                        continuation.resume(throwing: error)
+                    } else if let result = result as? String {
+                        continuation.resume(returning: result)
+                    } else {
+                        continuation.resume(throwing: ReaderTextError.invalidResponse)
+                    }
+                }
+            }
         }
 
         func scrollToReadAloudSegment(id: Int) {

@@ -1617,6 +1617,58 @@ struct EPUBThemeInjector {
                 }
             };
 
+            // 页边批注：枚举当前章所有划线元素的逐行矩形碎片（Swift 拉取式轮询用）
+            // 单一 getBoundingClientRect 在 spread 跨栏 / 滚动边界 / content-visibility:auto 下不可靠，
+            // 这里输出碎片数组，锚点裁决在 Swift 纯函数层做。
+            window.dreaderCollectHighlightRects = function() {
+                const dprNormalized = [];
+                const normRect = function(r) {
+                    const left = Math.max(0, r.x);
+                    const top = Math.max(0, r.y);
+                    const right = Math.min(document.documentElement.clientWidth, r.right);
+                    const bottom = Math.min(document.documentElement.clientHeight, r.bottom);
+                    const w = right - left;
+                    const h = bottom - top;
+                    return (w > 0 && h > 0) ? [left, top, w, h] : null;
+                };
+                const bodyRect = normRect(document.body.getBoundingClientRect());
+                const marks = document.querySelectorAll('mark.dreader-highlight[data-id]');
+                const items = [];
+                for (let i = 0; i < marks.length; i++) {
+                    const el = marks[i];
+                    const raws = el.getClientRects();
+                    const frags = [];
+                    for (let k = 0; k < raws.length; k++) {
+                        const f = raws[k];
+                        // 零尺寸碎片 = content-visibility:auto 的视口外代理，直接剔除
+                        if (!(f.width > 0 && f.height > 0)) continue;
+                        let merged = false;
+                        for (let g = 0; g < frags.length; g++) {
+                            // 相邻碎片纵向贴合（<4px 缝隙）合并为一段（打散的同一行）
+                            if (Math.abs(frags[g][1] + frags[g][3] - f.y) < 4 &&
+                                Math.abs(frags[g][0] - f.x) < 2) {
+                                const newBottom = Math.max(frags[g][1] + frags[g][3], f.bottom);
+                                frags[g][3] = newBottom - frags[g][1];
+                                merged = true;
+                                break;
+                            }
+                        }
+                        if (!merged) frags.push([f.x, f.y, f.width, f.height]);
+                    }
+                    if (frags.length > 0) {
+                        items.push({ id: el.getAttribute('data-id'), f: frags });
+                    }
+                }
+                return {
+                    // decodeURIComponent 后与 Swift fileURL.path 同形（file 地址可能被 percent 编码）
+                    chapterKey: (() => { try { return decodeURIComponent(location.pathname); } catch (err) { return location.pathname; } })(),
+                    bodyRect: bodyRect,
+                    vw: document.documentElement.clientWidth,
+                    vh: document.documentElement.clientHeight,
+                    items: items
+                };
+            };
+
             // Dismiss highlight card when clicking blank areas
             document.addEventListener('click', function(e) {
                 if (!e.target.closest('mark.dreader-highlight')) {

@@ -237,6 +237,7 @@ final class ReaderViewModel: @unchecked Sendable {
             isBrowsingGlobalNotebooks = false
             selectionManager.clear()
         }
+        clearMarginRects()
     }
 
     func selectBookForReading(_ book: EPUBBook) {
@@ -271,6 +272,7 @@ final class ReaderViewModel: @unchecked Sendable {
             } else {
                 readyChapterURL = nil
                 readyChapterIndex = nil
+                clearMarginRects() // 换书：上一本的页边卡片不跨书携带
             }
             if saved != nil, let chapter = restored.currentChapter {
                 pendingReadingDestination = (chapter.fileURL, .readingPosition(chapterScrollProgress))
@@ -355,6 +357,7 @@ final class ReaderViewModel: @unchecked Sendable {
         // DOM 初始化先回到章首；待恢复记录被 ready 消费前，不能把旧进度写成 0。
         if case .readingPosition? = pendingReadingDestination?.1, clamped == 0 { return }
         chapterScrollProgress = clamped
+        requestMarginRects(.scroll)
         scheduleReadingPositionSave()
         guard let book = currentBook,
               book.currentChapterIndex == book.chapters.count - 1,
@@ -580,6 +583,125 @@ final class ReaderViewModel: @unchecked Sendable {
     var hasListeningResume = false
     var lastChosenHighlightColor: String = "#FFE066"
 
+    // MARK: - 页边批注（Tufte margin notes）
+
+    /// webview 桥（ReaderMainView 接线）：拉取当前章全部划线 rect；页未就绪/过期返回 nil
+    var marginRectsProvider: (() async -> MarginRectPayload?)?
+    var marginNoteRects: [UUID: CGRect] = [:]      // id → 页边锚定 rect（页面 CSS px）
+    var marginBodyRect: CGRect = .zero             // 正文盒实测（留白基准，避免反推公式）
+    var marginViewport: CGSize = .zero
+    var marginNoteChapterKey: String?              // rects 所属章（对账 currentChapter.fileURL.path）
+    enum MarginPullReason { case scroll, relayout, resize, ready }
+
+    private var marginActiveUntil = Date.distantPast // 滚动/重排后的活跃拉取窗
+    private var marginDueAt: Date?                   // 定点拉取（relayout 即刻 / ready 的 +0.25s）
+    private var marginPullGeneration = 0
+    private var marginLastPullAt = Date.distantPast
+    private var marginSweepTask: Task<Void, Never>?
+
+    /// 页边 rect 重拉入口：滚动只推活跃窗，常驻扫描 tick 负责实际节奏（100ms 一格）
+    func requestMarginRects(_ reason: MarginPullReason) {
+        guard settings.isMarginNotes, !settings.isZenMode, !settings.isVertical, currentBook != nil else { return }
+        let now = Date()
+        switch reason {
+        case .scroll:
+            marginActiveUntil = now.addingTimeInterval(0.6)
+        case .relayout, .resize:
+            marginActiveUntil = now.addingTimeInterval(1.2)
+            marginDueAt = now
+        case .ready:
+            marginActiveUntil = now.addingTimeInterval(1.2)
+            marginDueAt = now.addingTimeInterval(0.25) // DOM 落定再拉，等划线恢复与字体稳定
+        }
+        ensureMarginSweep()
+    }
+
+    /// 常驻扫描：活跃窗内每个 tick 若到达拉取点则拉一轮（100ms 颗粒，避开 scrollProgress 1% 的粗颗粒）
+    private func ensureMarginSweep() {
+        guard marginSweepTask == nil else { return }
+        marginSweepTask = Task { [weak self] in
+            while !Task.isCancelled, let self {
+                try? await Task.sleep(for: .milliseconds(100))
+                guard !Task.isCancelled else { break }
+                self.tickMarginSweep()
+            }
+        }
+    }
+
+    private func tickMarginSweep() {
+        let now = Date()
+        let dueNow = marginDueAt != nil && now >= marginDueAt!
+        guard now < marginActiveUntil || dueNow else { return }
+        marginDueAt = nil
+        guard now.timeIntervalSince(marginLastPullAt) >= 0.1,
+              let book = currentBook, let chapter = book.currentChapter,
+              readyChapterURL == chapter.fileURL,
+              readyChapterIndex == book.currentChapterIndex else { return }
+        pullMarginRects()
+    }
+
+    private func pullMarginRects() {
+        guard let provider = marginRectsProvider,
+              let book = currentBook, let chapter = book.currentChapter else { return }
+        marginPullGeneration += 1
+        let generation = marginPullGeneration
+        marginLastPullAt = Date()
+        let expectedKey = chapter.fileURL.path
+        let expectedIndex = book.currentChapterIndex
+        Task { @MainActor [weak self] in
+            let payload = await provider()
+            guard !Task.isCancelled, let self else { return }
+            self.commitMarginRects(payload, generation: generation, expectedKey: expectedKey, expectedIndex: expectedIndex)
+        }
+    }
+
+    private func commitMarginRects(_ payload: MarginRectPayload?, generation: Int, expectedKey: String, expectedIndex: Int) {
+        guard generation == marginPullGeneration else { return } // 已被后续请求接管
+        // 详情卡打开期间暂停提交（B4 冻结），关闭后 overlay 会补一轮 relayout
+        guard selectionManager.activeHighlightCard == nil else { return }
+        // 章已切换/换书：整包丢弃，新章由 ready 挂钩重新拉
+        guard currentBook?.currentChapterIndex == expectedIndex,
+              currentBook?.currentChapter?.fileURL.path == expectedKey,
+              readyChapterURL == currentBook?.currentChapter?.fileURL,
+              readyChapterIndex == expectedIndex else { return }
+        guard let payload, payload.chapterKey == expectedKey,
+              payload.viewport.width > 0, payload.viewport.height > 0 else {
+            // 拉空即静默清场（页未就绪／DOM 缺 mark），不保留上一窗口旧卡
+            if !marginNoteRects.isEmpty { marginNoteRects = [:] }
+            return
+        }
+        marginBodyRect = payload.bodyFrame
+        marginViewport = payload.viewport
+        marginNoteChapterKey = payload.chapterKey
+        var rects: [UUID: CGRect] = [:]
+        for item in payload.items {
+            if let anchor = MarginNotesLayout.resolveAnchor(frags: item.frags, viewportHeight: payload.viewport.height) {
+                rects[item.id] = anchor
+            }
+        }
+        // id 集不变且各卡位移 < 400px → 平移动画（B3）；否则直接落值
+        let movedFastEnough = rects.allSatisfy { id, newRect in
+            guard let old = marginNoteRects[id] else { return false }
+            return abs(newRect.midX - old.midX) < 40 && abs(newRect.midY - old.midY) < 400
+        }
+        if rects.keys == marginNoteRects.keys, movedFastEnough {
+            withAnimation(.linear(duration: 0.1)) { marginNoteRects = rects }
+        } else {
+            marginNoteRects = rects
+        }
+    }
+
+    /// 清场：回书架/换书/关试读时调用；常驻扫描不取消，窗口到期自然休眠
+    private func clearMarginRects() {
+        marginPullGeneration += 1
+        marginNoteRects = [:]
+        marginBodyRect = .zero
+        marginViewport = .zero
+        marginNoteChapterKey = nil
+        marginActiveUntil = .distantPast
+        marginDueAt = nil
+    }
+
     // MARK: - Chapter & Page Navigation
     var hasNextChapter: Bool {
         guard let book = currentBook else { return false }
@@ -732,6 +854,7 @@ final class ReaderViewModel: @unchecked Sendable {
         readyChapterURL = nil
         readyChapterIndex = nil
         chapterScrollProgress = 0
+        clearMarginRects()
         completedReadingBookIDs.remove(book.id)
         previewBook = book
         previewTotalChapterCount = totalChapters
@@ -820,6 +943,7 @@ final class ReaderViewModel: @unchecked Sendable {
               currentBook?.currentChapter?.fileURL == url else { return }
         readyChapterURL = url
         readyChapterIndex = chapterIndex
+        requestMarginRects(.ready)
         guard let (targetURL, destination) = pendingReadingDestination, targetURL == url else { return }
         pendingReadingDestination = nil
         switch destination {

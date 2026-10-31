@@ -229,6 +229,17 @@ final class ReaderSettings: @unchecked Sendable {
         }
     }
 
+    // 页边批注：横排时把有思考的划线以批注卡贴在正文两侧空白（Tufte margin notes）
+    var isMarginNotes: Bool = {
+        UserDefaults.standard.object(forKey: "dreader.margin_notes_enabled") == nil
+            ? true // 默认开：思考直接长在页边，微信读书式点开才可见的升级交互
+            : UserDefaults.standard.bool(forKey: "dreader.margin_notes_enabled")
+    }() {
+        didSet {
+            UserDefaults.standard.set(isMarginNotes, forKey: "dreader.margin_notes_enabled")
+        }
+    }
+
     // 仿真翻页：翻页时旧页以整幅纸面平移滑出（快照合成，无闪烁）
     var isPageTurnAnimation: Bool = {
         UserDefaults.standard.object(forKey: "dreader.page_turn_animation") == nil

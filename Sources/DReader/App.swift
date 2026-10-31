@@ -109,6 +109,13 @@ struct DReaderApp: App {
                 }
                 .keyboardShortcut(.return, modifiers: .command)
 
+                Button(viewModel.settings.isMarginNotes ? "隐藏页边批注" : "显示页边批注") {
+                    withAnimation {
+                        viewModel.settings.isMarginNotes.toggle()
+                    }
+                }
+                .keyboardShortcut("m", modifiers: [.command, .shift])
+
                 Button("切换白天 / 夜间阅读主题") {
                     withAnimation {
                         let s = viewModel.settings
