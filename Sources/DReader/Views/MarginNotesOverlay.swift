@@ -113,10 +113,12 @@ enum MarginNotesLayout {
 
 // MARK: - 页边批注卡片
 
-/// 页边批注完整卡：色点 + 划线原文段 + 思考全文 + 元数据行；点击进入划线详情卡
+/// 页边批注卡：楷体夹批字风——正文宋黑、批注楷体是中文批注的传统搭配；
+/// 左缘细划线色引导线扎根页边当“根”，点击进入划线详情卡
 struct MarginNoteCardView: View {
     let highlight: Highlight
     let width: CGFloat
+    let bodyFontSize: CGFloat
     let isActive: Bool
     let onTap: () -> Void
 
@@ -136,20 +138,20 @@ struct MarginNoteCardView: View {
                     .overlay(Circle().stroke(Color.primary.opacity(0.2), lineWidth: 0.5))
                 Spacer(minLength: 0)
             }
-            // 划线原文段：完整内容长在页面上，这里截 3 行提示出处
+            // 划线原文段：完整内容长在页面上，这里截 3 行提示出处（楷体小批）
             Text(highlight.text.replacingOccurrences(of: "\n", with: " "))
-                .font(.system(size: 9.5))
-                .foregroundStyle(Color.primary.opacity(0.42))
-                .lineSpacing(2)
-                .lineLimit(3)
-            // 思考全文：页边批注的主角，原样呈现
-            Text(highlight.note ?? "")
-                .font(.system(size: 10.5))
-                .foregroundStyle(Color.primary.opacity(isLifted ? 0.92 : 0.8))
+                .font(.custom("Kaiti SC", size: max(11.5, bodyFontSize * 0.72)))
+                .foregroundStyle(Color.primary.opacity(0.48))
                 .lineSpacing(2.5)
+                .lineLimit(3)
+            // 思考全文：页边批注的主角——楷体夹批是中文批注的传统字体，字号跟正文设置联动
+            Text(highlight.note ?? "")
+                .font(.custom("Kaiti SC", size: max(13, bodyFontSize * 0.86)))
+                .foregroundStyle(Color.primary.opacity(isLifted ? 0.92 : 0.82))
+                .lineSpacing(3)
             Text(highlight.createdAt.formatted(date: .numeric, time: .omitted))
-                .font(.system(size: 8.5))
-                .foregroundStyle(Color.primary.opacity(0.28))
+                .font(.system(size: max(9, bodyFontSize * 0.55)))
+                .foregroundStyle(Color.primary.opacity(0.3))
         }
         .padding(.leading, 9)
         .padding(.trailing, 4)
@@ -230,6 +232,7 @@ struct MarginNotesOverlay: View {
                     MarginNoteCardView(
                         highlight: highlight,
                         width: placement.width,
+                        bodyFontSize: vm.settings.fontSize,
                         isActive: false,
                         onTap: {
                             vm.selectionManager.activeHighlightCard = HighlightCardInfo(
