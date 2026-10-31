@@ -88,6 +88,7 @@ enum PDFImporter {
     }
 
     /// 跨整本高频出现的首/尾候选行（页眉、页脚型）——超过 34% 页重复即判噪声行。
+    /// 兼容空行页/单行页（尾段区间下界不得越过 available 行数，否则 Range 陷阱崩溃）。
     static func headerFooterNoise(in pageLines: [[String]]) -> Set<String> {
         var counts: [String: Int] = [:]
         let depth = 2
@@ -96,7 +97,7 @@ enum PDFImporter {
             for index in 0..<min(depth, lines.count) {
                 counts[lines[index], default: 0] += 1
             }
-            for index in max(lines.count - depth, depth)..<lines.count {
+            for index in max(lines.count - depth, min(depth, lines.count))..<lines.count {
                 counts[lines[index], default: 0] += 1
             }
         }

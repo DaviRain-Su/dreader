@@ -122,6 +122,22 @@ final class PDFImportTests: XCTestCase {
         XCTAssertFalse(noise.contains("1"), "每页不同的页码行交给页码规则删除，不进噪声集")
     }
 
+    /// 回归：真实书存在无文字页（封面/夹图页 page.string 为空字符串），其页内只剩一行空串；
+    /// 尾行统计区间小页时曾越界崩溃（Range requires lowerBound <= upperBound）。
+    func testHeaderFooterNoiseWithBlankPages() {
+        let pageLines: [[String]] = (1...5).map { page in
+            switch page {
+            case 3: return [""]                       // 无文字页：提取结果只剩空串
+            case 4: return ["统一页眉"]                // 单行页
+            default: return ["统一页眉", "第 \(page) 页的正文行，内容不同，不是页眉。"]
+            }
+        }
+        let noise = PDFImporter.headerFooterNoise(in: pageLines)
+        XCTAssertTrue(noise.contains("统一页眉"), "跨页重复的页眉应命中噪声")
+        XCTAssertFalse(noise.contains(""), "空串不应进入噪声集")
+        _ = PDFImporter.mergeParagraphs(pageLines: pageLines, noise: noise)
+    }
+
     // MARK: - 文字层探测与重排端到端
 
     func testTextPDFEndToEnd() throws {
@@ -187,5 +203,58 @@ final class PDFImportTests: XCTestCase {
         let stub = FileManager.default.temporaryDirectory.appendingPathComponent("x.pdf")
         XCTAssertTrue(PDFImporter.isPDF(fileURL: stub))
         XCTAssertFalse(PDFImporter.isPDF(fileURL: stub.appendingPathExtension("mobi")))
+    }
+
+    /// 真实 PDF 验收（本机不走 CI）：DREADER_PDF_REAL_FILE=<路径>，转换→组装→复解析全链计时。
+    func testRealPDFTargetEndToEnd() async throws {
+        guard let rawPath = ProcessInfo.processInfo.environment["DREADER_PDF_REAL_FILE"],
+              !rawPath.isEmpty else {
+            throw XCTSkip("设 DREADER_PDF_REAL_FILE=<pdf 路径> 跑真实书验收")
+        }
+        let url = URL(fileURLWithPath: rawPath)
+        let start = DispatchTime.now()
+        let parsed = try PDFImporter.parse(fileURL: url)
+        let parseMs = (DispatchTime.now().uptimeNanoseconds - start.uptimeNanoseconds) / 1_000_000
+        let sizes = parsed.chapters.map { $0.utf8Fragment.count }
+        print("[pdf-real] title=\(parsed.title) chapters=\(parsed.chapters.count) cover=\(parsed.coverUID != nil) parseMs=\(parseMs)")
+        print("[pdf-real] chapterTextKB total=\(sizes.reduce(0, +) / 1024) biggest=\((sizes.max() ?? 0) / 1024) smallest=\((sizes.min() ?? 0) / 1024)")
+
+        let output = FileManager.default.temporaryDirectory
+            .appendingPathComponent("real-pdf-\(UUID().uuidString).epub")
+        let assembleStart = DispatchTime.now()
+        try EpubAssembler.assemble(book: parsed, outputURL: output)
+        let assembleMs = (DispatchTime.now().uptimeNanoseconds - assembleStart.uptimeNanoseconds) / 1_000_000
+        addTeardownBlock { try? FileManager.default.removeItem(at: output) }
+        print("[pdf-real] assembleMs=\(assembleMs) size=\((try? FileManager.default.attributesOfItem(atPath: output.path)[.size] as? Int) ?? 0)")
+        printLargestEPUBEntries(output, limit: 5)
+
+        let book = try await EPUBParser.shared.parse(fileURL: output)
+        XCTAssertEqual(book.title, parsed.title)
+        XCTAssertEqual(book.chapters.count, parsed.chapters.count)
+        print("[pdf-real] reparse done, all green")
+    }
+
+    /// 体积排障：zip 成员按大小降序打印前 limit 个（含所有 >1MB 的条目总数）。
+    private func printLargestEPUBEntries(_ url: URL, limit: Int) {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/zipinfo")
+        process.arguments = ["-l", url.path]
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = FileHandle.nullDevice
+        guard (try? process.run()) != nil else { return }
+        process.waitUntilExit()
+        let text = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        let rows = text.split(separator: "\n").compactMap { line -> (Int, String)? in
+            let columns = line.split(separator: " ", omittingEmptySubsequences: true)
+            guard columns.count >= 8,
+                  let size = Int(String(columns[3]), radix: 10),
+                  columns[2].contains("-20") else { return nil }   // zipinfo 表格行：日期列在 size 之后
+            return (size, columns[7].count > 2 ? String(columns.dropLast(3).joined(separator: "")) : "??")
+        }.sorted { $0.0 > $1.0 }
+        for (size, name) in rows.prefix(limit) {
+            print("[pdf-real] \(size / 1024)KB  \(name)")
+        }
+        print("[pdf-real] entries >1MB: \(rows.filter { $0.0 > 1_000_000 }.count)")
     }
 }
