@@ -238,11 +238,6 @@ struct RealisticBookshelfView: View {
             }
             .help("探索 Open Library、古腾堡、Z-Library 与 OPDS 自建书馆 (⌘ + L)")
 
-            ShelfTopBarButton(icon: "quote.bubble.fill", label: "微信读书") {
-                onOpenWeChatSync?()
-            }
-            .help("同步微信读书划线与想法 (⌘ + ⇧ + W)")
-
             ShelfTopBarButton(icon: "highlighter", label: "划线笔记") {
                 onOpenGlobalNotebooks?()
             }
@@ -344,9 +339,6 @@ struct RealisticBookshelfView: View {
                 }
                 if let onOpenOnlineHub {
                     Button("在线书库", action: onOpenOnlineHub)
-                }
-                if let onOpenWeChatSync {
-                    Button("微信读书", action: onOpenWeChatSync)
                 }
                 if let onOpenGlobalNotebooks {
                     Button("划线笔记", action: onOpenGlobalNotebooks)

@@ -767,15 +767,6 @@ struct ReaderMainView: View {
             )
 
             AppleToolbarButton(
-                icon: "quote.bubble.fill",
-                isActive: vm.showWeChatSyncModal,
-                action: {
-                    vm.showWeChatSyncModal = true
-                },
-                helpText: "微信读书笔记与划线同步 (⌘+⇧+W)"
-            )
-
-            AppleToolbarButton(
                 icon: "highlighter",
                 isActive: vm.showGlobalNotebooksModal,
                 action: {
