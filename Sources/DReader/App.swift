@@ -36,6 +36,11 @@ struct DReaderApp: App {
                 }
                 .keyboardShortcut("n", modifiers: [.command, .shift])
 
+                Button("优质书单与榜单目录...") {
+                    viewModel.openRankings()
+                }
+                .keyboardShortcut("g", modifiers: .command)
+
                 Button(viewModel.readAloud.state == .playing ? "暂停整章朗读" : "开始整章朗读 (听书)") {
                     viewModel.toggleChapterReadAloud()
                 }

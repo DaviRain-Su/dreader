@@ -27,6 +27,7 @@ final class ReaderViewModel: @unchecked Sendable {
     var isViewingBookshelf: Bool = true // Default to showing Bookshelf on launch
     var isBrowsingOnlineLibrary: Bool = false // 书架层子页面：在线数字书库多栏页
     var isBrowsingGlobalNotebooks: Bool = false // 书架层子页面：划线与思考回顾中心整页
+    var isBrowsingRankings: Bool = false // 书架层子页面：书单榜单目录页
     var sidebarTab: SidebarTab = .toc
     var isSidebarVisible: Bool = false
     var isAIPanelVisible: Bool = false
@@ -44,9 +45,15 @@ final class ReaderViewModel: @unchecked Sendable {
         case opds(fileURL: URL)          // 完整 EPUB 已在临时目录，导入即原文件走 openEPUB
         case weread(bookId: String, title: String, author: String, cover: String) // 完整本需再走微信抓取
     }
+    /// 试读发起页：退出试读时按来源返回（不然一律落回在线书库，榜单页会跳错）。
+    enum PreviewOrigin: Equatable, Sendable {
+        case library
+        case rankings
+    }
     var previewTotalChapterCount: Int = 0
     private(set) var previewBook: EPUBBook?
     var isInPreviewMode: Bool { previewBook != nil }
+    private(set) var previewOriginPage: PreviewOrigin = .library
 
     /// 统一入口：从书架层打开在线数字书库页面。
     func openOnlineLibrary() {
@@ -65,6 +72,17 @@ final class ReaderViewModel: @unchecked Sendable {
             isViewingBookshelf = true
             isBrowsingOnlineLibrary = false
             isBrowsingGlobalNotebooks = true
+        }
+    }
+
+    /// 统一入口：打开书单榜单目录页（与在线书库同一套页面化交互）。
+    func openRankings() {
+        if !isViewingBookshelf { returnToBookshelf() }
+        withAnimation(.easeInOut(duration: 0.22)) {
+            isViewingBookshelf = true
+            isBrowsingOnlineLibrary = false
+            isBrowsingGlobalNotebooks = false
+            isBrowsingRankings = true
         }
     }
 
@@ -235,6 +253,7 @@ final class ReaderViewModel: @unchecked Sendable {
             isViewingBookshelf = true
             isBrowsingOnlineLibrary = false
             isBrowsingGlobalNotebooks = false
+            isBrowsingRankings = false
             selectionManager.clear()
         }
         clearMarginRects()
@@ -846,8 +865,9 @@ final class ReaderViewModel: @unchecked Sendable {
     var previewSource: PreviewSource?
 
     /// 试读打开：不落书架、不写位置/统计，关掉即丢。书的前 N 章由调用方已经裁好。
+    /// origin 记录发起页（书库默认，榜单页显式传 .rankings），退出时按来源返回。
     @MainActor
-    func enterPreview(book: EPUBBook, meta: PreviewSource, totalChapters: Int) {
+    func enterPreview(book: EPUBBook, meta: PreviewSource, totalChapters: Int, origin: PreviewOrigin = .library) {
         flushReadingPosition()          // 此前若在读别的书，先落位保存
         stopChapterReadAloud()
         readingSaveTask?.cancel()
@@ -861,10 +881,13 @@ final class ReaderViewModel: @unchecked Sendable {
         previewBook = book
         previewTotalChapterCount = totalChapters
         previewSource = meta
+        previewOriginPage = origin
         withAnimation(.easeInOut(duration: 0.25)) {
             currentBook = book
             isViewingBookshelf = false
             isBrowsingOnlineLibrary = false
+            isBrowsingRankings = false
+            isBrowsingGlobalNotebooks = false
             isSidebarVisible = false
             selectionManager.clear()
         }
@@ -878,10 +901,15 @@ final class ReaderViewModel: @unchecked Sendable {
         previewBook = nil
         readingSaveTask?.cancel()
         pendingReadingDestination = nil
+        let origin = previewOriginPage
+        previewOriginPage = .library
         withAnimation(.easeInOut(duration: 0.25)) {
             currentBook = nil
             isViewingBookshelf = true
-            isBrowsingOnlineLibrary = true
+            switch origin {
+            case .library: isBrowsingOnlineLibrary = true
+            case .rankings: isBrowsingRankings = true
+            }
             selectionManager.clear()
         }
     }
@@ -890,12 +918,17 @@ final class ReaderViewModel: @unchecked Sendable {
     @MainActor
     func importOPDSPreview() {
         guard case .opds(let fileURL)? = previewSource else { return }
+        let origin = previewOriginPage
+        previewOriginPage = .library
         previewTotalChapterCount = 0
         previewSource = nil
         previewBook = nil
         withAnimation(.easeInOut(duration: 0.25)) {
             isViewingBookshelf = true
-            isBrowsingOnlineLibrary = true
+            switch origin {
+            case .library: isBrowsingOnlineLibrary = true
+            case .rankings: isBrowsingRankings = true
+            }
         }
         Task { await openEPUB(url: fileURL) }
     }

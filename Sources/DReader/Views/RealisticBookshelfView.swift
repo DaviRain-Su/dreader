@@ -8,6 +8,7 @@ struct RealisticBookshelfView: View {
     var onOpenOnlineHub: (() -> Void)? = nil
     var onOpenWeChatSync: (() -> Void)? = nil
     var onOpenGlobalNotebooks: (() -> Void)? = nil
+    var onOpenRankings: (() -> Void)? = nil
     var onDeleteBook: ((UUID) -> Void)? = nil
     var onResetProgress: ((UUID) -> Void)? = nil
     var onOpenXRay: ((EPUBBook) -> Void)? = nil
@@ -99,6 +100,7 @@ struct RealisticBookshelfView: View {
                             onOpenOnlineHub: onOpenOnlineHub,
                             onOpenWeChatSync: onOpenWeChatSync,
                             onOpenGlobalNotebooks: onOpenGlobalNotebooks,
+                            onOpenRankings: onOpenRankings,
                             recommendedClassics: recommendedClassics,
                             onAddClassic: { classic in
                                 onAddClassic?(classic)
@@ -238,6 +240,11 @@ struct RealisticBookshelfView: View {
             }
             .help("探索 Open Library、古腾堡、Z-Library 与 OPDS 自建书馆 (⌘ + L)")
 
+            ShelfTopBarButton(icon: "trophy.fill", label: "书单榜单") {
+                onOpenRankings?()
+            }
+            .help("浏览豆瓣 Top250、微信读书榜单与国际奖项书单 (⌘ + G)")
+
             ShelfTopBarButton(icon: "highlighter", label: "划线笔记") {
                 onOpenGlobalNotebooks?()
             }
@@ -342,6 +349,9 @@ struct RealisticBookshelfView: View {
                 }
                 if let onOpenGlobalNotebooks {
                     Button("划线笔记", action: onOpenGlobalNotebooks)
+                }
+                if let onOpenRankings {
+                    Button("书单榜单", action: onOpenRankings)
                 }
             } label: {
                 Label("书库工具", systemImage: "ellipsis.circle")
@@ -824,6 +834,7 @@ private struct WarmEmptyStudyView: View {
     var onOpenOnlineHub: (() -> Void)? = nil
     var onOpenWeChatSync: (() -> Void)? = nil
     var onOpenGlobalNotebooks: (() -> Void)? = nil
+    var onOpenRankings: (() -> Void)? = nil
     let recommendedClassics: [ChineseClassicsRegistry.ClassicBook]
     let onAddClassic: (ChineseClassicsRegistry.ClassicBook) -> Void
 
@@ -932,6 +943,27 @@ private struct WarmEmptyStudyView: View {
                             .overlay(
                                 RoundedRectangle(cornerRadius: 6)
                                     .stroke(Color.orange.opacity(0.35), lineWidth: 0.8)
+                            )
+                            .clipShape(RoundedRectangle(cornerRadius: 6))
+                        }
+                        .buttonStyle(.plain)
+                    }
+
+                    if let onOpenRankings = onOpenRankings {
+                        Button(action: onOpenRankings) {
+                            HStack(spacing: 6) {
+                                Image(systemName: "trophy.fill")
+                                    .font(.system(size: 12))
+                                Text("浏览书单榜单...")
+                                    .font(.system(size: 12, weight: .medium, design: .serif))
+                            }
+                            .foregroundStyle(Color(hex: "#E9C46A"))
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 8)
+                            .background(Color(hex: "#9E7A45").opacity(0.22))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 6)
+                                    .stroke(Color(hex: "#9E7A45").opacity(0.4), lineWidth: 0.8)
                             )
                             .clipShape(RoundedRectangle(cornerRadius: 6))
                         }

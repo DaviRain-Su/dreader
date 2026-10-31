@@ -28,6 +28,9 @@ struct ReaderMainView: View {
                     } else if vm.isBrowsingOnlineLibrary {
                         OnlineLibraryView(vm: vm)
                             .transition(.opacity)
+                    } else if vm.isBrowsingRankings {
+                        RankingsDirectoryView(vm: vm)
+                            .transition(.opacity)
                     } else {
                         RealisticBookshelfView(
                             books: vm.books,
@@ -48,6 +51,9 @@ struct ReaderMainView: View {
                             },
                             onOpenGlobalNotebooks: {
                                 vm.openGlobalNotebooks()
+                            },
+                            onOpenRankings: {
+                                vm.openRankings()
                             },
                             onDeleteBook: { id in
                                 vm.removeBook(id: id)
@@ -80,6 +86,7 @@ struct ReaderMainView: View {
             .animation(.easeInOut(duration: 0.22), value: vm.isViewingBookshelf)
             .animation(.easeInOut(duration: 0.22), value: vm.isBrowsingOnlineLibrary)
             .animation(.easeInOut(duration: 0.22), value: vm.isBrowsingGlobalNotebooks)
+            .animation(.easeInOut(duration: 0.22), value: vm.isBrowsingRankings)
 
             // Global Error Notification Toast
             if let errorMsg = vm.errorMessage {

@@ -73,6 +73,7 @@ struct KeyboardCheatSheetView: View {
             .init(keys: "Esc", label: "返回 / 逐层关闭浮层"),
             .init(keys: "⌘⇧W", label: "微信读书划线同步"),
             .init(keys: "⌘⇧N", label: "划线与思考中心"),
+            .init(keys: "⌘G", label: "书单榜单目录"),
             .init(keys: "⌘⇧R", label: "划线 Mastery 复习"),
             .init(keys: "?", label: "本速查"),
         ]
