@@ -107,7 +107,7 @@ struct WeChatReadingSyncModalView: View {
 
                     Button {
                         onClose()
-                        GlobalNotebooksWindowController.present(viewModel: viewModel)
+                        viewModel.openGlobalNotebooks()
                     } label: {
                         HStack(spacing: 4) {
                             Text("立即查看笔记")
@@ -355,7 +355,7 @@ struct WeChatReadingSyncModalView: View {
                 if wechatNotesCount > 0 {
                     Button {
                         onClose()
-                        GlobalNotebooksWindowController.present(viewModel: viewModel)
+                        viewModel.openGlobalNotebooks()
                     } label: {
                         HStack(spacing: 4) {
                             Image(systemName: "highlighter")
@@ -674,7 +674,7 @@ struct WeChatReadingSyncModalView: View {
                 if count > 0 {
                     Button {
                         onClose()
-                        GlobalNotebooksWindowController.present(viewModel: viewModel)
+                        viewModel.openGlobalNotebooks()
                     } label: {
                         HStack(spacing: 3) {
                             Image(systemName: "text.book.closed.fill")

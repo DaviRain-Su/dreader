@@ -26,6 +26,7 @@ final class ReaderViewModel: @unchecked Sendable {
 
     var isViewingBookshelf: Bool = true // Default to showing Bookshelf on launch
     var isBrowsingOnlineLibrary: Bool = false // 书架层子页面：在线数字书库多栏页
+    var isBrowsingGlobalNotebooks: Bool = false // 书架层子页面：划线与思考回顾中心整页
     var sidebarTab: SidebarTab = .toc
     var isSidebarVisible: Bool = false
     var isAIPanelVisible: Bool = false
@@ -53,6 +54,17 @@ final class ReaderViewModel: @unchecked Sendable {
         withAnimation(.easeInOut(duration: 0.22)) {
             isViewingBookshelf = true
             isBrowsingOnlineLibrary = true
+            isBrowsingGlobalNotebooks = false
+        }
+    }
+
+    /// 统一入口：打开划线与思考回顾中心整页（与在线书库同一套页面化交互；阅读中先回到书架层再切页）。
+    func openGlobalNotebooks() {
+        if !isViewingBookshelf { returnToBookshelf() }
+        withAnimation(.easeInOut(duration: 0.22)) {
+            isViewingBookshelf = true
+            isBrowsingOnlineLibrary = false
+            isBrowsingGlobalNotebooks = true
         }
     }
 
@@ -222,6 +234,7 @@ final class ReaderViewModel: @unchecked Sendable {
         withAnimation(.easeInOut(duration: 0.25)) {
             isViewingBookshelf = true
             isBrowsingOnlineLibrary = false
+            isBrowsingGlobalNotebooks = false
             selectionManager.clear()
         }
     }

@@ -1,49 +1,10 @@
 import SwiftUI
-import AppKit
 
-/// 划线与思考回顾中心——独立常驻窗口（原 sheet 弹窗体验差，NSWindow 单例复用）。
-@MainActor
-enum GlobalNotebooksWindowController {
-    private static var window: NSWindow?
-
-    static func present(viewModel: ReaderViewModel) {
-        if let window {
-            window.makeKeyAndOrderFront(nil)
-            NSApp.activate(ignoringOtherApps: true)
-            return
-        }
-        let win = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 980, height: 680),
-            styleMask: [.titled, .closable, .resizable, .miniaturizable],
-            backing: .buffered,
-            defer: false
-        )
-        win.title = "划线与思考回顾中心"
-        win.minSize = NSSize(width: 720, height: 520)
-        win.contentView = NSHostingView(
-            rootView: GlobalNotebooksModalView(viewModel: viewModel) {
-                GlobalNotebooksWindowController.performClose()
-            }
-        )
-        win.center()
-        win.isReleasedWhenClosed = false
-        window = win
-        win.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
-    }
-
-    /// 视图内「关闭 / 跳原文」共用：关窗并把焦点还给主窗口。
-    static func performClose() {
-        window?.performClose(nil)
-        NSApp.activate(ignoringOtherApps: true)
-    }
-}
-
-/// Global Notebooks & Highlights Hub (全书库划线、思考与微信读书笔记回顾中心)
-/// Unifies local DReader highlights and synced WeChat Reading notes into a coherent personal knowledge base.
-struct GlobalNotebooksModalView: View {
+/// 全书库划线与思考回顾中心——书架层整页（与在线书库同一套页面化交互，入口点击即整窗切换）。
+struct GlobalNotebooksPageView: View {
     @Bindable var viewModel: ReaderViewModel
     let onClose: () -> Void
+    @Environment(\.colorScheme) private var colorScheme
     @State private var selectedBookTitle: String? = nil // nil = All books
     @State private var sourceFilter: HighlightSourceFilter = .all
     @State private var searchQuery: String = ""
@@ -72,8 +33,14 @@ struct GlobalNotebooksModalView: View {
         let isWeChat: Bool
     }
 
-    private var allBookGroups: [BookNoteGroup] {
-        var map: [String: (author: String, highlights: Int, thoughts: Int, isWeChat: Bool)] = [:]
+    /// 页面底色：与在线书库整页同一套暖纸色，避免沿用弹窗的 ultraThinMaterial 观感
+    private var backgroundColor: Color {
+        colorScheme == .dark
+            ? Color(hex: "#171310")
+            : Color(hex: "#F3EDE2")
+    }
+
+    private var allBookGroups: [BookNoteGroup] {        var map: [String: (author: String, highlights: Int, thoughts: Int, isWeChat: Bool)] = [:]
         for h in viewModel.highlights {
             let t = h.bookTitle.isEmpty ? "未命名书籍" : h.bookTitle
             var entry = map[t] ?? (author: h.wechatAuthor ?? "", highlights: 0, thoughts: 0, isWeChat: false)
@@ -188,8 +155,7 @@ struct GlobalNotebooksModalView: View {
                 .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
-        .frame(minWidth: 880, idealWidth: 980, minHeight: 600, idealHeight: 680)
-        .background(.ultraThinMaterial)
+        .background(backgroundColor)
         .sheet(item: $quoteCardHighlight) { item in
             QuoteCardView(
                 highlight: item,
@@ -211,6 +177,25 @@ struct GlobalNotebooksModalView: View {
     // MARK: - Header Bar
     private var headerBar: some View {
         HStack(spacing: 12) {
+            // 返回书架：页面化后替代原 NSWindow 标题栏/xmark 关闭
+            Button {
+                onClose()
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "chevron.backward")
+                        .font(.system(size: 11, weight: .semibold))
+                    Text("书架")
+                        .font(.system(size: 12, weight: .medium))
+                }
+                .foregroundStyle(Color.primary.opacity(0.85))
+                .padding(.horizontal, 9)
+                .frame(height: 28)
+                .background(Color.primary.opacity(0.06))
+                .clipShape(Capsule())
+            }
+            .buttonStyle(.plain)
+            .help("返回书架大厅 (⌘+B)")
+
             ZStack {
                 Circle()
                     .fill(
@@ -312,16 +297,6 @@ struct GlobalNotebooksModalView: View {
             .buttonStyle(.plain)
             .help("开始今日 Mastery 划线复习（间隔重现记忆）")
 
-            // Close Button
-            Button {
-                onClose()
-            } label: {
-                Image(systemName: "xmark.circle.fill")
-                    .font(.system(size: 18))
-                    .foregroundStyle(.secondary.opacity(0.8))
-            }
-            .buttonStyle(.plain)
-            .help("关闭 (Esc)")
         }
         .padding(.horizontal, 18)
         .padding(.vertical, 12)

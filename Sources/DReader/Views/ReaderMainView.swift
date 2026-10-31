@@ -20,7 +20,12 @@ struct ReaderMainView: View {
         ZStack(alignment: .top) {
             Group {
                 if vm.isViewingBookshelf {
-                    if vm.isBrowsingOnlineLibrary {
+                    if vm.isBrowsingGlobalNotebooks {
+                        GlobalNotebooksPageView(viewModel: vm) {
+                            vm.returnToBookshelf()
+                        }
+                        .transition(.opacity)
+                    } else if vm.isBrowsingOnlineLibrary {
                         OnlineLibraryView(vm: vm)
                             .transition(.opacity)
                     } else {
@@ -42,7 +47,7 @@ struct ReaderMainView: View {
                                 vm.showWeChatSyncModal = true
                             },
                             onOpenGlobalNotebooks: {
-                                GlobalNotebooksWindowController.present(viewModel: vm)
+                                vm.openGlobalNotebooks()
                             },
                             onDeleteBook: { id in
                                 vm.removeBook(id: id)
@@ -74,6 +79,7 @@ struct ReaderMainView: View {
             }
             .animation(.easeInOut(duration: 0.22), value: vm.isViewingBookshelf)
             .animation(.easeInOut(duration: 0.22), value: vm.isBrowsingOnlineLibrary)
+            .animation(.easeInOut(duration: 0.22), value: vm.isBrowsingGlobalNotebooks)
 
             // Global Error Notification Toast
             if let errorMsg = vm.errorMessage {
@@ -764,7 +770,7 @@ struct ReaderMainView: View {
             AppleToolbarButton(
                 icon: "highlighter",
                 action: {
-                    GlobalNotebooksWindowController.present(viewModel: vm)
+                    vm.openGlobalNotebooks()
                 },
                 helpText: "全书库划线与思考回顾中心 (⌘+⇧+N)"
             )
