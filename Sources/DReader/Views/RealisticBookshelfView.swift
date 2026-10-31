@@ -989,7 +989,7 @@ private struct AddBookSlotView: View {
                         .font(.system(size: 12, weight: .medium, design: .serif))
                         .foregroundStyle(Color(hex: "#F5E6C8").opacity(isHovered ? 0.9 : 0.6))
 
-                    Text("支持 .epub / .mobi / .md")
+                    Text("支持 .epub / .mobi / .md / .pdf")
                         .font(.system(size: 9))
                         .foregroundStyle(Color(hex: "#CBB393").opacity(0.4))
                 }

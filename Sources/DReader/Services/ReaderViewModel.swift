@@ -401,11 +401,13 @@ final class ReaderViewModel: @unchecked Sendable {
 
         do {
             var parseURL = url
-            let needsConversion = Self.isKindleStream(url) || MarkdownImporter.isMarkdown(fileURL: url)
+            let needsConversion = Self.isKindleStream(url) || MarkdownImporter.isMarkdown(fileURL: url) || PDFImporter.isPDF(fileURL: url)
             if needsConversion {
                 let convert: @Sendable (URL) throws -> URL = MarkdownImporter.isMarkdown(fileURL: url)
                     ? Self.convertMarkdownEPUB
-                    : Self.convertMOBIEPUB
+                    : PDFImporter.isPDF(fileURL: url)
+                        ? Self.convertPDFEPUB
+                        : Self.convertMOBIEPUB
                 do {
                     let parsed = try await Task.detached(priority: .userInitiated) {
                         try convert(url)
@@ -436,9 +438,9 @@ final class ReaderViewModel: @unchecked Sendable {
         }
     }
 
-    /// 文件点选项在打开面板里的类型集合（EPUB / Kindle 流 / Markdown）。
+    /// 文件点选项在打开面板里的类型集合（EPUB / Kindle 流 / Markdown / PDF）。
     static var importableContentTypes: [UTType] {
-        let extensions = ["epub", "mobi", "azw3", "md", "markdown"]
+        let extensions = ["epub", "mobi", "azw3", "md", "markdown", "pdf"]
         return extensions.compactMap { UTType(filenameExtension: $0) } + [UTType.data]
     }
 
@@ -462,6 +464,12 @@ final class ReaderViewModel: @unchecked Sendable {
     /// Markdown → 组装标准 EPUB（标题切章、frontmatter 提元数据）。
     static func convertMarkdownEPUB(from url: URL) throws -> URL {
         let parsed = try MarkdownImporter.parse(fileURL: url)
+        return try convertParsedToEPUB(parsed, from: url)
+    }
+
+    /// PDF → 组装标准 EPUB：文字层走重排，扫描件走原版式页面图。
+    static func convertPDFEPUB(from url: URL) throws -> URL {
+        let parsed = try PDFImporter.parse(fileURL: url)
         return try convertParsedToEPUB(parsed, from: url)
     }
 
