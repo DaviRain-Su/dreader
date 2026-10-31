@@ -34,31 +34,25 @@ struct HighlightDetailCard: View {
         VStack(alignment: .leading, spacing: 8) {
             // 主行：色板 + 操作按钮（单行工具条，无彩单色）
             HStack(spacing: 2) {
-                // Color dots (tap to switch highlight color) —— 全条唯一的彩色
-                HStack(spacing: 4) {
+                // Color dots（tap to switch highlight color）：不加文字提示、不以勾选表达选中，
+                // 只有当前色有醒目的深色环——弹出 tooltip 反而在选色时最碍事
+                HStack(spacing: 5) {
                     ForEach(colors, id: \.hex) { item in
                         Circle()
                             .fill(item.color)
-                            .frame(width: 14, height: 14)
+                            .frame(width: 13, height: 13)
                             .overlay(
                                 Circle()
-                                    .stroke(Color.primary.opacity(item.hex == highlight.colorHex ? 0.8 : 0.15),
-                                            lineWidth: item.hex == highlight.colorHex ? 1.8 : 0.5)
-                            )
-                            .overlay(
-                                Image(systemName: "checkmark")
-                                    .font(.system(size: 7, weight: .black))
-                                    .foregroundStyle(Color.black.opacity(0.8))
-                                    .opacity(item.hex == highlight.colorHex ? 1 : 0)
+                                    .stroke(Color.primary.opacity(item.hex == highlight.colorHex ? 0.85 : 0.12),
+                                            lineWidth: item.hex == highlight.colorHex ? 1.8 : 0.8)
                             )
                             .contentShape(Circle())
                             .onTapGesture {
                                 onUpdateColor(item.hex)
                             }
-                            .help("更换为\(item.name)划线")
                     }
                 }
-                .padding(.horizontal, 2)
+                .padding(.horizontal, 3)
 
                 Divider()
                     .frame(height: 12)
