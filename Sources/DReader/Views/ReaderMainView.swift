@@ -42,7 +42,7 @@ struct ReaderMainView: View {
                                 vm.showWeChatSyncModal = true
                             },
                             onOpenGlobalNotebooks: {
-                                vm.showGlobalNotebooksModal = true
+                                GlobalNotebooksWindowController.present(viewModel: vm)
                             },
                             onDeleteBook: { id in
                                 vm.removeBook(id: id)
@@ -157,11 +157,6 @@ struct ReaderMainView: View {
         .sheet(isPresented: $vm.showWeChatSyncModal) {
             WeChatReadingSyncModalView(viewModel: vm) {
                 vm.showWeChatSyncModal = false
-            }
-        }
-        .sheet(isPresented: $vm.showGlobalNotebooksModal) {
-            GlobalNotebooksModalView(viewModel: vm) {
-                vm.showGlobalNotebooksModal = false
             }
         }
         .sheet(isPresented: $vm.showReviewSessionModal) {
@@ -768,9 +763,8 @@ struct ReaderMainView: View {
 
             AppleToolbarButton(
                 icon: "highlighter",
-                isActive: vm.showGlobalNotebooksModal,
                 action: {
-                    vm.showGlobalNotebooksModal = true
+                    GlobalNotebooksWindowController.present(viewModel: vm)
                 },
                 helpText: "全书库划线与思考回顾中心 (⌘+⇧+N)"
             )

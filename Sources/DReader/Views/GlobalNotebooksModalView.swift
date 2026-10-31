@@ -1,12 +1,49 @@
 import SwiftUI
 import AppKit
 
+/// 划线与思考回顾中心——独立常驻窗口（原 sheet 弹窗体验差，NSWindow 单例复用）。
+@MainActor
+enum GlobalNotebooksWindowController {
+    private static var window: NSWindow?
+
+    static func present(viewModel: ReaderViewModel) {
+        if let window {
+            window.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            return
+        }
+        let win = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 980, height: 680),
+            styleMask: [.titled, .closable, .resizable, .miniaturizable],
+            backing: .buffered,
+            defer: false
+        )
+        win.title = "划线与思考回顾中心"
+        win.minSize = NSSize(width: 720, height: 520)
+        win.contentView = NSHostingView(
+            rootView: GlobalNotebooksModalView(viewModel: viewModel) {
+                GlobalNotebooksWindowController.performClose()
+            }
+        )
+        win.center()
+        win.isReleasedWhenClosed = false
+        window = win
+        win.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    /// 视图内「关闭 / 跳原文」共用：关窗并把焦点还给主窗口。
+    static func performClose() {
+        window?.performClose(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+}
+
 /// Global Notebooks & Highlights Hub (全书库划线、思考与微信读书笔记回顾中心)
 /// Unifies local DReader highlights and synced WeChat Reading notes into a coherent personal knowledge base.
 struct GlobalNotebooksModalView: View {
     @Bindable var viewModel: ReaderViewModel
     let onClose: () -> Void
-
     @State private var selectedBookTitle: String? = nil // nil = All books
     @State private var sourceFilter: HighlightSourceFilter = .all
     @State private var searchQuery: String = ""

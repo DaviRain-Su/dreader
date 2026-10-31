@@ -31,7 +31,6 @@ final class ReaderViewModel: @unchecked Sendable {
     var isAIPanelVisible: Bool = false
     var showReadingInsights: Bool = false
     var showWeChatSyncModal: Bool = false
-    var showGlobalNotebooksModal: Bool = false
     var showReviewSessionModal: Bool = false
     var isLoadingBook: Bool = false
     var errorMessage: String?

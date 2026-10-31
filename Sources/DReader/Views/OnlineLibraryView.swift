@@ -1362,25 +1362,28 @@ struct OnlineLibraryView: View {
                     .foregroundStyle(Color.secondary.opacity(0.75))
                     .lineLimit(3)
                     .padding(.horizontal, 14)
+            }
 
-                Button {
-                    vm.showWeChatSyncModal = true
-                } label: {
-                    HStack(spacing: 5) {
-                        Image(systemName: "quote.bubble.fill")
-                            .font(.system(size: 10))
-                        Text("同步划线与想法")
-                            .font(.system(size: 10.5, weight: .medium))
-                    }
-                    .foregroundStyle(Color(hex: "#1F9E51").opacity(0.85))
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 5)
-                    .background(Color(hex: "#1F9E51").opacity(0.10), in: Capsule())
+            // 笔记同步走 API Key（wrk-*）独立于扫码 cookie，两种凭据任配其一即可用
+            Button {
+                vm.showWeChatSyncModal = true
+            } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: "quote.bubble.fill")
+                        .font(.system(size: 10))
+                    Text("同步阅读笔记（API Key）")
+                        .font(.system(size: 10.5, weight: .medium))
                 }
-                .buttonStyle(.plain)
-                .padding(.horizontal, 14)
-                .help("从微信读书导入划线与想法 (⌘+⇧+W)")
-            } else {
+                .foregroundStyle(Color(hex: "#1F9E51").opacity(0.85))
+                .padding(.horizontal, 10)
+                .padding(.vertical, 5)
+                .background(Color(hex: "#1F9E51").opacity(0.10), in: Capsule())
+            }
+            .buttonStyle(.plain)
+            .padding(.horizontal, 14)
+            .help("绑定 WEREAD_API_KEY 后导入划线与想法 (⌘+⇧+W)")
+
+            if !model.wereadLoggedIn {
                 VStack(spacing: 10) {
                     Image(systemName: "person.icloud")
                         .font(.system(size: 26))
