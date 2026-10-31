@@ -178,22 +178,23 @@ struct ReaderMainView: View {
                 onStartReview: { vm.showReviewSessionModal = true }
             )
         }
+        // 文本输入聚焦时（如批注卡写想法），翻页快捷键让位给输入——否则空格既没法打出空格还会带着页面跑
         .onKeyPress(.space) {
-            if !vm.isViewingBookshelf && !vm.isSearchPresented {
+            if !vm.isViewingBookshelf && !vm.isSearchPresented && !isTextInputActive {
                 vm.scrollPage(direction: 1)
                 return .handled
             }
             return .ignored
         }
         .onKeyPress(.downArrow) {
-            if !vm.isViewingBookshelf && !vm.isSearchPresented {
+            if !vm.isViewingBookshelf && !vm.isSearchPresented && !isTextInputActive {
                 vm.scrollPage(direction: 1)
                 return .handled
             }
             return .ignored
         }
         .onKeyPress(.upArrow) {
-            if !vm.isViewingBookshelf && !vm.isSearchPresented {
+            if !vm.isViewingBookshelf && !vm.isSearchPresented && !isTextInputActive {
                 vm.scrollPage(direction: -1)
                 return .handled
             }
@@ -219,7 +220,7 @@ struct ReaderMainView: View {
             return .ignored
         }
         .onKeyPress(characters: CharacterSet(charactersIn: "jk")) { keyPress in
-            guard !vm.isViewingBookshelf && !vm.isSearchPresented else { return .ignored }
+            guard !vm.isViewingBookshelf && !vm.isSearchPresented && !isTextInputActive else { return .ignored }
             if keyPress.characters == "j" && keyPress.modifiers.isEmpty {
                 vm.scrollPage(direction: 1)
                 return .handled
@@ -231,7 +232,7 @@ struct ReaderMainView: View {
         }
         // 键盘标注流：H = 高亮选区 / N = 高亮并写想法（webview 聚焦时走 JS 桥接，未聚焦走这里）
         .onKeyPress(characters: CharacterSet(charactersIn: "?/")) { keyPress in
-            guard !showKeyboardCheatSheet else { return .ignored }
+            guard !showKeyboardCheatSheet && !isTextInputActive else { return .ignored }
             if keyPress.characters == "?" {
                 withAnimation(.easeOut(duration: 0.16)) { showKeyboardCheatSheet = true }
                 return .handled
@@ -239,7 +240,7 @@ struct ReaderMainView: View {
             return .ignored
         }
         .onKeyPress(characters: CharacterSet(charactersIn: "hn")) { keyPress in
-            guard !vm.isViewingBookshelf && !vm.isSearchPresented && !vm.isAIPanelVisible else { return .ignored }
+            guard !vm.isViewingBookshelf && !vm.isSearchPresented && !vm.isAIPanelVisible && !isTextInputActive else { return .ignored }
             guard keyPress.modifiers.isEmpty else { return .ignored }
             // 笔记卡片编辑中不接键，避免输入 h/n 误触
             guard vm.selectionManager.activeHighlightCard == nil else { return .ignored }
@@ -253,6 +254,11 @@ struct ReaderMainView: View {
             }
             return .ignored
         }
+    }
+
+    /// 文本编辑聚焦时（批注卡写想法等），阅读快捷键全部让位给输入
+    private var isTextInputActive: Bool {
+        NSApp.keyWindow?.firstResponder is NSTextView
     }
 
     /// H/N 键盘标注：false = 直接高亮，true = 高亮并弹想法卡（SwiftUI onKeyPress 与 JS 桥接两条路径共用）。
