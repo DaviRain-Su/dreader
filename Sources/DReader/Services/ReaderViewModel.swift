@@ -601,7 +601,8 @@ final class ReaderViewModel: @unchecked Sendable {
 
     /// 页边 rect 重拉入口：滚动只推活跃窗，常驻扫描 tick 负责实际节奏（100ms 一格）
     func requestMarginRects(_ reason: MarginPullReason) {
-        guard settings.isMarginNotes, !settings.isZenMode, !settings.isVertical, currentBook != nil else { return }
+        guard settings.isMarginNotes, !settings.isZenMode, !settings.isVertical,
+              settings.pageLayout != .spread, currentBook != nil else { return }
         let now = Date()
         switch reason {
         case .scroll:

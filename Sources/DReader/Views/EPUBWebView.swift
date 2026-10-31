@@ -312,11 +312,13 @@ struct EPUBWebView: NSViewRepresentable {
                 }
                 let offset = (plan["offset"] as? Double) ?? 0
                 let vertical = (plan["vertical"] as? Bool) ?? false
+                let rtlH = (plan["rtlH"] as? Bool) ?? false
 
                 self.runPageTurnOverlay(
                     direction: direction,
                     offset: offset,
                     vertical: vertical,
+                    rtlH: rtlH,
                     snapshot: snapshot,
                     pageColor: pageColor,
                     webView: webView
@@ -328,6 +330,7 @@ struct EPUBWebView: NSViewRepresentable {
             direction: Int,
             offset: Double,
             vertical: Bool,
+            rtlH: Bool,
             snapshot: NSImage,
             pageColor: String,
             webView: WKWebView
@@ -359,8 +362,8 @@ struct EPUBWebView: NSViewRepresentable {
 
             // 3. webview 内容瞬时跳到目标位置（被快照+纸面盖住，不可见）
             let js: String
-            if vertical {
-                // 竖排：前进 = scrollLeft 减小（从右往左读）
+            if vertical || rtlH {
+                // 竖排 / 双页对开右起：前进 = scrollLeft 减小（从右往左读）
                 js = direction > 0
                     ? "window.scrollBy({ left: -\(offset), behavior: 'auto' });"
                     : "window.scrollBy({ left: \(offset), behavior: 'auto' });"
@@ -374,7 +377,7 @@ struct EPUBWebView: NSViewRepresentable {
             // 4. 动画：快照朝阅读前进方向滑出
             let dx: CGFloat
             let dy: CGFloat
-            if vertical {
+            if vertical || rtlH {
                 dx = direction > 0 ? bounds.width : -bounds.width // 前进 → 旧页左滑出
                 dy = 0
             } else {

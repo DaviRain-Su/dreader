@@ -432,7 +432,9 @@ struct EPUBThemeInjector {
         let theme = settings.theme
         let align = settings.isJustified ? "justify" : "left"
         let isSpread = settings.pageLayout == .spread
-        let computedMaxWidth = isSpread ? 1160.0 : settings.maxWidth
+        // 双页对开走书页式右起（direction:rtl 列序，先读右页），与竖排互斥
+        let isSpreadRTL = isSpread && !settings.isVertical
+        let computedMaxWidth = isSpreadRTL ? 1920.0 : (isSpread ? 1160.0 : settings.maxWidth)
         let ruleColor = theme.isDark ? "rgba(255, 255, 255, 0.08)" : "rgba(0, 0, 0, 0.08)"
 
         let fontOverrideCSS: String
@@ -544,6 +546,43 @@ struct EPUBThemeInjector {
             ::-webkit-scrollbar { height: 10px; width: 10px; }
             ::-webkit-scrollbar-thumb { background: rgba(127,127,127,0.35); border-radius: 5px; }
             """
+        } else if isSpreadRTL {
+            // 双页对开（书页式右起）：滚动原点右置、列横向向左溢出续页，一屏正好两页；
+            // 先读右页再读左页，与翻书同序。子级行文回归 LTR，只有容器 direction 决定列序。
+            verticalCSS = """
+            html {
+                overflow-y: hidden !important;
+                overflow-x: auto !important;
+                direction: rtl !important;
+            }
+
+            body {
+                height: 100vh !important;
+                max-height: none !important;
+                max-width: none !important;
+                width: auto !important;
+                margin: 0 !important;
+                padding: 48px 32px !important;
+                box-sizing: border-box !important;
+            }
+
+            #dreader-chapter-body {
+                direction: rtl !important;
+                height: 100% !important;
+                column-count: 2 !important;
+                column-gap: 64px !important;
+                column-fill: auto !important;
+                column-rule: 1px solid \(ruleColor) !important;
+            }
+
+            #dreader-chapter-body :where(p, div, span, h1, h2, h3, h4, h5, h6,
+                li, ul, ol, blockquote, section, article, dd, dt, figure, figcaption, img, table, td) {
+                direction: ltr !important;
+            }
+
+            ::-webkit-scrollbar { height: 10px; width: 10px; }
+            ::-webkit-scrollbar-thumb { background: rgba(127,127,127,0.35); border-radius: 5px; }
+            """
         } else {
             verticalCSS = ""
         }
@@ -582,7 +621,7 @@ struct EPUBThemeInjector {
         #dreader-chapter-body > div:not(.dreader-bilingual-trans):not(.dreader-bilingual-slot),
         #dreader-chapter-body > section,
         #dreader-chapter-body > blockquote {
-            \(settings.isVertical ? "content-visibility: visible;" : """
+            \(settings.isVertical || isSpreadRTL ? "content-visibility: visible;" : """
             content-visibility: auto;
             contain-intrinsic-size: 0 44px;
             """)
@@ -1080,31 +1119,40 @@ struct EPUBThemeInjector {
                 return document.body && (getComputedStyle(document.body).writingMode || '').startsWith('vertical');
             };
 
+            // 双页对开（横排文字 + direction:rtl 的列序，右页先读）：与竖排共用横轴负 scrollLeft
+            window.dreaderIsSpreadRTL = function() {
+                if (window.dreaderIsVertical()) return false;
+                return document.body && getComputedStyle(document.body).direction === 'rtl';
+            };
+
             // WebKit 的 vertical-rl 从 0 向负 scrollLeft 前进，统一转换为正的阅读距离。
             window.dreaderScrollMetrics = function() {
                 const vertical = window.dreaderIsVertical();
+                const rtlH = window.dreaderIsSpreadRTL();
+                const horizontal = vertical || rtlH;
                 const root = document.scrollingElement || document.documentElement;
-                const maxScroll = vertical
+                const maxScroll = horizontal
                     ? Math.max(0, root.scrollWidth - window.innerWidth)
                     : Math.max(0, root.scrollHeight - window.innerHeight);
-                const rawScroll = vertical ? root.scrollLeft : root.scrollTop;
-                const currentScroll = Math.max(0, Math.min(maxScroll, vertical ? -rawScroll : rawScroll));
-                return { vertical: vertical, currentScroll: currentScroll, maxScroll: maxScroll };
+                const rawScroll = horizontal ? root.scrollLeft : root.scrollTop;
+                const currentScroll = Math.max(0, Math.min(maxScroll, horizontal ? -rawScroll : rawScroll));
+                return { vertical: vertical, rtlH: rtlH, horizontal: horizontal, currentScroll: currentScroll, maxScroll: maxScroll };
             };
 
             window.dreaderScrollToStart = function() {
                 window.scrollTo({ left: 0, top: 0, behavior: 'instant' });
             };
 
-            // 阅读位置按正比例恢复；竖排从右向左的负 scrollLeft 与横排共用同一进度。
+            // 阅读位置按正比例恢复；竖排/双页从右向左的负 scrollLeft 与普通横排共用同一进度。
             window.dreaderScrollToProgress = function(progress) {
                 if (!Number.isFinite(progress)) return false;
                 const metrics = window.dreaderScrollMetrics();
                 const clamped = Math.max(0, Math.min(1, progress));
                 const distance = clamped * metrics.maxScroll;
+                const horizontal = metrics.horizontal;
                 window.scrollTo({
-                    left: metrics.vertical ? -distance : 0,
-                    top: metrics.vertical ? 0 : distance,
+                    left: horizontal ? -distance : 0,
+                    top: horizontal ? 0 : distance,
                     behavior: 'instant'
                 });
                 return true;
@@ -1113,8 +1161,12 @@ struct EPUBThemeInjector {
             window.dreaderScrollPage = function(direction) {
                 if (direction === 0) { window.dreaderScrollToStart(); return; }
                 const metrics = window.dreaderScrollMetrics();
+                const horizontal = metrics.horizontal;
                 const vertical = metrics.vertical;
-                const pageAdvance = (vertical ? window.innerWidth : window.innerHeight) * 0.82;
+                // 竖排保持 0.82 的重读重叠；双页对开一屏正好两页，整屏推进才是翻书的感觉
+                const pageAdvance = vertical
+                    ? window.innerWidth * 0.82
+                    : (metrics.rtlH ? window.innerWidth : window.innerHeight);
                 const currentScroll = metrics.currentScroll;
                 const maxScroll = metrics.maxScroll;
 
@@ -1125,8 +1177,8 @@ struct EPUBThemeInjector {
                         }
                         return;
                     }
-                    if (vertical) {
-                        // 竖排从右向左读：前进 = 向左滚动
+                    if (horizontal) {
+                        // 竖排/双页对开从右向左读：前进 = 向左滚动
                         window.scrollBy({ left: -pageAdvance, behavior: 'smooth' });
                     } else {
                         window.scrollBy({ top: pageAdvance, behavior: 'smooth' });
@@ -1138,7 +1190,7 @@ struct EPUBThemeInjector {
                         }
                         return;
                     }
-                    if (vertical) {
+                    if (horizontal) {
                         window.scrollBy({ left: pageAdvance, behavior: 'smooth' });
                     } else {
                         window.scrollBy({ top: -pageAdvance, behavior: 'smooth' });
@@ -1151,7 +1203,11 @@ struct EPUBThemeInjector {
             window.dreaderPageTurnPlan = function(direction) {
                 const metrics = window.dreaderScrollMetrics();
                 const vertical = metrics.vertical;
-                const pageSize = (vertical ? window.innerWidth : window.innerHeight) * 0.82;
+                const horizontal = metrics.horizontal;
+                // 竖排 0.82 重读重叠；双页对开一屏正好两页（offset 由 Swift 快照动画配合平移）
+                const pageSize = vertical
+                    ? window.innerWidth * 0.82
+                    : (metrics.rtlH ? window.innerWidth : window.innerHeight);
                 const currentScroll = metrics.currentScroll;
                 const maxScroll = metrics.maxScroll;
                 const atEnd = direction > 0
@@ -1170,7 +1226,7 @@ struct EPUBThemeInjector {
                 } else {
                     offset = Math.min(pageSize, currentScroll);
                 }
-                return { willTurn: true, offset: offset, vertical: vertical };
+                return { willTurn: true, offset: offset, vertical: vertical, rtlH: metrics.rtlH, axis: horizontal ? 'x' : 'y' };
             };
 
             window.dreaderGoNextChapter = function() {
