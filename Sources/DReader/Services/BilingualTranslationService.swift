@@ -11,6 +11,9 @@ final class BilingualTranslationService: @unchecked Sendable {
     @ObservationIgnored private var memoryCache: [String: [Int: [Int: String]]] = [:]
     @ObservationIgnored private let cacheDirectory: URL
     @ObservationIgnored private let lock = NSLock()
+    /// 章级落盘串行链:同章每段各起一个「全量字典写盘」Task,乱序落地会用
+    /// 旧快照覆盖新条目(实测丢段);按 key 前后链式等待,保证只落最新
+    @ObservationIgnored private var diskWriteChain: [String: Task<Void, Never>] = [:]
 
     /// 这两个观察属性只在 MainActor 上写(不持 service 锁),供弹窗进度条观察
     var isTranslatingChapter: Bool = false
@@ -89,21 +92,129 @@ final class BilingualTranslationService: @unchecked Sendable {
         }
         memoryCache[cleanTitle]?[chapterIndex]?[paragraphIndex] = translation
 
-        // Persist to disk asynchronously
+        // Persist to disk asynchronously — 关键:同章串行,防旧快照乱序覆盖新条目
         guard let chapterDict = memoryCache[cleanTitle]?[chapterIndex] else { return }
         let stringKeyedDict = chapterDict.reduce(into: [String: String]()) { acc, pair in
             acc["\(pair.key)"] = pair.value
         }
-
-        Task.detached(priority: .background) { [cacheDir = self.cacheDirectory] in
+        let chapterKey = "\(cleanTitle)_ch\(chapterIndex)"
+        let previousWrite = diskWriteChain[chapterKey]
+        let cacheDir = self.cacheDirectory
+        let writeTask = Task.detached(priority: .background) {
+            if let previous = previousWrite { await previous.value } // 链式等待前一次写盘
             if let data = try? JSONEncoder().encode(stringKeyedDict) {
-                let fileURL = cacheDir.appendingPathComponent("\(cleanTitle)_ch\(chapterIndex).json")
+                let fileURL = cacheDir.appendingPathComponent("\(chapterKey).json")
                 try? data.write(to: fileURL, options: .atomic)
             }
         }
+        diskWriteChain[chapterKey] = writeTask
+    }
+
+    // MARK: - 章指纹(防改版/改抽段规则后译文张冠李戴)
+
+    /// 章级指纹:全章抽段原文的 FNV-1a 64(参考 empty 译文键的稳定哈希思路,保守落地为
+    /// 「sidecar 文件 + 不匹配整体作废」——段号键与读写 API 全部保持不变)
+    static func chapterFingerprint(paragraphs: [(index: Int, text: String)]) -> String {
+        var hash: UInt64 = 0xcbf2_9ce4_8422_2325
+        for paragraph in paragraphs {
+            for byte in paragraph.text.utf8 {
+                hash = (hash ^ UInt64(byte)) &* 0x100_0000_01b3
+            }
+            hash = (hash ^ 0x1E) &* 0x100_0000_01b3 // 段间分隔
+        }
+        return String(format: "%016llx", hash)
+    }
+
+    @ObservationIgnored private var storedFingerprints: [String: String] = [:]
+
+    #if DEBUG
+    /// 测试缝:读缓存目录位置(与 init 的临时目录注入配套)
+    var testCacheDirectory: URL { cacheDirectory }
+    #endif
+
+    /// 校验当前缓存是否还属于这版抽段:sidecar 缺失(legacy)视为有效;
+    /// 指纹不同则内存清空 + 磁盘文件删除,返回 false
+    @discardableResult
+    func chapterCacheMatchesFingerprint(
+        bookTitle: String, chapterIndex: Int, fingerprint: String
+    ) -> Bool {
+        let cleanTitle = sanitizeTitle(bookTitle)
+        let sidecarKey = "\(cleanTitle)_ch\(chapterIndex)"
+        let jsonURL = cacheDirectory.appendingPathComponent("\(sidecarKey).json")
+        let sidecarURL = cacheDirectory.appendingPathComponent("\(sidecarKey).fingerprint")
+        func invalidateStaleCache() {
+            memoryCache[cleanTitle]?[chapterIndex] = nil
+            try? FileManager.default.removeItem(at: jsonURL)
+            // sidecar 保留:后续读取继续按指纹拒绝(迟到的链式写盘重写 json 也会被拦)
+        }
+        lock.lock()
+        defer { lock.unlock() }
+        if let stored = storedFingerprints[sidecarKey] {
+            if stored == fingerprint || isLegacyFingerprint(stored) { return true }
+            invalidateStaleCache() // 内存表命中但不匹配:同样整体作废
+            return false
+        }
+        guard let stored = try? String(contentsOf: sidecarURL, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines),
+              !stored.isEmpty else {
+            return true // legacy 无指纹文件:照旧可用(旧版本用户的缓存不无故作废)
+        }
+        storedFingerprints[sidecarKey] = stored
+        if stored == fingerprint { return true }
+        // 指纹不符:这版缓存已属于旧版本抽段/改版章,整体作废
+        invalidateStaleCache()
+        return false
+    }
+
+    /// 批翻整章收尾时落章指纹(sidecar 文件,13 字节,同步写)
+    func recordChapterFingerprint(bookTitle: String, chapterIndex: Int, paragraphs: [(index: Int, text: String)]) {
+        let cleanTitle = sanitizeTitle(bookTitle)
+        let fingerprint = Self.chapterFingerprint(paragraphs: paragraphs)
+        let sidecarKey = "\(cleanTitle)_ch\(chapterIndex)"
+        lock.lock()
+        storedFingerprints[sidecarKey] = fingerprint
+        lock.unlock()
+        let sidecarURL = cacheDirectory.appendingPathComponent("\(sidecarKey).fingerprint")
+        try? fingerprint.write(to: sidecarURL, atomically: true, encoding: .utf8)
+    }
+
+    private func isLegacyFingerprint(_ stored: String) -> Bool {
+        false // 预留:后续若引入多代指纹格式,在这里按前缀识别
     }
 
     // MARK: - Translate Single Paragraph with Active Agent
+
+    /// 回声假翻译闸门(纯函数可单测,参考 empty InlineNoteQuality):
+    /// agent 偶尔把原文原样吐回来,这类「翻译」不得入库/上屏。
+    /// 只拦 agent 输出,不看 Embedded 词典兜底(它的产物是最终回退,拦了就没有译文可写)。
+    static func isEchoTranslation(source: String, translated: String) -> Bool {
+        func normalize(_ s: String) -> String {
+            s.replacingOccurrences(of: "　", with: " ")
+                .replacingOccurrences(of: " ", with: "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        func latinRatio(_ s: String) -> Double {
+            guard !s.isEmpty else { return 0 }
+            var letters = 0
+            for character in s {
+                guard character.isLetter,
+                      let scalar = character.unicodeScalars.first,
+                      scalar.value <= 0x24F else { continue } // 拉丁/ASCII 字母(East Asian ideograph 为 0x4E00+)
+                letters += 1
+            }
+            return Double(letters) / Double(s.count)
+        }
+        let src = normalize(source)
+        let out = normalize(translated)
+        guard !out.isEmpty else { return false } // 空译文走既有 missing 链
+        if out == src { return true }
+        // 英文原文(拉丁占比高)而输出完全没有 CJK → 没翻过去/原样回吐
+        let srcLatin = latinRatio(src)
+        guard srcLatin >= 0.5 else { return false } // 原文本就是中文/其他文种,本闸不判
+        let outHasCJK = out.unicodeScalars.contains { $0.value >= 0x4E00 && $0.value <= 0x9FFF }
+        if outHasCJK { return false } // 有中文即认可
+        let outLatin = latinRatio(out)
+        return outLatin >= 0.85 && out.count >= max(6, src.count / 2)
+    }
 
     func translateParagraph(
         text: String,
@@ -123,6 +234,10 @@ final class BilingualTranslationService: @unchecked Sendable {
                 bookTitle: bookTitle,
                 chapterTitle: chapterTitle
             )
+            guard !Self.isEchoTranslation(source: text, translated: translation) else {
+                // 回声假翻译视同失败,转入 Embedded 词典兜底
+                throw AIAgentService.BatchTranslationError.emptyResponse
+            }
             saveTranslation(
                 bookTitle: bookTitle,
                 chapterIndex: chapterIndex,
@@ -197,6 +312,12 @@ final class BilingualTranslationService: @unchecked Sendable {
             }
         }
 
+        // 章指纹校验:书改版/抽段规则变化会让段号整体错位,旧缓存一次性作废重翻
+        let paragraphFingerprint = Self.chapterFingerprint(paragraphs: paragraphs)
+        chapterCacheMatchesFingerprint(
+            bookTitle: bookTitle, chapterIndex: chapterIndex, fingerprint: paragraphFingerprint
+        )
+
         let cached = getCachedTranslations(bookTitle: bookTitle, chapterIndex: chapterIndex) ?? [:]
         let pending = paragraphs.filter { item in
             item.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
@@ -204,6 +325,7 @@ final class BilingualTranslationService: @unchecked Sendable {
         }
         guard !pending.isEmpty else {
             await MainActor.run { self.currentProgressRatio = 1.0 }
+            recordChapterFingerprint(bookTitle: bookTitle, chapterIndex: chapterIndex, paragraphs: paragraphs)
             return
         }
 
@@ -244,6 +366,8 @@ final class BilingualTranslationService: @unchecked Sendable {
         await MainActor.run {
             self.finishBatchSession(nowKey)
         }
+        // 本版抽段的章指纹落 sidecar,此后任何改版/规则变化在读取时立即判过期
+        recordChapterFingerprint(bookTitle: bookTitle, chapterIndex: chapterIndex, paragraphs: paragraphs)
     }
 
     /// 单包处理：两次批翻尝试；缺编号段逐段兜底；两连败退化为整包串行逐段（单段路径内含 Embedded 兜底）
@@ -295,14 +419,21 @@ final class BilingualTranslationService: @unchecked Sendable {
 
         var missing: [(index: Int, text: String)] = []
         for (idx, _) in batch {
-            let trans = mapped[idx] ?? ""
+            let raw = mapped[idx] ?? ""
+            let sourceText = fullTextByIndex[idx] ?? ""
+            var trans: String? = raw.isEmpty ? nil : raw
+            // 回声假翻译闸:原文原样吐回/英文未翻视同缺失,走逐段兜底重试
+            if let t = trans, Self.isEchoTranslation(source: sourceText, translated: t) {
+                trans = nil
+                NSLog("[双语] 段 %d 批翻输出为回声假翻译,改走兜底", idx)
+            }
             await saveAndPublish(
-                idx: idx, text: trans.isEmpty ? nil : trans, srcText: fullTextByIndex[idx] ?? "",
+                idx: idx, text: trans, srcText: sourceText,
                 total: total, bookTitle: bookTitle, chapterTitle: chapterTitle, chapterIndex: chapterIndex,
                 agent: agent, counter: counter, onParagraphTranslated: onParagraphTranslated
             )
-            if trans.isEmpty {
-                missing.append((index: idx, text: fullTextByIndex[idx] ?? ""))
+            if trans == nil {
+                missing.append((index: idx, text: sourceText))
             }
         }
         if !missing.isEmpty {

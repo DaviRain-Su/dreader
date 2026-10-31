@@ -221,6 +221,87 @@ final class BatchTranslationTests: XCTestCase {
             XCTAssertEqual(snapshot, snapshot.sorted(), "通知必须升序")
         }
     }
+
+    // MARK: - 回声假翻译闸门(参考 empty InlineNoteQuality)
+
+    func testEchoGateRejectsOriginalAnUntranslatedLatin() {
+        let original = "The quick brown fox jumps over the lazy dog near the river."
+        XCTAssertTrue(BilingualTranslationService.isEchoTranslation(
+            source: original,
+            translated: original), "原样回吐必须拒绝")
+        XCTAssertTrue(BilingualTranslationService.isEchoTranslation(
+            source: original,
+            translated: "The quick brown fox jumps over the lazy dog near the river.  ",
+            ), "仅空白差异也算回吐")
+        XCTAssertTrue(BilingualTranslationService.isEchoTranslation(
+            source: original,
+            translated: "Another fine text entirely in latin letters, still untranslated."),
+            "英文原文未翻(仍纯拉丁长文本)必须拒绝")
+        XCTAssertFalse(BilingualTranslationService.isEchoTranslation(
+            source: original,
+            translated: "敏捷的棕色狐狸跳过了河边那条懒狗。"),
+            "正常中文译文放行")
+        XCTAssertFalse(BilingualTranslationService.isEchoTranslation(
+            source: original,
+            translated: "Famous quote: “Mise en abyme” — 属于部分专名照抄,但整句已有中文"),
+            "含中文的正常译文放行")
+        XCTAssertFalse(BilingualTranslationService.isEchoTranslation(
+            source: "中文原文整段内容。", translated: "中文原文整段内容的其他译文。"),
+            "中文目标语言下不判拉丁规则")
+    }
+
+    // MARK: - 章指纹(抽段/改版后旧缓存作废,参考 empty 稳定哈希键)
+
+    func testChapterFingerprintInvalidatesStaleCache() async throws {
+        let service = BilingualTranslationService(cacheDirectory: makeTempCacheDirectory())
+        let agent = AIAgentService(testBatchDriverOverride: { items in
+            Dictionary(items.map { ($0.index, "译\($0.index)") }, uniquingKeysWith: { a, _ in a })
+        })
+        let first = [(index: 0, text: "第一段原文。"), (index: 1, text: "第二段原文。")]
+        await service.translateChapterBatch(
+            paragraphs: first,
+            bookTitle: "指纹书",
+            chapterTitle: "第一章",
+            chapterIndex: 0,
+            agentService: agent,
+            onParagraphTranslated: { _, _ in }
+        )
+        let fpA = BilingualTranslationService.chapterFingerprint(paragraphs: first)
+        XCTAssertGreaterThan(fpA.count, 0)
+        // 同版抽段:缓存继续有效
+        XCTAssertTrue(service.chapterCacheMatchesFingerprint(
+            bookTitle: "指纹书", chapterIndex: 0, fingerprint: fpA))
+        XCTAssertEqual(service.getCachedTranslations(bookTitle: "指纹书", chapterIndex: 0)?[0], "译0")
+
+        // 改版(同段号不同文本)→ 指纹不同 → 整章缓存作废,读不到旧译文
+        let second: [(index: Int, text: String)] = [(0, "第一段原文。"), (1, "改版后的全新文本。")]
+        let fpB = BilingualTranslationService.chapterFingerprint(paragraphs: second)
+        XCTAssertNotEqual(fpA, fpB, "文本变化必须改变章指纹")
+        XCTAssertFalse(service.chapterCacheMatchesFingerprint(
+            bookTitle: "指纹书", chapterIndex: 0, fingerprint: fpB),
+            "指纹不符的旧缓存必须作废")
+        XCTAssertNil(service.getCachedTranslations(bookTitle: "指纹书", chapterIndex: 0),
+                     "作废后的旧译文不得再被读到(防张冠李戴)")
+    }
+
+    func testChapterFingerprintKeepsLegacyCacheWithoutSidecar() throws {
+        let service = BilingualTranslationService(cacheDirectory: makeTempCacheDirectory())
+        let dir = service.testCacheDirectory
+        // 直接落一个「旧版本」缓存文件(无 sidecar)
+        let legacy: [String: String] = ["0": "旧版译文"]
+        let data = try JSONEncoder().encode(legacy)
+        try data.write(to: dir.appendingPathComponent("旧版书_ch2.json"))
+        let cached = service.getCachedTranslations(bookTitle: "旧版书", chapterIndex: 2)
+        XCTAssertEqual(cached?[0], "旧版译文")
+        // 无 sidecar(legacy):指纹校验不得作废旧缓存
+        XCTAssertTrue(service.chapterCacheMatchesFingerprint(
+            bookTitle: "旧版书", chapterIndex: 2,
+            fingerprint: BilingualTranslationService.chapterFingerprint(
+                paragraphs: [(index: 0, text: "抽段后的原文")]))
+        )
+        XCTAssertEqual(service.getCachedTranslations(bookTitle: "旧版书", chapterIndex: 2)?[0],
+                       "旧版译文", "legacy 缓存不无故作废")
+    }
 }
 
 /// 批次开始通知记录器(仿 TranslationRecorder 的锁结构)

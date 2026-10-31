@@ -1060,7 +1060,9 @@ final class ReaderViewModel: @unchecked Sendable {
             text: selection.text,
             colorHex: colorHex,
             createdAt: Date(),
-            note: note
+            note: note,
+            prefix: selection.prefix,
+            suffix: selection.suffix
         )
 
         highlights.insert(highlight, at: 0)
@@ -1751,6 +1753,8 @@ final class ReaderViewModel: @unchecked Sendable {
     @ObservationIgnored var updateTranslationAction: ((Int, String, String) -> Void)?
     /// 批翻批次开始桥(书|章|段号):EPUBWebView 按本页章匹配后再点亮「正在翻译…」槽
     @ObservationIgnored var updateBatchPendingAction: ((String, Int, [Int]) -> Void)?
+    /// 章指纹 memo:body 高频读缓存,抽段只算一次(指纹不同侧才整章作废)
+    @ObservationIgnored private var chapterFingerprintMemo: [URL: String] = [:]
     /// 当前书|章的批翻会话身份,与 service.activeBatchKey 对齐(弹窗只跟踪本页章)
     private var bilingualBatchKey: String {
         guard let book = currentBook else { return "|" }
@@ -1772,11 +1776,25 @@ final class ReaderViewModel: @unchecked Sendable {
     }
 
     func currentChapterBilingualTranslations() -> [Int: String]? {
-        guard let book = currentBook else { return nil }
-        return BilingualTranslationService.shared.getCachedTranslations(
-            bookTitle: book.title,
-            chapterIndex: book.currentChapterIndex
-        )
+        guard let book = currentBook, book.chapters.indices.contains(book.currentChapterIndex) else { return nil }
+        let chapterIndex = book.currentChapterIndex
+        let service = BilingualTranslationService.shared
+        // 章指纹校验(抽段/改版章变化 → 旧缓存整章作废,返回 nil 让批翻重翻);
+        // 抽段重,只算一次,结果备忘在 URL 键上
+        let url = book.chapters[chapterIndex].fileURL
+        let fingerprint: String
+        if let memoized = chapterFingerprintMemo[url] {
+            fingerprint = memoized
+        } else {
+            fingerprint = BilingualTranslationService.chapterFingerprint(
+                paragraphs: chapterParagraphs(book: book, chapterIndex: chapterIndex)
+            )
+            chapterFingerprintMemo[url] = fingerprint
+        }
+        guard service.chapterCacheMatchesFingerprint(
+            bookTitle: book.title, chapterIndex: chapterIndex, fingerprint: fingerprint
+        ) else { return nil }
+        return service.getCachedTranslations(bookTitle: book.title, chapterIndex: chapterIndex)
     }
 
     func toggleBilingualMode() {
