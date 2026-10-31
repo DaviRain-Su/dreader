@@ -126,6 +126,9 @@ struct MarginNoteCardView: View {
 
     private var colorDot: Color { Color(hex: highlight.colorHex) }
     private var isLifted: Bool { isHovering || isActive }
+    private var hasThought: Bool {
+        !(highlight.note?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+    }
 
     var body: some View {
         // 纸边手写批注的质感：不设浮窗框、不投影——只有扎根页边的细色线与小号文字，
@@ -138,12 +141,12 @@ struct MarginNoteCardView: View {
                     .overlay(Circle().stroke(Color.primary.opacity(0.2), lineWidth: 0.5))
                 Spacer(minLength: 0)
             }
-            // 划线原文段：完整内容长在页面上，这里截 3 行提示出处（楷体小批）
+            // 划线原文段：带思考的卡只截 3 行提示出处；无思考的卡它就是主体，放 5 行
             Text(highlight.text.replacingOccurrences(of: "\n", with: " "))
                 .font(.custom("Kaiti SC", size: max(11, noteFontSize * 0.84)))
-                .foregroundStyle(Color.primary.opacity(0.48))
+                .foregroundStyle(Color.primary.opacity(hasThought ? 0.48 : 0.62))
                 .lineSpacing(2.5)
-                .lineLimit(3)
+                .lineLimit(hasThought ? 3 : 5)
             // 思考全文：页边批注的主角——楷体夹批是中文批注的传统字体，字号档位在排版浮窗
             Text(highlight.note ?? "")
                 .font(.custom("Kaiti SC", size: max(13, noteFontSize)))
@@ -270,7 +273,7 @@ struct MarginNotesOverlay: View {
             HStack(spacing: 4) {
                 Image(systemName: "text.bubble")
                     .font(.system(size: 9.5))
-                Text("+\(dropped) 条想法")
+                Text("+\(dropped) 条批注")
                     .font(.system(size: 10, weight: .medium))
             }
             .foregroundStyle(Color.primary.opacity(0.6))

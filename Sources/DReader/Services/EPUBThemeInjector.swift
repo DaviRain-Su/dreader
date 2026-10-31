@@ -1610,7 +1610,8 @@ struct EPUBThemeInjector {
                 let matchEnd = (matchStart !== -1) ? (matchStart + searchText.length) : -1;
 
                 if (matchStart === -1) {
-                    const escaped = normTarget.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&').replace(/\\s+/g, '\\\\s+');
+                    // 跨段划线：字符串里的空白可以是零个或多个（fullText 里是纯文本节点串接，段落边界没有空白）
+                    const escaped = normTarget.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&').replace(/\\s+/g, '\\\\s*');
                     const re = new RegExp(escaped, 'i');
                     const m = re.exec(fullText);
                     if (m) {
