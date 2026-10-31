@@ -30,14 +30,15 @@ enum MarginNotesLayout {
     }
 
     /// 由一个划线元素的全部 getClientRects 碎片推出页边锚定矩形。
-    /// - 只取与视口垂直带 [-64, vh+64] 相交的碎片（content-visibility 场景碎片可能在带外）
-    /// - 跨栏（spread 左右栏，横向差 >40px）或碎片 ≥4 → 取可视面积最大的单片，union 会横跨中缝
+    /// - 只取与视口垂直带 [-64, vh+64] 相交的碎片；划线完全滚出视口 → 返回 nil（卡随即消失）
+    /// - 跨栏或碎片 ≥4 → 取可视面积最大的单片，union 会横跨中缝
     /// - 否则取碎片 union bounding（同栏多行划线）
     static func resolveAnchor(frags: [CGRect], viewportHeight: CGFloat) -> CGRect? {
         let clean = frags.filter { $0.width > 0.5 && $0.height > 0.5 }
         guard !clean.isEmpty else { return nil }
-        let candidates = clean.filter { $0.maxY > -displayBand && $0.minY < viewportHeight + displayBand }
-        let pool = candidates.isEmpty ? clean : candidates
+        // 无带内碎片时绝不回退原始碎片——回退会让滚走的划线以负 y 锚点挂回页边顶部
+        let pool = clean.filter { $0.maxY > -displayBand && $0.minY < viewportHeight + displayBand }
+        guard !pool.isEmpty else { return nil }
         var minX = CGFloat.greatestFiniteMagnitude
         var maxX = -CGFloat.greatestFiniteMagnitude
         var minY = CGFloat.greatestFiniteMagnitude
@@ -122,50 +123,51 @@ struct MarginNoteCardView: View {
     @State private var isHovering = false
 
     private var colorDot: Color { Color(hex: highlight.colorHex) }
+    private var isLifted: Bool { isHovering || isActive }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 7) {
-            HStack(spacing: 5) {
+        // 纸边手写批注的质感：不设浮窗框、不投影——只有扎根页边的细色线与小号文字，
+        // 悬停时才浮一层极淡底提示可点（避免与正文互相抢存在感）
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 4) {
                 Circle()
                     .fill(colorDot)
-                    .frame(width: 9, height: 9)
-                    .overlay(Circle().stroke(Color.primary.opacity(0.25), lineWidth: 0.5))
-                Text(highlight.displaySource)
-                    .font(.system(size: 9.5, weight: .medium))
-                    .foregroundStyle(Color.primary.opacity(0.5))
-                    .lineLimit(1)
+                    .frame(width: 7.5, height: 7.5)
+                    .overlay(Circle().stroke(Color.primary.opacity(0.2), lineWidth: 0.5))
                 Spacer(minLength: 0)
-                Image(systemName: "quote.opening")
-                    .font(.system(size: 8.5))
-                    .foregroundStyle(colorDot.opacity(0.9))
             }
-            // 划线原文段：完整内容就长在页面上，这里截 4 行提示出处
+            // 划线原文段：完整内容长在页面上，这里截 3 行提示出处
             Text(highlight.text.replacingOccurrences(of: "\n", with: " "))
-                .font(.system(size: 10.5, weight: .medium))
-                .foregroundStyle(Color.primary.opacity(0.6))
-                .lineSpacing(2.5)
-                .lineLimit(4)
+                .font(.system(size: 9.5))
+                .foregroundStyle(Color.primary.opacity(0.42))
+                .lineSpacing(2)
+                .lineLimit(3)
             // 思考全文：页边批注的主角，原样呈现
             Text(highlight.note ?? "")
-                .font(.system(size: 11))
-                .foregroundStyle(Color.primary.opacity(0.95))
-                .lineSpacing(3)
-            Text(highlight.createdAt.formatted(date: .abbreviated, time: .omitted))
-                .font(.system(size: 9))
-                .foregroundStyle(Color.primary.opacity(0.4))
-                .lineLimit(1)
+                .font(.system(size: 10.5))
+                .foregroundStyle(Color.primary.opacity(isLifted ? 0.92 : 0.8))
+                .lineSpacing(2.5)
+            Text(highlight.createdAt.formatted(date: .numeric, time: .omitted))
+                .font(.system(size: 8.5))
+                .foregroundStyle(Color.primary.opacity(0.28))
         }
-        .padding(9)
+        .padding(.leading, 9)
+        .padding(.trailing, 4)
+        .padding(.vertical, 6)
         .frame(width: width, alignment: .leading)
         .fixedSize(horizontal: false, vertical: true)
         .background(
-            RoundedRectangle(cornerRadius: 9, style: .continuous)
-                .fill(Color.primary.opacity(0.045))
-                .shadow(color: .black.opacity(isHovering || isActive ? 0.2 : 0.1), radius: isHovering || isActive ? 10 : 6, x: 0, y: isHovering || isActive ? 4 : 2)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 9, style: .continuous)
-                        .stroke(Color.primary.opacity(isHovering || isActive ? 0.24 : 0.12), lineWidth: 0.5)
-                )
+            ZStack {
+                if isLifted {
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .fill(Color.primary.opacity(0.045))
+                }
+                // 左缘 1.5px 细色线：批注指向划线的“根”，替代边框与投影
+                Rectangle()
+                    .fill(colorDot.opacity(isLifted ? 0.85 : 0.55))
+                    .frame(width: 1.5)
+                    .frame(maxHeight: .infinity, alignment: .leading)
+            }
         )
         .contentShape(Rectangle())
         .onHover { isHovering = $0 }
@@ -185,6 +187,7 @@ struct MarginNotesOverlay: View {
 
     private var isFeatureActive: Bool {
         vm.settings.isMarginNotes && !vm.settings.isZenMode && !vm.settings.isVertical
+            && vm.settings.pageLayout != .spread // 双页去读右栏已无两侧留白，批注只做单页
     }
 
     private var chapterPath: String? {

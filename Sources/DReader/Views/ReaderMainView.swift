@@ -477,8 +477,9 @@ struct ReaderMainView: View {
                             let areaW = geo.size.width
                             let areaH = geo.size.height
 
-                            // 0. 页边批注层：有思考的划线贴在正文两侧空白（微信读书点开才见 → 直接长在页边）
-                            if vm.settings.isMarginNotes && !vm.settings.isZenMode && !vm.settings.isVertical {
+                            // 0. 页边批注层：有思考的划线贴在正文两侧空白（仅单页——双页读右栏无两侧留白）
+                            if vm.settings.isMarginNotes && !vm.settings.isZenMode && !vm.settings.isVertical
+                                && vm.settings.pageLayout != .spread {
                                 MarginNotesOverlay(vm: vm, areaSize: geo.size)
                                     .zIndex(20)
                             }
