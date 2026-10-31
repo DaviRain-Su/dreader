@@ -87,8 +87,8 @@ final class ReaderViewModel: @unchecked Sendable {
     }
 
     /// 前情回顾的延迟浮现任务（换书时取消旧的），以及本会话内已关闭提示的书
-    private var recapTask: Task<Void, Never>?
-    private var recapDismissedBookTitles: Set<String> = []
+    @ObservationIgnored private var recapTask: Task<Void, Never>?
+    @ObservationIgnored private var recapDismissedBookTitles: Set<String> = []
 
     var readingStats: ReadingStats {
         ReadingStatsManager.shared.stats
@@ -599,34 +599,36 @@ final class ReaderViewModel: @unchecked Sendable {
         }
     }
 
-    var chapterScrollProgress: Double = 0.0
-    var scrollPageAction: ((Int) -> Void)?
-    var applyHighlightAction: ((String, String, String?) -> Void)?
-    var updateHighlightColorAction: ((String, String) -> Void)?
-    var updateHighlightThoughtAction: ((String, String?) -> Void)?
-    var removeHighlightAction: ((String) -> Void)?
-    var scrollToHighlightAction: ((String) -> Void)?
-    var scrollToReadingProgressAction: ((Double) -> Void)?
-    private var readingSaveTask: Task<Void, Never>?
-    private var completedReadingBookIDs: Set<UUID> = []
+    // 以下动作桥/内部进度不做视图观察(@Observable 写必 invalidate 全树重算;
+    // body 里存在大开销读法(全量划线 filter 等),高频写曾把打开长英文书拖成渲染风暴)
+    @ObservationIgnored var chapterScrollProgress: Double = 0.0
+    @ObservationIgnored var scrollPageAction: ((Int) -> Void)?
+    @ObservationIgnored var applyHighlightAction: ((String, String, String?) -> Void)?
+    @ObservationIgnored var updateHighlightColorAction: ((String, String) -> Void)?
+    @ObservationIgnored var updateHighlightThoughtAction: ((String, String?) -> Void)?
+    @ObservationIgnored var removeHighlightAction: ((String) -> Void)?
+    @ObservationIgnored var scrollToHighlightAction: ((String) -> Void)?
+    @ObservationIgnored var scrollToReadingProgressAction: ((Double) -> Void)?
+    @ObservationIgnored private var readingSaveTask: Task<Void, Never>?
+    @ObservationIgnored private var completedReadingBookIDs: Set<UUID> = []
     var hasListeningResume = false
     var lastChosenHighlightColor: String = "#FFE066"
 
     // MARK: - 页边批注（Tufte margin notes）
 
     /// webview 桥（ReaderMainView 接线）：拉取当前章全部划线 rect；页未就绪/过期返回 nil
-    var marginRectsProvider: (() async -> MarginRectPayload?)?
+    @ObservationIgnored var marginRectsProvider: (() async -> MarginRectPayload?)?
     var marginNoteRects: [UUID: CGRect] = [:]      // id → 页边锚定 rect（页面 CSS px）
     var marginBodyRect: CGRect = .zero             // 正文盒实测（留白基准，避免反推公式）
     var marginViewport: CGSize = .zero
     var marginNoteChapterKey: String?              // rects 所属章（对账 currentChapter.fileURL.path）
     enum MarginPullReason { case scroll, relayout, resize, ready }
 
-    private var marginActiveUntil = Date.distantPast // 滚动/重排后的活跃拉取窗
-    private var marginDueAt: Date?                   // 定点拉取（relayout 即刻 / ready 的 +0.25s）
-    private var marginPullGeneration = 0
-    private var marginLastPullAt = Date.distantPast
-    private var marginSweepTask: Task<Void, Never>?
+    @ObservationIgnored private var marginActiveUntil = Date.distantPast // 滚动/重排后的活跃拉取窗
+    @ObservationIgnored private var marginDueAt: Date?                   // 定点拉取（relayout 即刻 / ready 的 +0.25s）
+    @ObservationIgnored private var marginPullGeneration = 0
+    @ObservationIgnored private var marginLastPullAt = Date.distantPast
+    @ObservationIgnored private var marginSweepTask: Task<Void, Never>?
 
     /// 页边 rect 重拉入口：滚动只推活跃窗，常驻扫描 tick 负责实际节奏（100ms 一格）
     func requestMarginRects(_ reason: MarginPullReason) {
@@ -758,7 +760,9 @@ final class ReaderViewModel: @unchecked Sendable {
     }
 
     // In-memory HTML cache for instant 0ms chapter transitions
-    private var htmlContentCache: [URL: String] = [:]
+    // 内部缓存装备,不做视图观察:preload 每个预载章都在 MainActor 写这里,
+    // 若被观察就会每次写都全量重渲染(打开章节多的英文书时连写多次 = 渲染风暴,实测过)
+    @ObservationIgnored private var htmlContentCache: [URL: String] = [:]
 
     func getCachedHTML(for url: URL) -> String? {
         htmlContentCache[url]
@@ -768,7 +772,7 @@ final class ReaderViewModel: @unchecked Sendable {
         htmlContentCache[url] = html
     }
 
-    private var pendingPreloadURLs: Set<URL> = []
+    @ObservationIgnored private var pendingPreloadURLs: Set<URL> = []
 
     /// 只预热当前章附近的正文；全书字数由统一后台队列补齐。
     func preloadAllChapters(for book: EPUBBook) {
@@ -998,9 +1002,9 @@ final class ReaderViewModel: @unchecked Sendable {
         case readAloud
         case readingPosition(Double)
     }
-    private var pendingReadingDestination: (URL, ReadingDestination)?
-    private var readyChapterURL: URL?
-    private var readyChapterIndex: Int?
+    @ObservationIgnored private var pendingReadingDestination: (URL, ReadingDestination)?
+    @ObservationIgnored private var readyChapterURL: URL?
+    @ObservationIgnored private var readyChapterIndex: Int?
 
     func chapterDidBecomeReady(_ url: URL, chapterIndex: Int) {
         guard currentBook?.currentChapterIndex == chapterIndex,
@@ -1375,11 +1379,12 @@ final class ReaderViewModel: @unchecked Sendable {
 
     // MARK: - Reading Time & Speed Estimation
     private let charactersPerMinute: Double = 400.0
-    private var chapterCharCountCache: [URL: Int] = [:]
-    private var subsequentChaptersTotalChars: Int = 0
-    private var pendingCharCountURLs: Set<URL> = []
-    private var charCountQueue: [URL] = []
-    private var activeCharCountTasks = 0
+    // 后台字数统计装备逐章回写,不做视图观察(防高频写渲染风暴,同 htmlContentCache)
+    @ObservationIgnored private var chapterCharCountCache: [URL: Int] = [:]
+    @ObservationIgnored private var subsequentChaptersTotalChars: Int = 0
+    @ObservationIgnored private var pendingCharCountURLs: Set<URL> = []
+    @ObservationIgnored private var charCountQueue: [URL] = []
+    @ObservationIgnored private var activeCharCountTasks = 0
     private let maxCharCountTasks = 2
 
     private func cachedCharCount(for url: URL) -> Int? {
@@ -1742,9 +1747,10 @@ final class ReaderViewModel: @unchecked Sendable {
         )?.isEmpty == false
     }
 
-    var updateTranslationAction: ((Int, String, String) -> Void)?
+    // 双语动作桥:注册/换绑时才写,不需要触发视图重算
+    @ObservationIgnored var updateTranslationAction: ((Int, String, String) -> Void)?
     /// 批翻批次开始桥(书|章|段号):EPUBWebView 按本页章匹配后再点亮「正在翻译…」槽
-    var updateBatchPendingAction: ((String, Int, [Int]) -> Void)?
+    @ObservationIgnored var updateBatchPendingAction: ((String, Int, [Int]) -> Void)?
     /// 当前书|章的批翻会话身份,与 service.activeBatchKey 对齐(弹窗只跟踪本页章)
     private var bilingualBatchKey: String {
         guard let book = currentBook else { return "|" }
