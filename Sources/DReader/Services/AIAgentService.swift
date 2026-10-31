@@ -17,10 +17,16 @@ final class AIAgentService: @unchecked Sendable {
     }
 
     private var activeTask: Task<Void, Never>?
-    private var activeProcess: Process?
+    /// 进程分槽:聊天(单槽,受停止按钮控制)与翻译(批翻并发多进程)分账登记,
+    /// 否则并发批翻互相覆写 activeProcess、还会被 AI 伴读聊天的 stopGeneration 误杀。
+    private var chatProcess: Process?
+    private let translationProcessLock = NSLock()
+    private var translationProcesses: [ObjectIdentifier: Process] = [:]
 
-    init() {
-        selectPreset(currentPreset)
+    /// 进程用途:聊天 / 翻译(分槽停止与登记用)
+    enum ProcessRole {
+        case chat
+        case translation
     }
 
     // MARK: - Environment & Binary Lookup
@@ -239,11 +245,314 @@ final class AIAgentService: @unchecked Sendable {
         activeTask?.cancel()
         activeTask = nil
 
-        if let proc = activeProcess, proc.isRunning {
+        if let proc = chatProcess, proc.isRunning {
             proc.terminate()
         }
-        activeProcess = nil
+        chatProcess = nil
         isGenerating = false
+    }
+
+    /// 批次翻译停止开关:终止所有在跑的翻译进程(聊天槽不受影响)
+    func stopBatchTranslation() {
+        translationProcessLock.lock()
+        let procs = Array(translationProcesses.values)
+        translationProcesses.removeAll()
+        translationProcessLock.unlock()
+        for proc in procs where proc.isRunning {
+            proc.terminate()
+        }
+    }
+
+    private func registerTranslationProcess(_ process: Process) {
+        translationProcessLock.lock()
+        translationProcesses[ObjectIdentifier(process)] = process
+        translationProcessLock.unlock()
+    }
+
+    private func unregisterTranslationProcess(_ process: Process) {
+        translationProcessLock.lock()
+        translationProcesses.removeValue(forKey: ObjectIdentifier(process))
+        translationProcessLock.unlock()
+    }
+
+    // MARK: - 章级批翻（整章上下文打包；协议纯函数均可单测）
+
+    enum BatchTranslationError: LocalizedError {
+        case unsupportedDriver
+        case emptyResponse
+
+        var errorDescription: String? {
+            switch self {
+            case .unsupportedDriver: return "当前伴读引擎不支持章级批翻，将退化为逐段翻译"
+            case .emptyResponse: return "批翻译调用未返回内容"
+            }
+        }
+    }
+
+    /// 章级批翻测试注入缝（不设时按真实驱动跑；仿 RankingService.init(configuration:) 先例）
+    let testBatchDriverOverride: (@Sendable ([(index: Int, text: String)]) async throws -> [Int: String])?
+
+    init(testBatchDriverOverride: (@Sendable ([(index: Int, text: String)]) async throws -> [Int: String])? = nil) {
+        self.testBatchDriverOverride = testBatchDriverOverride
+        selectPreset(currentPreset)
+    }
+
+    /// 单请求源文字符预算（单次 LLM 输出 5k 上下的中文字符是稳妥区间）
+    static let batchCharBudget = 4800
+    /// 单包段数上限
+    static let batchMaxParagraphs = 60
+    /// 孤段独占包的尺寸硬顶，超出按句边界再拆
+    static let batchHardSegmentLimit = 12_000
+
+    /// 输入切块：顺序累积，达预算/段数上限即切包；空段滤除；
+    /// 超巨段按句边界拆成多包（同编号多子块，译文合并由调度层负责）。
+    static func planChapterBatches(
+        _ paragraphs: [(index: Int, text: String)],
+        charBudget: Int = AIAgentService.batchCharBudget
+    ) -> [[(index: Int, text: String)]] {
+        var batches: [[(index: Int, text: String)]] = []
+        var current: [(index: Int, text: String)] = []
+        var chars = 0
+
+        func flush() {
+            guard !current.isEmpty else { return }
+            batches.append(current)
+            current = []
+            chars = 0
+        }
+
+        for (idx, raw) in paragraphs {
+            let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !text.isEmpty else { continue }
+            if text.count > Self.batchHardSegmentLimit {
+                flush()
+                // 超巨段:按句边界拆块后「同编号多行进同一包」,一次批翻由 agent 按行拼接
+                // (跨包会导致逐包各自落盘互相覆盖,译文只剩末块)
+                var mega: [(index: Int, text: String)] = []
+                for part in Self.splitLongParagraph(text, limit: Self.batchHardSegmentLimit) {
+                    mega.append((index: idx, text: part))
+                }
+                batches.append(mega)
+                continue
+            }
+            if chars + text.count > charBudget || current.count >= Self.batchMaxParagraphs {
+                flush()
+            }
+            current.append((index: idx, text: text))
+            chars += text.count
+        }
+        flush()
+        return batches
+    }
+
+    /// 超长段按句边界（。！?…；换行）拆为若干 ≤ limit 的子块（末尾允许超限单句）
+    static func splitLongParagraph(_ text: String, limit: Int) -> [String] {
+        guard text.count > limit else { return [text] }
+        var sentences: [String] = []
+        var start = text.startIndex
+        var i = text.startIndex
+        while i < text.endIndex {
+            let ch = text[i]
+            if ch == "。" || ch == "!" || ch == "?" || ch == "\n"
+                || ch == "；" || ch == "…" || ch == "!" || ch == "?" {
+                let next = text.index(after: i)
+                sentences.append(String(text[start..<next]))
+                start = next
+            }
+            i = text.index(after: i)
+        }
+        if start < text.endIndex {
+            sentences.append(String(text[start...]))
+        }
+        guard !sentences.isEmpty else { return [text] }
+
+        var parts: [String] = []
+        var buffer = ""
+        for sentence in sentences {
+            if !buffer.isEmpty, buffer.count + sentence.count > limit {
+                parts.append(buffer)
+                buffer = sentence
+            } else {
+                buffer += sentence
+            }
+        }
+        if !buffer.isEmpty { parts.append(buffer) }
+        return parts
+    }
+
+    static func batchSystemPrompt(bookTitle: String, chapterTitle: String) -> String {
+        """
+        你是一位信达雅兼备的文学翻译名家。本次任务：把一本书中某一章的若干编号段落批量译成地道、典雅的现代中文。
+        硬性输出要求：
+        1. 只输出一个 JSON 对象，禁止任何解释、前后缀或 Markdown 代码围栏。
+        2. 格式：{"items":[{"i":<段落编号>,"t":"<该段完整中文译文>"}]}
+        3. 输入中的每一个编号都必须返回,编号一一对应、不得增删;同一编号若分行出现,译出各部分后按行序拼成同一段完整译文,只返回一个该编号条目;译文为纯正文自带标点,不得再包编号或引号。
+        4. 译文与全书上下文连贯，人名、地名译法前后一致；对话、诗行的分行形态沿用原文。
+        【书籍】《\(bookTitle)》　【章节】\(chapterTitle)
+        """
+    }
+
+    /// user prompt：每段一行 `[N] 原文`；段内换行折成空格，防止行首数字被当编号
+    static func batchUserPrompt(_ items: [(index: Int, text: String)]) -> String {
+        let lines = items.map { item -> String in
+            let normalized = item.text
+                .replacingOccurrences(of: "\r\n", with: " ")
+                .replacingOccurrences(of: "\n", with: " ")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            return "[\(item.index)] \(normalized)"
+        }
+        return "将下列 \(items.count) 个编号段落译成中文，编号原样映射，只输出 JSON：\n" + lines.joined(separator: "\n")
+    }
+
+    /// 宽容解析批翻输出：
+    /// 1) 去代码围栏；2) 扫首个平衡大括号对象；3) JSONSerialization 兼容三种形态：
+    ///    {"items":[{i,t}]}（键名别名免疫）/ 顶层 {编号: 译文} map / 顶层数组；
+    /// 4) 仅保留 validIndices 内、非空字符串的条目。
+    static func parseBatchResponse(_ raw: String, validIndices: Set<Int>) -> [Int: String] {
+        var s = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        s = s.replacingOccurrences(of: "```json", with: "", options: .caseInsensitive)
+        s = s.replacingOccurrences(of: "```", with: "")
+        s = s.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard let data = Self.firstJSONValueData(in: s),
+              let obj = try? JSONSerialization.jsonObject(with: data, options: [])
+        else { return [:] }
+
+        var result: [Int: String] = [:]
+        if let dict = obj as? [String: Any] {
+            for key in ["items", "translations", "data", "results", "paragraphs"] {
+                guard let rows = dict[key] as? [[String: Any]] else { continue }
+                for row in rows { Self.feedRow(row, into: &result, validIndices: validIndices) }
+                break
+            }
+            if result.isEmpty {
+                for (k, v) in dict {
+                    guard let idx = Int(k), let text = v as? String, !text.isEmpty else { continue }
+                    Self.feed(idx: idx, text: text, into: &result, validIndices: validIndices)
+                }
+            }
+        } else if let rows = obj as? [[String: Any]] {
+            for row in rows { Self.feedRow(row, into: &result, validIndices: validIndices) }
+        }
+        return result
+    }
+
+    private static func feedRow(
+        _ row: [String: Any], into result: inout [Int: String], validIndices: Set<Int>
+    ) {
+        let indexedPairs = row.filter { ["i", "index", "id", "n", "num"].contains($0.key) }
+        let textPairs = row.filter { ["t", "text", "translation", "trans", "zh", "c"].contains($0.key) }
+        guard !indexedPairs.isEmpty, let textPair = textPairs.first else { return }
+        guard let idx = Self.toInt(indexedPairs.first!.value) else { return }
+        Self.feed(idx: idx, text: textPair.value, into: &result, validIndices: validIndices)
+    }
+
+    private static func feed(
+        idx: Int, text: Any, into result: inout [Int: String], validIndices: Set<Int>
+    ) {
+        guard let str = text as? String else { return }
+        let trimmed = str.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, validIndices.contains(idx) else { return }
+        // 超巨段拆块后同一编号多条目:按行序拼接成整段译文
+        result[idx] = (result[idx].map { $0 + trimmed }) ?? trimmed
+    }
+
+    private static func toInt(_ value: Any) -> Int? {
+        switch value {
+        case let n as Int: return n
+        case let n as Double: return Int(n)
+        case let n as String: return Int(n)
+        default: return nil
+        }
+    }
+
+    /// 从脏输出中扫取首个完整平衡的 `{...}` 或 `[...]` JSON 值(字符串内转义/括号不误计)
+    private static func firstJSONValueData(in raw: String) -> Data? {
+        guard let startIdx = raw.firstIndex(where: { $0 == "{" || $0 == "[" }) else { return nil }
+        let opening = raw[startIdx]
+        let closing: Character = opening == "{" ? "}" : "]"
+        var depth = 0
+        var inString = false
+        var escaped = false
+        var i = startIdx
+        while i < raw.endIndex {
+            let ch = raw[i]
+            if inString {
+                if escaped {
+                    escaped = false
+                } else if ch == "\\" {
+                    escaped = true
+                } else if ch == "\"" {
+                    inString = false
+                }
+            } else if ch == "\"" {
+                inString = true
+            } else if ch == opening {
+                depth += 1
+            } else if ch == closing {
+                depth -= 1
+                if depth == 0 {
+                    return String(raw[startIdx...i]).data(using: .utf8)
+                }
+            }
+            i = raw.index(after: i)
+        }
+        return nil
+    }
+
+    /// 章级批翻：一次 agent 调用返回整包译文 map（缺编号由调度层兜底）。
+    func translateParagraphBatch(
+        items: [(index: Int, text: String)],
+        bookTitle: String,
+        chapterTitle: String
+    ) async throws -> [Int: String] {
+        if let override = testBatchDriverOverride {
+            return try await override(items)
+        }
+        guard currentPreset.driverType != .embedded else {
+            throw BatchTranslationError.unsupportedDriver
+        }
+        guard !items.isEmpty else { return [:] }
+        let system = Self.batchSystemPrompt(bookTitle: bookTitle, chapterTitle: chapterTitle)
+        let user = Self.batchUserPrompt(items)
+        let raw = try await runDriverCollect(systemPrompt: system, userPrompt: user)
+        return Self.parseBatchResponse(raw, validIndices: Set(items.map(\.index)))
+    }
+
+    /// 一次 agent 调用收集完整输出（批翻路径，进程登记走 translation 槽）
+    private func runDriverCollect(systemPrompt: String, userPrompt: String) async throws -> String {
+        var collected = ""
+        switch currentPreset.driverType {
+        case .acpStdio:
+            try await runACPStdio(
+                command: customCommand, systemPrompt: systemPrompt, userPrompt: userPrompt,
+                activeQuote: nil, onToken: { collected += $0 }, processRole: .translation
+            )
+        case .cliStreaming:
+            try await runCLIStreaming(
+                command: customCommand, systemPrompt: systemPrompt, userPrompt: userPrompt,
+                activeQuote: nil, onToken: { collected += $0 }, processRole: .translation
+            )
+        case .httpAdapter:
+            if currentPreset.id == "ollama" {
+                try await runOllamaAdapter(
+                    endpoint: customCommand, model: selectedModel,
+                    systemPrompt: systemPrompt, history: [], userPrompt: userPrompt,
+                    onToken: { collected += $0 }
+                )
+            } else {
+                try await runOpenAIAdapter(
+                    endpoint: customCommand, model: selectedModel,
+                    systemPrompt: systemPrompt, history: [], userPrompt: userPrompt,
+                    onToken: { collected += $0 }
+                )
+            }
+        case .embedded:
+            throw BatchTranslationError.unsupportedDriver
+        }
+        let trimmed = collected.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { throw BatchTranslationError.emptyResponse }
+        return trimmed
     }
 
     // MARK: - Direct Literary Translation with Active Agent
@@ -282,7 +591,8 @@ final class AIAgentService: @unchecked Sendable {
                     activeQuote: nil,
                     onToken: { token in
                         collectedResult += token
-                    }
+                    },
+                    processRole: .translation
                 )
 
             case .cliStreaming:
@@ -293,7 +603,8 @@ final class AIAgentService: @unchecked Sendable {
                     activeQuote: nil,
                     onToken: { token in
                         collectedResult += token
-                    }
+                    },
+                    processRole: .translation
                 )
 
             case .httpAdapter:
@@ -342,7 +653,8 @@ final class AIAgentService: @unchecked Sendable {
         systemPrompt: String,
         userPrompt: String,
         activeQuote: String?,
-        onToken: @escaping @MainActor (String) -> Void
+        onToken: @escaping @MainActor (String) -> Void,
+        processRole: ProcessRole = .chat
     ) async throws {
         let parts = command.components(separatedBy: " ").filter { !$0.isEmpty }
         guard let binName = parts.first else {
@@ -365,7 +677,13 @@ final class AIAgentService: @unchecked Sendable {
         process.standardOutput = outPipe
         process.standardError = errPipe
 
-        self.activeProcess = process
+        switch processRole {
+        case .chat:
+            self.chatProcess = process
+        case .translation:
+            self.registerTranslationProcess(process)
+            defer { self.unregisterTranslationProcess(process) }
+        }
 
         try process.run()
 
@@ -505,7 +823,8 @@ final class AIAgentService: @unchecked Sendable {
         systemPrompt: String,
         userPrompt: String,
         activeQuote: String?,
-        onToken: @escaping @MainActor (String) -> Void
+        onToken: @escaping @MainActor (String) -> Void,
+        processRole: ProcessRole = .chat
     ) async throws {
         let parts = command.components(separatedBy: " ").filter { !$0.isEmpty }
         guard let binName = parts.first else {
@@ -531,7 +850,13 @@ final class AIAgentService: @unchecked Sendable {
         process.standardOutput = outPipe
         process.standardError = errPipe
 
-        self.activeProcess = process
+        switch processRole {
+        case .chat:
+            self.chatProcess = process
+        case .translation:
+            self.registerTranslationProcess(process)
+            defer { self.unregisterTranslationProcess(process) }
+        }
 
         try process.run()
 

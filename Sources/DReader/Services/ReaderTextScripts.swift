@@ -16,7 +16,7 @@ enum ReaderTextScripts {
     const dreaderTextExcluded = [
         'script', 'style', 'noscript', 'rt', 'rp', 'button', 'svg',
         '[hidden]', '[aria-hidden="true"]', '.dreader-bilingual-slot',
-        '.dreader-bilingual-trans', '.dreader-thought-dot',
+        '.dreader-bilingual-trans', '.dreader-bilingual-side', '.dreader-thought-dot',
         '.dreader-classic-divider'
     ].join(',');
 

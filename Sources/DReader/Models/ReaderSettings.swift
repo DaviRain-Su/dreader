@@ -204,6 +204,14 @@ final class ReaderSettings: @unchecked Sendable {
     var isBilingualEnabled: Bool = false
     var bilingualMode: BilingualDisplayMode = .interlinear
 
+    /// 双语生效版式:竖排/双页对开下左右分栏与正文排版冲突,自动回退逐段对照
+    var effectiveBilingualMode: BilingualDisplayMode {
+        guard isBilingualEnabled else { return .interlinear }
+        return (bilingualMode == .sideBySide && !isVertical && pageLayout == .single)
+            ? .sideBySide
+            : .interlinear
+    }
+
     // Chinese Script Conversion (繁体转简体)
     var chineseScriptMode: ChineseScriptMode = {
         if let raw = UserDefaults.standard.string(forKey: "dreader.chinese_script_mode"),

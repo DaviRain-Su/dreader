@@ -719,6 +719,19 @@ struct ReaderMainView: View {
                 .transition(.move(edge: .trailing))
             }
         }
+        // 双语开关(弹窗 Toggle 直写路径):开→接力起跑,关→终止队列。⌘T 路径在 vm 内同步处理。
+        .onChange(of: vm.settings.isBilingualEnabled) { _, enabled in
+            guard let book = vm.currentBook else { return }
+            if enabled {
+                BilingualChapterQueue.shared.schedule(
+                    bookKey: book.title,
+                    chapterCount: book.chapters.count,
+                    fromIndex: book.currentChapterIndex
+                )
+            } else {
+                BilingualChapterQueue.shared.cancel(forKey: book.title)
+            }
+        }
         .onChange(of: vm.readAloud.state) { _, state in
             if state == .idle, let reason = vm.readAloud.engineError {
                 vm.errorMessage = "听书已停止：\(reason)"
@@ -903,8 +916,13 @@ struct ReaderMainView: View {
                     agentName: vm.agentService.currentPreset.name,
                     isTranslating: vm.isTranslatingChapter,
                     translationProgress: vm.chapterTranslationProgress,
+                    bilingualQueueDescription: vm.bilingualQueueDescription,
+                    hasBilingualQueueWork: vm.hasBilingualQueueWork,
                     onTranslateChapter: {
                         vm.translateCurrentChapterWithAgent()
+                    },
+                    onTranslateFullBook: {
+                        vm.requestFullBookTranslation()
                     }
                 )
             }

@@ -200,15 +200,18 @@ struct EPUBWebView: NSViewRepresentable {
 
     func updateNSView(_ nsView: WKWebView, context: Context) {
         let prevBilingual = context.coordinator.lastBilingualEnabled
+        let prevBilingualMode = context.coordinator.lastBilingualEffectiveMode
         context.coordinator.parent = self
         context.coordinator.lastBilingualEnabled = settings.isBilingualEnabled
+        context.coordinator.lastBilingualEffectiveMode = settings.effectiveBilingualMode
 
         let prevScriptMode = context.coordinator.lastScriptMode
         context.coordinator.lastScriptMode = settings.chineseScriptMode
 
         if context.coordinator.currentURL != chapterURL
             || context.coordinator.currentChapterIndex != chapterIndex
-            || prevBilingual != settings.isBilingualEnabled {
+            || prevBilingual != settings.isBilingualEnabled
+            || prevBilingualMode != settings.effectiveBilingualMode {
             context.coordinator.loadChapter(
                 url: chapterURL,
                 opfDir: opfDirectory,
@@ -237,7 +240,7 @@ struct EPUBWebView: NSViewRepresentable {
     }
 
     private var settingsSummary: String {
-        "\(settings.theme.rawValue)-\(settings.fontFamily.rawValue)-\(settings.fontSize)-\(settings.lineHeight)-\(settings.maxWidth)-\(settings.paragraphSpacing)-\(settings.isJustified)-\(settings.pageLayout.rawValue)-\(settings.isBilingualEnabled)-\(settings.chineseScriptMode.rawValue)-\(settings.isVertical ? "V" : "H")-\(settings.isLineGuide ? "G1" : "G0")-\(highlightsSummary)"
+        "\(settings.theme.rawValue)-\(settings.fontFamily.rawValue)-\(settings.fontSize)-\(settings.lineHeight)-\(settings.maxWidth)-\(settings.paragraphSpacing)-\(settings.isJustified)-\(settings.pageLayout.rawValue)-\(settings.isBilingualEnabled)-\(settings.effectiveBilingualMode.rawValue)-\(settings.chineseScriptMode.rawValue)-\(settings.isVertical ? "V" : "H")-\(settings.isLineGuide ? "G1" : "G0")-\(highlightsSummary)"
     }
 
     // MARK: - Coordinator
@@ -250,6 +253,7 @@ struct EPUBWebView: NSViewRepresentable {
         var isPageReady: Bool = false
         var lastSettingsSummary: String = ""
         var lastBilingualEnabled: Bool = false
+        var lastBilingualEffectiveMode: BilingualDisplayMode = .interlinear
         var lastScriptMode: ChineseScriptMode = .original
         var pendingScrollHighlightId: String? = nil
         private var chapterLoadGeneration = 0
@@ -620,6 +624,7 @@ struct EPUBWebView: NSViewRepresentable {
             guard let webView = webView, let url = currentURL, let opfDir = currentOpfDir else { return }
             lastSettingsSummary = parent.settingsSummary
             lastScriptMode = settings.chineseScriptMode
+            lastBilingualEffectiveMode = settings.effectiveBilingualMode
 
             let rawHTML: String
             if let cached = parent.getCachedHTML(url) {
@@ -650,7 +655,8 @@ struct EPUBWebView: NSViewRepresentable {
                     in: bodyContent,
                     translations: parent.bilingualTranslations,
                     agentName: parent.agentName,
-                    theme: settings.theme
+                    theme: settings.theme,
+                    mode: settings.effectiveBilingualMode
                 )
             }
             let headElements = EPUBThemeInjector.extractHeadElements(from: resolvedHTML)
@@ -720,6 +726,7 @@ struct EPUBWebView: NSViewRepresentable {
             let resolvedHTML = EPUBThemeInjector.resolveResourceURLs(in: rawHTML, chapterDir: chapterDir, opfDir: opfDir)
             var bodyContent = EPUBThemeInjector.extractBodyContent(from: resolvedHTML)
             bodyContent = EPUBThemeInjector.sanitizeAndElevateLayout(bodyContent)
+            lastBilingualEffectiveMode = settings.effectiveBilingualMode
 
             // Tag-safe Chinese Script Conversion
             if settings.chineseScriptMode != .original {
@@ -734,7 +741,8 @@ struct EPUBWebView: NSViewRepresentable {
                     in: bodyContent,
                     translations: parent.bilingualTranslations,
                     agentName: parent.agentName,
-                    theme: settings.theme
+                    theme: settings.theme,
+                    mode: settings.effectiveBilingualMode
                 )
             }
             let headElements = EPUBThemeInjector.extractHeadElements(from: resolvedHTML)
@@ -811,6 +819,7 @@ struct EPUBWebView: NSViewRepresentable {
         func updateStyles(settings: ReaderSettings) {
             guard let webView = webView else { return }
             lastSettingsSummary = parent.settingsSummary
+            lastBilingualEffectiveMode = settings.effectiveBilingualMode
 
             let css = EPUBThemeInjector.generateCSS(settings: settings)
                 .replacingOccurrences(of: "\n", with: " ")
@@ -1019,7 +1028,13 @@ struct EPUBWebView: NSViewRepresentable {
                   let jsonAgentData = try? JSONSerialization.data(withJSONObject: [agentName]),
                   let jsonAgent = String(data: jsonAgentData, encoding: .utf8) else { return }
 
-            let js = "window.dreaderUpdateTranslation(\(index), \(jsonText)[0], \(jsonAgent)[0]);"
+            // 左右分栏对照走右列直填(textContent),逐段对照走卡片替换(innerHTML)——结构不同不可混用
+            let js: String
+            if lastBilingualEffectiveMode == .sideBySide {
+                js = "window.dreaderUpdateSideTranslation(\(index), \(jsonText)[0]);"
+            } else {
+                js = "window.dreaderUpdateTranslation(\(index), \(jsonText)[0], \(jsonAgent)[0]);"
+            }
             webView.evaluateJavaScript(js, completionHandler: nil)
         }
 

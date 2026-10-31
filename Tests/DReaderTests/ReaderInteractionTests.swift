@@ -556,4 +556,66 @@ final class ReaderInteractionTests: XCTestCase {
         coordinator.scrollPage(direction: 1)
         try await waitUntil("window.scrollY > 100")
     }
+
+    // MARK: - 左右分栏对照(sideBySide)
+
+    func testSideBySideRowsKeepAnchorsAndExcludedFromReadAloud() async throws {
+        settings.bilingualMode = .sideBySide
+        try await loadReaderHTML(
+            "<p>第一段原文但愿各自安好。</p><p>第二段原文文本。</p><p>第三段原文文本。</p>",
+            bilingual: true)
+        settings.bilingualMode = .interlinear
+
+        // 行结构:每段一行 grid,左原文右空槽(未译不显示按钮)
+        let rowInfo = try await evaluate("""
+            JSON.stringify({
+                rows: document.querySelectorAll('.dreader-bilingual-row').length,
+                slots: document.querySelectorAll('.dreader-bilingual-side-slot').length,
+                trans: document.querySelectorAll('.dreader-bilingual-side-trans').length,
+                buttons: document.querySelectorAll('.dreader-bilingual-translate-btn').length,
+                anchors: Array.from(document.querySelectorAll('.dreader-bilingual-row > p')).map(
+                    e => e.getAttribute('data-dreader-para')).join(',')
+            })
+            """)
+        guard let obj = rowInfo as? String,
+              let data = obj.data(using: .utf8),
+              let info = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return XCTFail("sideBySide 结构未注入")
+        }
+        XCTAssertEqual(info["rows"] as? Int, 3, "段落必须包成双栏行")
+        XCTAssertEqual(info["slots"] as? Int, 3, "未译段以空槽占位")
+        XCTAssertEqual(info["trans"] as? Int, 0)
+        XCTAssertEqual(info["buttons"] as? Int, 0, "分栏模式不给未译段按钮")
+        XCTAssertEqual(info["anchors"] as? String, "0,1,2", "双栏行内原文锚点编号不变")
+
+        // 右列直填(JS 分派)
+        coordinator.updateTranslationInDOM(index: 1, translation: "第二段译文", agentName: "AI")
+        try await waitUntil(
+            "document.querySelector('.dreader-bilingual-side-trans[data-para-index=\"1\"]')?.textContent === '第二段译文'")
+        // 直填不得误改左侧原文
+        let leftText = try await evaluate(
+            "document.querySelector('.dreader-bilingual-row > p[data-dreader-para=\"1\"]').textContent") as? String
+        XCTAssertEqual(leftText, "第二段原文文本。")
+
+        // 朗读仍取原文,不吞译文侧
+        let segments = try await coordinator.readAloudSegments()
+        XCTAssertTrue(segments.contains { $0.text.contains("第一段原文但愿各自安好") }, "双栏行内原文仍要保持正文可听")
+        XCTAssertFalse(segments.contains { $0.text.contains("第二段译文") }, "译文右列不进朗读")
+    }
+
+    func testSideBySideSearchDoesNotHitTranslationText() async throws {
+        settings.bilingualMode = .sideBySide
+        try await loadReaderHTML(
+            "<p>搜索正文的工整句子。</p>", bilingual: true)
+        settings.bilingualMode = .interlinear
+        coordinator.updateTranslationInDOM(index: 0, translation: "搜索正文的绝无可能命中文案", agentName: "AI")
+        try await waitUntil(
+            "document.querySelector('.dreader-bilingual-side-trans')?.textContent?.includes('命中文案') === true")
+
+        // 搜原文命中;搜译文 miss(译文右列与逐段译文卡同走排除清单)
+        let translatedHit = try await evaluate("window.dreaderScrollToSearchMatch('绝无可能命中文案', 0)") as? Bool
+        XCTAssertEqual(translatedHit, false, "译文右列不应成为正文搜索命中")
+        let originalHit = try await evaluate("window.dreaderScrollToSearchMatch('搜索正文的工整句子', 0)") as? Bool
+        XCTAssertEqual(originalHit, true)
+    }
 }

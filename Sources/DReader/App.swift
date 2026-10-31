@@ -151,6 +151,11 @@ struct DReaderApp: App {
                 }
                 .keyboardShortcut("t", modifiers: [.command, .shift])
 
+                Button("AI 双语翻译全书") {
+                    viewModel.requestFullBookTranslation()
+                }
+                .keyboardShortcut("t", modifiers: [.command, .shift, .option])
+
                 Divider()
 
                 Button(viewModel.settings.chineseScriptMode == .simplified ? "恢复原版繁体字形" : "一键将繁体转换为简体") {

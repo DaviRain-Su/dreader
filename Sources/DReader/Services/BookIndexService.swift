@@ -189,7 +189,12 @@ private extension Character {
 /// Extracts paragraphs from processed (sanitized) chapter bodies so that indices
 /// stay in lockstep with the `data-dreader-para` tags injected into the DOM.
 enum EPUBThemeExtractor {
-    static func extractParagraphs(from sanitizedBody: String) -> [(index: Int, text: String)] {
+    /// - Parameter minParagraphLength: 段落正文至少多少字符才收录(默认 4;双语批翻传 2
+    ///   以对齐 sanitize 打点口径)。序号永远按全量 `<p>` 位置计,不受该门槛影响——
+    ///   与 `data-dreader-para` 编号保持 lockstep。
+    static func extractParagraphs(
+        from sanitizedBody: String, minParagraphLength: Int = 4
+    ) -> [(index: Int, text: String)] {
         let pattern = "(?i)<p\\b[^>]*>([\\s\\S]*?)</p>"
         guard let regex = try? NSRegularExpression(pattern: pattern, options: []) else { return [] }
         let ns = sanitizedBody as NSString
@@ -207,7 +212,7 @@ enum EPUBThemeExtractor {
                 .replacingOccurrences(of: "&gt;", with: ">")
                 .replacingOccurrences(of: "&quot;", with: "\"")
                 .trimmingCharacters(in: .whitespacesAndNewlines)
-            guard plain.count >= 4 else { continue }
+            guard plain.count >= minParagraphLength else { continue }
             results.append((index: idx, text: plain))
         }
         return results

@@ -98,6 +98,7 @@ final class ReaderViewModel: @unchecked Sendable {
          readAloud: ChapterReadAloudService? = nil) {
         self.databaseOverride = database
         self.readAloud = readAloud ?? ChapterReadAloudService()
+        wireBilingualQueue()
         self.readAloud.onPositionChanged = { [weak self] position, bookId in
             self?.saveListeningPosition(position, bookId: bookId)
         }
@@ -249,6 +250,7 @@ final class ReaderViewModel: @unchecked Sendable {
         ReadingStatsManager.shared.pauseSession()
         flushReadingPosition()
         stopChapterReadAloud()
+        BilingualChapterQueue.shared.cancel(forKey: currentBook?.title)
         withAnimation(.easeInOut(duration: 0.25)) {
             isViewingBookshelf = true
             isBrowsingOnlineLibrary = false
@@ -327,6 +329,14 @@ final class ReaderViewModel: @unchecked Sendable {
             }
         }
         updateSubsequentChaptersTotalChars()
+        // 双语开着进书:接力队列按恢复到的章重新起跑(schedule 幂等,换书内部先 cancel 旧队列)
+        if settings.isBilingualEnabled {
+            BilingualChapterQueue.shared.schedule(
+                bookKey: restored.title,
+                chapterCount: restored.chapters.count,
+                fromIndex: restored.currentChapterIndex
+            )
+        }
     }
 
     // MARK: - 读完复盘状态
@@ -808,6 +818,9 @@ final class ReaderViewModel: @unchecked Sendable {
         chapterScrollProgress = 0.0
         flushReadingPosition()
         selectionManager.clear()
+        if settings.isBilingualEnabled {
+            BilingualChapterQueue.shared.reprioritize(fromIndex: book.currentChapterIndex)
+        }
     }
 
     func prevChapter() {
@@ -824,6 +837,9 @@ final class ReaderViewModel: @unchecked Sendable {
         chapterScrollProgress = 0.0
         flushReadingPosition()
         selectionManager.clear()
+        if settings.isBilingualEnabled {
+            BilingualChapterQueue.shared.reprioritize(fromIndex: book.currentChapterIndex)
+        }
     }
 
     func jumpToChapter(_ index: Int, preserveReadingPosition: Bool = false) {
@@ -851,6 +867,9 @@ final class ReaderViewModel: @unchecked Sendable {
             flushReadingPosition()
         }
         selectionManager.clear()
+        if settings.isBilingualEnabled {
+            BilingualChapterQueue.shared.reprioritize(fromIndex: book.currentChapterIndex)
+        }
     }
 
     private func updateBookInLibrary(_ book: EPUBBook) {
@@ -878,6 +897,15 @@ final class ReaderViewModel: @unchecked Sendable {
         chapterScrollProgress = 0
         clearMarginRects()
         completedReadingBookIDs.remove(book.id)
+        // 进试读:停掉此前在读那本书的接力;试读本身也支持双语(缓存照常落盘)
+        BilingualChapterQueue.shared.cancel(forKey: currentBook?.title)
+        if settings.isBilingualEnabled {
+            BilingualChapterQueue.shared.schedule(
+                bookKey: book.title,
+                chapterCount: book.chapters.count,
+                fromIndex: book.currentChapterIndex
+            )
+        }
         previewBook = book
         previewTotalChapterCount = totalChapters
         previewSource = meta
@@ -898,6 +926,7 @@ final class ReaderViewModel: @unchecked Sendable {
     func exitPreview() {
         previewTotalChapterCount = 0
         previewSource = nil
+        BilingualChapterQueue.shared.cancel(forKey: previewBook?.title)
         previewBook = nil
         readingSaveTask?.cancel()
         pendingReadingDestination = nil
@@ -1610,6 +1639,7 @@ final class ReaderViewModel: @unchecked Sendable {
         completedReadingBookIDs.remove(id)
         if let idx = books.firstIndex(where: { $0.id == id }) {
             let removedBook = books.remove(at: idx)
+            BilingualChapterQueue.shared.cancel(forKey: removedBook.title)
             if currentBook?.id == removedBook.id {
                 currentBook = books.first
                 if books.isEmpty {
@@ -1644,6 +1674,70 @@ final class ReaderViewModel: @unchecked Sendable {
     }
 
     // MARK: - Bilingual Interlinear Reading Management
+
+    /// 章接力队列装配（init 一次即可）:「判断已译」走持久缓存,「翻一章」与 ⌘⇧T 同链路走批翻。
+    private func wireBilingualQueue() {
+        let queue = BilingualChapterQueue.shared
+        queue.isTranslated = { book, index in
+            BilingualTranslationService.shared.getCachedTranslations(
+                bookTitle: book, chapterIndex: index
+            )?.isEmpty == false
+        }
+        queue.translateHandler = { [weak self] book, index in
+            await self?.handleQueueTranslate(book: book, chapterIndex: index) ?? false
+        }
+    }
+
+    /// 弹窗双语节的接力状态行(队列换章/排行时会触发视图刷新)
+    var bilingualQueueDescription: String {
+        BilingualChapterQueue.shared.queueDescription
+    }
+    var hasBilingualQueueWork: Bool {
+        BilingualChapterQueue.shared.hasPendingWork
+    }
+
+    /// 「翻译全书»:先 schedule 蒙上当前章,再全量重排其余未译章(已译章由队列过滤)
+    func requestFullBookTranslation() {
+        guard let book = currentBook else { return }
+        let queue = BilingualChapterQueue.shared
+        queue.schedule(
+            bookKey: book.title,
+            chapterCount: book.chapters.count,
+            fromIndex: book.currentChapterIndex
+        )
+        queue.requestFullBook(fromIndex: book.currentChapterIndex)
+    }
+
+    /// 队列执行体:单章批翻。只写缓存与上屏回调,不动渲染状态——屏幕内的章
+    /// 借 updateTranslationAction 原位直填槽位;后台章因 slot 缺失让 JS 桥自动 no-op。
+    private func handleQueueTranslate(book: String, chapterIndex: Int) async -> Bool {
+        guard let vmBook = currentBook, vmBook.title == book,
+              vmBook.chapters.indices.contains(chapterIndex) else { return false }
+        let paragraphs = chapterParagraphs(book: vmBook, chapterIndex: chapterIndex)
+        guard !paragraphs.isEmpty else { return false }
+        let agentName = agentService.currentPreset.name
+        let chapterTitle = vmBook.chapters[chapterIndex].title
+        await BilingualTranslationService.shared.translateChapterBatch(
+            paragraphs: paragraphs,
+            bookTitle: book,
+            chapterTitle: chapterTitle,
+            chapterIndex: chapterIndex,
+            agentService: agentService,
+            onParagraphTranslated: { idx, trans in
+                self.updateTranslationAction?(idx, trans, agentName)
+            },
+            isCancelled: { [weak self] () -> Bool in
+                // 只看当前书:关双语/换书由队列 cancel(连带 Task.cancel)终止;
+                // 「翻译全书」在开关关闭时也允许手动跑完
+                guard let self, let current = self.currentBook else { return true }
+                return current.title != book
+            }
+        )
+        return BilingualTranslationService.shared.getCachedTranslations(
+            bookTitle: book, chapterIndex: chapterIndex
+        )?.isEmpty == false
+    }
+
     var updateTranslationAction: ((Int, String, String) -> Void)?
     var isTranslatingChapter: Bool {
         BilingualTranslationService.shared.isTranslatingChapter
@@ -1663,6 +1757,20 @@ final class ReaderViewModel: @unchecked Sendable {
     func toggleBilingualMode() {
         withAnimation(.easeInOut(duration: 0.2)) {
             settings.isBilingualEnabled.toggle()
+        }
+        if let book = currentBook {
+            // 开:接力队列从当前章起辐射翻;关:终止队列
+            if settings.isBilingualEnabled {
+                BilingualChapterQueue.shared.schedule(
+                    bookKey: book.title,
+                    chapterCount: book.chapters.count,
+                    fromIndex: book.currentChapterIndex
+                )
+            } else {
+                BilingualChapterQueue.shared.cancel(forKey: book.title)
+            }
+        } else {
+            BilingualChapterQueue.shared.cancel(forKey: nil)
         }
     }
 
@@ -1696,8 +1804,9 @@ final class ReaderViewModel: @unchecked Sendable {
         let chapterIndex = book.currentChapterIndex
         let agentName = agentService.currentPreset.name
 
-        let rawHTML = getCachedHTML(for: chapter.fileURL) ?? (try? String(contentsOf: chapter.fileURL, encoding: .utf8)) ?? ""
-        let paragraphs = EPUBThemeInjector.extractParagraphsFromHTML(rawHTML)
+        // 与 DOM 锚点(data-dreader-para)同源的抽取:sanitize 后再数段——
+        // 直接在全 rawHTML 上抽会因「标题提升替换 <p>」错位一格(逐段模式曾踩过)。
+        let paragraphs = chapterParagraphs(book: book, chapterIndex: chapterIndex)
         guard !paragraphs.isEmpty else { return }
 
         let cached = BilingualTranslationService.shared.getCachedTranslations(bookTitle: bookTitle, chapterIndex: chapterIndex) ?? [:]
@@ -1715,5 +1824,21 @@ final class ReaderViewModel: @unchecked Sendable {
                 }
             )
         }
+    }
+
+    /// 章级段落抽取(与渲染管线同源):缓存 HTML → body → sanitize → 按全量 `<p>` 槽位编号。
+    /// 翻译批次与 DOM 的 `data-dreader-para` 一一对应;未命中缓存自动读盘回填(与预取共用通道)。
+    func chapterParagraphs(book: EPUBBook, chapterIndex: Int) -> [(index: Int, text: String)] {
+        guard book.chapters.indices.contains(chapterIndex) else { return [] }
+        let url = book.chapters[chapterIndex].fileURL
+        var rawHTML = getCachedHTML(for: url) ?? ""
+        if rawHTML.isEmpty {
+            rawHTML = EPUBWebView.Coordinator.readTextSmart(url) ?? ""
+            if !rawHTML.isEmpty { cacheHTML(rawHTML, for: url) }
+        }
+        guard !rawHTML.isEmpty else { return [] }
+        let body = EPUBThemeInjector.extractBodyContent(from: rawHTML)
+        let sanitized = EPUBThemeInjector.sanitizeAndElevateLayout(body)
+        return EPUBThemeExtractor.extractParagraphs(from: sanitized, minParagraphLength: 2)
     }
 }

@@ -36,7 +36,8 @@ struct EPUBThemeInjector {
                 in: bodyContent,
                 translations: bilingualTranslations,
                 agentName: agentName,
-                theme: settings.theme
+                theme: settings.theme,
+                mode: settings.effectiveBilingualMode
             )
         }
         let headElements = extractHeadElements(from: resolvedHTML)
@@ -173,11 +174,14 @@ struct EPUBThemeInjector {
     }
 
     /// Injects dual-language interlinear translation cards or AI translation slots under each paragraph
+    /// - Parameter mode: 双语版式 — interlinear 为段落下卡片;sideBySide 为左右分栏行
+    ///   (左原文右译文 grid,未译段占空槽不显示按钮)。blockquote 内 <p> 不进双栏,保持逐段卡。
     static func injectBilingualBlocks(
         in html: String,
         translations: [Int: String]?,
         agentName: String,
-        theme: ReaderTheme
+        theme: ReaderTheme,
+        mode: BilingualDisplayMode = .interlinear
     ) -> String {
         let pPattern = "(?i)(<p\\b[^>]*>)([\\s\\S]*?)(</p>)"
         guard let regex = try? NSRegularExpression(pattern: pPattern, options: []) else { return html }
@@ -185,6 +189,30 @@ struct EPUBThemeInjector {
         var result = html
         let ns = result as NSString
         let matches = regex.matches(in: result, options: [], range: NSRange(location: 0, length: ns.length))
+
+        // blockquote 内 <p> 不进双栏行(不深度穿透对引文排版),保持逐段卡形态
+        var blockquoteRanges: [Range<Int>] = []
+        if mode == .sideBySide {
+            let bqPattern = "(?i)<blockquote\\b[^>]*>|</blockquote>"
+            if let bqRegex = try? NSRegularExpression(pattern: bqPattern, options: []) {
+                let bqMatches = bqRegex.matches(in: result, options: [], range: NSRange(location: 0, length: ns.length))
+                var depthStart = 0
+                for m in bqMatches {
+                    let isOpen = ns.substring(with: m.range).lowercased().hasPrefix("<blockquote")
+                    let location = m.range.location
+                    if isOpen {
+                        if depthStart == 0 { depthStart = location }
+                    } else if depthStart != 0 {
+                        blockquoteRanges.append(depthStart..<location)
+                        depthStart = 0
+                    }
+                }
+                if depthStart != 0 { blockquoteRanges.append(depthStart..<ns.length) }
+            }
+        }
+        func isInsideBlockquote(_ location: Int) -> Bool {
+            blockquoteRanges.contains { $0.contains(location) }
+        }
 
         // Process in reverse to preserve string indices
         for (idx, match) in matches.enumerated().reversed() {
@@ -206,8 +234,24 @@ struct EPUBThemeInjector {
                 newOpen = newOpen.replacingOccurrences(of: ">", with: " data-dreader-para=\"\(idx)\">")
             }
 
+            let cacheHit = translations?[idx].flatMap { trans -> String? in
+                trans.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : trans
+            }
+            // sideBySide 且不在 blockquote 内:一行 grid,左原文右译文
+            if mode == .sideBySide, !isInsideBlockquote(match.range.location) {
+                let sideContent: String
+                if let trans = cacheHit {
+                    sideContent = "<div class=\"dreader-bilingual-side-trans\" data-para-index=\"\(idx)\">\(trans)</div>"
+                } else {
+                    sideContent = "<div class=\"dreader-bilingual-side-slot\" id=\"dreader-trans-slot-\(idx)\" data-para-index=\"\(idx)\"></div>"
+                }
+                let rowSnippet = "<div class=\"dreader-bilingual-row\">\(newOpen)\(innerContent)\(closeTag)<div class=\"dreader-bilingual-side\">\(sideContent)</div></div>"
+                result = (result as NSString).replacingCharacters(in: match.range, with: rowSnippet)
+                continue
+            }
+
             var bilingualBlock = ""
-            if let trans = translations?[idx], !trans.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            if let trans = cacheHit {
                 bilingualBlock = """
                 <div class="dreader-bilingual-trans" data-para-index="\(idx)">
                     <div class="dreader-bilingual-header">
@@ -434,7 +478,11 @@ struct EPUBThemeInjector {
         let isSpread = settings.pageLayout == .spread
         // 双页对开走书页式右起（direction:rtl 列序，先读右页），与竖排互斥
         let isSpreadRTL = isSpread && !settings.isVertical
-        let computedMaxWidth = isSpreadRTL ? 1920.0 : (isSpread ? 1160.0 : settings.maxWidth)
+        // 左右分栏对照:两列各需 ~480px 可读宽度,版心不足时托底加宽
+        let isSideBySide = settings.effectiveBilingualMode == .sideBySide
+        let computedMaxWidth = isSpreadRTL ? 1920.0
+            : (isSpread ? 1160.0
+            : (isSideBySide ? max(settings.maxWidth, 1000.0) : settings.maxWidth))
         let ruleColor = theme.isDark ? "rgba(255, 255, 255, 0.08)" : "rgba(0, 0, 0, 0.08)"
 
         let fontOverrideCSS: String
@@ -618,12 +666,20 @@ struct EPUBThemeInjector {
 
         /* High-Performance Virtualization for Large Chapters (竖排下禁用：横向分栏与 content-visibility 冲突) */
         #dreader-chapter-body > p,
-        #dreader-chapter-body > div:not(.dreader-bilingual-trans):not(.dreader-bilingual-slot),
+        #dreader-chapter-body > div:not(.dreader-bilingual-trans):not(.dreader-bilingual-slot):not(.dreader-bilingual-row),
         #dreader-chapter-body > section,
         #dreader-chapter-body > blockquote {
             \(settings.isVertical || isSpreadRTL ? "content-visibility: visible;" : """
             content-visibility: auto;
             contain-intrinsic-size: 0 44px;
+            """)
+        }
+
+        /* 双栏行容器独占虚拟化(双列行高更高,预估按两倍常规行) */
+        #dreader-chapter-body > .dreader-bilingual-row {
+            \(settings.isVertical || isSpreadRTL || !isSideBySide ? "content-visibility: visible;" : """
+            content-visibility: auto;
+            contain-intrinsic-size: 0 88px;
             """)
         }
 
@@ -992,6 +1048,44 @@ struct EPUBThemeInjector {
         .dreader-bilingual-translate-btn:disabled {
             opacity: 0.65 !important;
             cursor: default !important;
+        }
+
+        /* Bilingual Side-by-Side Row (左右分栏对照:左原文右译文,行高=两列 max 自然行对行) */
+        .dreader-bilingual-row {
+            display: grid !important;
+            grid-template-columns: 1fr 1fr !important;
+            column-gap: 2.4em !important;
+            align-items: start !important;
+            margin-top: 0 !important;
+            margin-bottom: 0.35em !important;
+            text-indent: 0 !important;
+        }
+
+        .dreader-bilingual-row > p {
+            margin-top: 0 !important;
+            margin-bottom: 0 !important;
+            padding-bottom: \(settings.paragraphSpacing > 1.0 ? "0.2em" : "0") !important;
+        }
+
+        .dreader-bilingual-side {
+            font-size: 0.92em !important;
+            line-height: inherit !important;
+            color: \(theme.secondaryTextColorHex) !important;
+            text-indent: 0 !important;
+            min-width: 0 !important;
+        }
+
+        .dreader-bilingual-side-trans {
+            font-size: inherit !important;
+            line-height: inherit !important;
+            color: inherit !important;
+            opacity: 0.94 !important;
+            transition: opacity 0.25s ease-in-out !important;
+            animation: dreader-bilingual-appear 0.25s ease-out !important;
+        }
+
+        .dreader-bilingual-side-slot {
+            min-height: 1.1em !important;
         }
 
         /* Apple Books Style Search Match Glowing Halo */
@@ -1905,6 +1999,20 @@ struct EPUBThemeInjector {
                 div.setAttribute('data-para-index', index);
                 div.innerHTML = '<div class="dreader-bilingual-header"><span class="dreader-bilingual-tag">译</span><span class="dreader-bilingual-agent">' + (agentName || 'AI 伴读') + ' 译文</span></div><div class="dreader-bilingual-body">' + transText + '</div>';
                 slot.parentNode.replaceChild(div, slot);
+            };
+
+            // 左右分栏对照:译文直接落到右列(textContent 免转义);slot 缺失自动 no-op
+            window.dreaderUpdateSideTranslation = function(paraIndex, transText) {
+                if (!transText) return;
+                var target = document.getElementById('dreader-trans-slot-' + paraIndex);
+                if (target) {
+                    if (!target.classList.contains('dreader-bilingual-side-slot')) return;
+                    target.classList.remove('dreader-bilingual-side-slot');
+                    target.classList.add('dreader-bilingual-side-trans');
+                } else {
+                    target = document.querySelector('.dreader-bilingual-side-trans[data-para-index="' + paraIndex + '"]');
+                }
+                if (target) target.textContent = transText;
             };
             \(ReaderTextScripts.source)
 

@@ -7,7 +7,10 @@ struct ReaderTypographySettingsPopover: View {
     var agentName: String = "AI 伴读"
     var isTranslating: Bool = false
     var translationProgress: Double = 0.0
+    var bilingualQueueDescription: String = ""
+    var hasBilingualQueueWork: Bool = false
     var onTranslateChapter: (() -> Void)? = nil
+    var onTranslateFullBook: (() -> Void)? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -414,6 +417,27 @@ struct ReaderTypographySettingsPopover: View {
                 if settings.isBilingualEnabled {
                     VStack(alignment: .leading, spacing: 6) {
                         HStack(spacing: 4) {
+                            Text("对照版式:")
+                                .font(.system(size: 10))
+                                .foregroundStyle(.secondary)
+                            Spacer()
+                            Picker("", selection: $settings.bilingualMode) {
+                                ForEach(BilingualDisplayMode.allCases) { mode in
+                                    Text(mode.rawValue).tag(mode)
+                                }
+                            }
+                            .pickerStyle(.menu)
+                            .frame(maxWidth: 150)
+                        }
+
+                        if settings.bilingualMode == .sideBySide,
+                           settings.isVertical || settings.pageLayout == .spread {
+                            Text("竖排或双页对开排版下自动回退为段落下对照")
+                                .font(.system(size: 9))
+                                .foregroundStyle(.secondary.opacity(0.85))
+                        }
+
+                        HStack(spacing: 4) {
                             Text("翻译驱动:")
                                 .font(.system(size: 10))
                                 .foregroundStyle(.secondary)
@@ -436,7 +460,7 @@ struct ReaderTypographySettingsPopover: View {
                             } label: {
                                 HStack(spacing: 4) {
                                     Image(systemName: "sparkles")
-                                    Text("一键全章 AI 双语翻译")
+                                    Text("当前章批翻")
                                 }
                                 .font(.system(size: 11, weight: .medium))
                                 .frame(maxWidth: .infinity)
@@ -446,6 +470,35 @@ struct ReaderTypographySettingsPopover: View {
                                 .clipShape(RoundedRectangle(cornerRadius: 6))
                             }
                             .buttonStyle(.plain)
+                        }
+
+                        if let onFullBook = onTranslateFullBook {
+                            Button {
+                                onFullBook()
+                            } label: {
+                                HStack(spacing: 4) {
+                                    Image(systemName: "books.vertical.fill")
+                                    Text("AI 双语翻译全书")
+                                }
+                                .font(.system(size: 11, weight: .medium))
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 4.5)
+                                .background(Color.primary.opacity(0.07))
+                                .foregroundStyle(Color.primary.opacity(0.75))
+                                .clipShape(RoundedRectangle(cornerRadius: 6))
+                            }
+                            .buttonStyle(.plain)
+                        }
+
+                        // 章接力状态:后台正在扫到第几章(开双语即自动接力)
+                        if hasBilingualQueueWork, !isTranslating {
+                            HStack(spacing: 4) {
+                                Image(systemName: "arrow.triangle.2.circlepath")
+                                    .font(.system(size: 8.5))
+                                Text(bilingualQueueDescription)
+                                    .font(.system(size: 9.5))
+                            }
+                            .foregroundStyle(.secondary)
                         }
                     }
                     .padding(8)
