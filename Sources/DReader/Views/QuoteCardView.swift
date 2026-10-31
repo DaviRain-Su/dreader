@@ -70,6 +70,52 @@ enum QuoteCardTheme: String, CaseIterable, Identifiable {
     }
 }
 
+/// 高保真渲染导出：SwiftUI 视图 → sRGB 8-bit RGBA 位图 NSImage。
+/// @MainActor 因 ImageRenderer/CGContext 主线程约束；渲染失败返回 nil（不降级模糊回退）。
+@MainActor
+enum QuoteCardImageRenderer {
+    static func render(_ content: some View, scale: CGFloat = 3.0) -> NSImage? {
+        let renderer = ImageRenderer(content: content)
+        renderer.scale = scale
+        guard let cgImage = renderer.cgImage else { return nil }
+
+        // 经 8-bit RGBA 位图上下文压平，避免 TIFF 往返造成的色彩/透明度损耗——分享到微信/微博等白底场景不会出现灰脏半透明边
+        let width = cgImage.width
+        let height = cgImage.height
+        guard let context = CGContext(
+            data: nil,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: width * 4,
+            space: CGColorSpace(name: CGColorSpace.sRGB)!,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else { return nil }
+
+        context.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
+        guard let flattened = context.makeImage() else { return nil }
+        return NSImage(cgImage: flattened, size: NSSize(width: CGFloat(width) / scale, height: CGFloat(height) / scale))
+    }
+}
+
+/// 竖排版式工具：逐字成列（真竖排）与列内容截断。
+/// Swift 的 layoutDirection 只反转堆叠方向、不旋转 Text 内字符，竖排文本必须逐字拆列。
+enum QuoteCardLayout {
+    /// 竖排断列：把字符串按每列 capacity 字切成多列（配合 layoutDirection .rightToLeft 即右起竖读）。
+    static func verticalColumns(_ text: String, capacity: Int) -> [String] {
+        let characters = Array(text)
+        guard capacity > 0, !characters.isEmpty else { return [] }
+        return stride(from: 0, to: characters.count, by: capacity).map {
+            String(characters[$0 ..< min($0 + capacity, characters.count)])
+        }
+    }
+
+    /// 竖排卡用语的单段截断：超 max 字补省略号。
+    static func truncate(_ text: String, maxLength: Int) -> String {
+        text.count <= maxLength ? text : String(text.prefix(maxLength)) + "…"
+    }
+}
+
 /// Aesthetic Quote Card Generator Modal View (WeChat Read & Apple Books style)
 struct QuoteCardView: View {
     let highlight: Highlight
@@ -78,10 +124,8 @@ struct QuoteCardView: View {
 
     @State private var selectedTheme: QuoteCardTheme = .sepia
     @State private var includeThought: Bool = true
-    @State private var copyFeedback: Bool = false
-    @State private var saveFeedback: Bool = false
     @State private var textFormat: ShareTextFormat = .quoteWithThought
-    @State private var shareNote: String? = nil // 分享动作反馈（含剪贴板提示），2.5s 自动收
+    @State private var shareToast: String? = nil
     @State private var showSystemShare: Bool = false
 
     private var hasThought: Bool {
@@ -121,6 +165,9 @@ struct QuoteCardView: View {
         }
         .frame(minWidth: 460, idealWidth: 500, maxWidth: 540, minHeight: 460, idealHeight: 520, maxHeight: 600)
         .background(.ultraThinMaterial)
+        .overlay(alignment: .top) {
+            shareToastView
+        }
     }
 
     // MARK: - Header Bar
@@ -202,96 +249,142 @@ struct QuoteCardView: View {
         }
     }
 
-    // MARK: 古典竖排卡（右起竖文 · 朱砂印章落款）
-
+    // MARK: 古典竖排卡（真竖排逐字成列 · 朱丝栏批注分隔 · 3:4 版心 · 朱砂印章题跋）
+    @ViewBuilder
     private var classicalVerticalCard: some View {
-        HStack(alignment: .top, spacing: 14) {
-            // 最左：印章与出处（竖排卡落款在左下）
+        verticalCardBody
+            .padding(18)
+            .frame(width: 420, height: 560)
+            .background(verticalCardBackground)
+            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .environment(\.layoutDirection, .rightToLeft)
+    }
+
+    private var verticalCardBackground: some View {
+        LinearGradient(
+            colors: selectedTheme.bgColors,
+            startPoint: .topLeading,
+            endPoint: .bottomTrailing
+        )
+        .overlay(
+            // 朱丝栏内衬框：细朱线内缩 6pt，宣纸信笺的界格感
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(selectedTheme.accentColor.opacity(0.28), lineWidth: 0.6)
+                .padding(6)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(Color(hex: "#A83226").opacity(0.22), lineWidth: 0.8)
+        )
+    }
+
+    @ViewBuilder
+    private var verticalCardBody: some View {
+        let quoteBody = QuoteCardLayout.truncate(highlight.text, maxLength: 144)
+        let quoteColumns = QuoteCardLayout.verticalColumns(quoteBody, capacity: 16)
+        let thoughtBody = includeThought
+            ? QuoteCardLayout.truncate(highlight.note?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "", maxLength: 120)
+            : ""
+        let thoughtColumns = QuoteCardLayout.verticalColumns(thoughtBody, capacity: 22)
+        let cardTitle = highlight.bookTitle.isEmpty ? (book?.title ?? "未知书目") : highlight.bookTitle
+        let creditAuthor = (book?.author).flatMap { $0.isEmpty ? nil : $0 } ?? highlight.wechatAuthor
+        let creditAuthorBody = QuoteCardLayout.truncate(creditAuthor ?? "", maxLength: 10)
+        let creditChapter = QuoteCardLayout.truncate(highlight.chapterTitle, maxLength: 12)
+
+        HStack(alignment: .top, spacing: 12) {
+            // —— 结构顺序 = 视觉右→左（layoutDirection .rightToLeft）——
+
+            // 开卷装饰（视觉最右）：句首引线 + 「書」
             VStack(spacing: 8) {
-                Spacer()
-
-                // 朱砂印章式 DReader 落款
-                Text("读\u{3000}书")
-                    .font(.system(size: 12, weight: .bold, design: .serif))
-                    .foregroundStyle(.white)
-                    .frame(width: 26, height: 52)
-                    .background(
-                        RoundedRectangle(cornerRadius: 4, style: .continuous)
-                            .fill(Color(hex: "#A83226").opacity(0.88))
-                    )
-                    .shadow(color: Color(hex: "#A83226").opacity(0.3), radius: 3, x: 0, y: 1.5)
-
-                Text("《\(highlight.bookTitle.isEmpty ? (book?.title ?? "未知书目") : highlight.bookTitle)》")
-                    .font(.system(size: 10.5, weight: .semibold, design: .serif))
-                    .foregroundStyle(selectedTheme.secondaryColor)
-                    .lineLimit(2)
-                    .multilineTextAlignment(.center)
-                    .fixedSize(horizontal: false, vertical: true)
-
-                Text(book?.author ?? "未知作者")
-                    .font(.system(size: 9, design: .serif))
-                    .foregroundStyle(selectedTheme.secondaryColor.opacity(0.75))
-                    .lineLimit(1)
-            }
-            .frame(width: 86)
-
-            // 正文：竖排从右向左
-            VStack(spacing: 10) {
-                Text(highlight.text)
-                    .font(.system(size: 15.5, weight: .regular, design: .serif))
-                    .foregroundStyle(selectedTheme.textColor)
-                    .lineSpacing(8)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxHeight: .infinity, alignment: .top)
-
-                if includeThought, let note = highlight.note, !note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    Text("💭 \(note)")
-                        .font(.system(size: 11.5, design: .serif))
-                        .foregroundStyle(selectedTheme.textColor.opacity(0.85))
-                        .lineSpacing(4)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-
-                Text(highlight.chapterTitle)
-                    .font(.system(size: 10, design: .serif))
-                    .foregroundStyle(selectedTheme.secondaryColor.opacity(0.85))
-                    .lineLimit(1)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .environment(\.layoutDirection, .rightToLeft) // 视觉上从右往左排列
-
-            // 最右：开卷语与装饰（右起首列）
-            VStack(spacing: 6) {
                 Text("“")
-                    .font(.system(size: 30, weight: .bold, design: .serif))
-                    .foregroundStyle(selectedTheme.accentColor.opacity(0.55))
+                    .font(.system(size: 26, weight: .bold, design: .serif))
+                    .foregroundStyle(selectedTheme.accentColor.opacity(0.5))
+                Rectangle()
+                    .fill(selectedTheme.accentColor.opacity(0.4))
+                    .frame(width: 1.1, height: 54)
+                Text("書")
+                    .font(.system(size: 14, weight: .medium, design: .serif))
+                    .foregroundStyle(selectedTheme.accentColor.opacity(0.75))
+            }
 
+            // 引文正文（右起逐字竖列）
+            verticalColumnStack(quoteColumns, font: .system(size: 16.5, design: .serif), gap: 7)
+
+            // 思考批注（朱丝线分隔 + 朱点导引 + 弱化小字）
+            if !thoughtColumns.isEmpty {
                 Rectangle()
                     .fill(selectedTheme.accentColor.opacity(0.35))
-                    .frame(width: 1.2, height: 46)
+                    .frame(width: 0.8, height: 210)
+                    .padding(.top, 6)
+                VStack(alignment: .center, spacing: 8) {
+                    Circle()
+                        .fill(selectedTheme.accentColor.opacity(0.55))
+                        .frame(width: 5, height: 5)
+                    verticalColumnStack(thoughtColumns, font: .system(size: 11, design: .serif), gap: 4.5, color: selectedTheme.textColor.opacity(0.8))
+                }
+            }
 
-                Text("書")
-                    .font(.system(size: 13, weight: .medium, design: .serif))
-                    .foregroundStyle(selectedTheme.accentColor.opacity(0.7))
+            // 落款题跋（视觉最左）：朱砂印章 + 书名/作者/章节竖排小字
+            VStack(spacing: 12) {
+                Spacer()
+                VStack(spacing: 2) {
+                    Text("读")
+                        .font(.system(size: 11.5, weight: .semibold, design: .serif))
+                        .foregroundStyle(.white)
+                    Text("书")
+                        .font(.system(size: 11.5, weight: .semibold, design: .serif))
+                        .foregroundStyle(.white)
+                }
+                .frame(width: 30, height: 58)
+                .background(
+                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                        .fill(Color(hex: "#A83226").opacity(0.9))
+                )
+                .shadow(color: Color(hex: "#A83226").opacity(0.25), radius: 2.5, x: 0, y: 1)
+
+                HStack(alignment: .top, spacing: 7) {
+                    verticalColumnStack(
+                        QuoteCardLayout.verticalColumns(QuoteCardLayout.truncate(cardTitle, maxLength: 24), capacity: 12),
+                        font: .system(size: 9.5, design: .serif),
+                        gap: 3,
+                        color: selectedTheme.secondaryColor.opacity(0.75)
+                    )
+                    if !creditAuthorBody.isEmpty {
+                        verticalColumnStack(
+                            QuoteCardLayout.verticalColumns(creditAuthorBody, capacity: 10),
+                            font: .system(size: 9, design: .serif),
+                            gap: 3,
+                            color: selectedTheme.secondaryColor.opacity(0.6)
+                        )
+                    }
+                    if !creditChapter.isEmpty {
+                        verticalColumnStack(
+                            QuoteCardLayout.verticalColumns(creditChapter, capacity: 12),
+                            font: .system(size: 9, design: .serif),
+                            gap: 3,
+                            color: selectedTheme.secondaryColor.opacity(0.6)
+                        )
+                    }
+                }
             }
         }
-        .padding(20)
-        .frame(width: 380, height: 300)
-        .background(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(
-                    LinearGradient(
-                        colors: selectedTheme.bgColors,
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .stroke(Color(hex: "#A83226").opacity(0.22), lineWidth: 0.8)
-                )
-        )
-        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+    }
+
+    /// 一列竖字：逐字 Text 自上而下
+    @ViewBuilder
+    private func verticalColumnStack(_ columns: [String], font: Font, gap: CGFloat, color: Color? = nil) -> some View {
+        HStack(alignment: .top, spacing: 14) {
+            ForEach(Array(columns.enumerated()), id: \.offset) { _, column in
+                VStack(spacing: gap) {
+                    ForEach(Array(column.enumerated()), id: \.offset) { _, char in
+                        Text(String(char))
+                            .font(font)
+                            .foregroundStyle(color ?? selectedTheme.textColor)
+                            .fixedSize()
+                    }
+                }
+            }
+        }
     }
 
     private var horizontalCard: some View {
@@ -436,119 +529,48 @@ struct QuoteCardView: View {
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
 
-    // MARK: - Bottom Action Bar（双行：主行 X 分享 + 次行其余分发动作）
+    // MARK: - Bottom Action Bar（icon-only 紧凑工具行，说明藏进 hover tooltip 与顶部 toast）
     private var actionBar: some View {
-        VStack(spacing: 8) {
-            HStack(spacing: 12) {
-                Text("生成高清卡片图，一键分发到社交平台")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
+        HStack(spacing: 10) {
+            Spacer()
 
-                Spacer()
-
-                // 分享到 X（主路径）：文字进发帖窗、卡片图自动进剪贴板
-                Button {
-                    shareToX()
-                } label: {
-                    HStack(spacing: 5) {
-                        Image(systemName: "paperplane.fill")
-                        Text(shareNote ?? "分享到 X")
-                            .lineLimit(1)
-                    }
-                    .font(.system(size: 12, weight: .semibold))
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 7)
-                    .background(shareNote == nil ? Color(nsColor: .controlAccentColor) : Color.green.opacity(0.9))
+            // 分享到 X（主路径）：文字进发帖窗、卡片图自动进剪贴板
+            Button {
+                shareToX()
+            } label: {
+                Text("X")
+                    .font(.system(size: 15, weight: .black, design: .rounded))
                     .foregroundStyle(.white)
-                    .clipShape(Capsule())
-                }
-                .help("打开 X 发帖窗；卡片图自动进剪贴板，⌘V 粘贴图文")
+                    .frame(width: 34, height: 30)
+                    .background(
+                        RoundedRectangle(cornerRadius: 7, style: .continuous)
+                            .fill(Color(nsColor: .controlAccentColor))
+                    )
             }
+            .buttonStyle(.plain)
+            .help("分享到 X：打开发帖窗，卡片图自动进剪贴板，⌘V 粘贴图文")
 
-            HStack(spacing: 12) {
-                Spacer()
+            CardIconButton(
+                systemImage: "square.and.arrow.up",
+                helpText: "系统分享菜单（邮件、消息、其他客户端）",
+                action: { showSystemShare = true }
+            )
 
-                // 系统分享菜单：邮件/短信/其他客户端零成本接入
-                Button {
-                    showSystemShare = true
-                } label: {
-                    HStack(spacing: 5) {
-                        Image(systemName: "square.and.arrow.up")
-                        Text("系统分享")
-                    }
-                    .font(.system(size: 12, weight: .medium))
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 7)
-                    .background(Color.primary.opacity(0.06))
-                    .foregroundStyle(Color.primary)
-                    .clipShape(Capsule())
-                }
-                .buttonStyle(.plain)
-                .help("调用 macOS 系统分享菜单（邮件、消息、其他客户端等）")
+            textFormatMenu
 
-                // 复制文字版：点击即复制当前格式；侧箭头切格式
-                Menu(
-                    content: {
-                        Picker("文字格式", selection: $textFormat) {
-                            ForEach(ShareTextFormat.allCases) { format in
-                                Text(format.displayName).tag(format)
-                            }
-                        }
-                    },
-                    label: {
-                        HStack(spacing: 5) {
-                            Image(systemName: "text.quote")
-                            Text("复制文字版")
-                        }
-                        .font(.system(size: 12, weight: .medium))
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 7)
-                        .background(Color.primary.opacity(0.06))
-                        .foregroundStyle(Color.primary)
-                        .clipShape(Capsule())
-                    },
-                    primaryAction: {
-                        copyShareText()
-                    }
-                )
-                .menuStyle(.button)
-                .fixedSize()
-                .help("复制文字版划线（按所选格式）")
+            CardIconButton(
+                systemImage: "doc.on.doc",
+                helpText: "复制卡片图片",
+                action: { copyCardImage() }
+            )
 
-                // Copy Image Button
-                Button {
-                    copyCardImage()
-                } label: {
-                    HStack(spacing: 5) {
-                        Image(systemName: copyFeedback ? "checkmark" : "doc.on.doc")
-                        Text(copyFeedback ? "已复制图片！" : "复制图片")
-                    }
-                    .font(.system(size: 12, weight: .medium))
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 7)
-                    .background(copyFeedback ? Color.green.opacity(0.15) : Color.primary.opacity(0.06))
-                    .foregroundStyle(copyFeedback ? Color.green : Color.primary)
-                    .clipShape(Capsule())
-                }
-                .buttonStyle(.plain)
+            CardIconButton(
+                systemImage: "arrow.down.circle",
+                helpText: "保存高清 PNG",
+                action: { saveCardPNG() }
+            )
 
-                // Save PNG Button
-                Button {
-                    saveCardPNG()
-                } label: {
-                    HStack(spacing: 5) {
-                        Image(systemName: saveFeedback ? "checkmark" : "arrow.down.circle.fill")
-                        Text(saveFeedback ? "保存成功！" : "保存高清 PNG")
-                    }
-                    .font(.system(size: 12, weight: .semibold))
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 7)
-                    .background(Color.primary.opacity(0.06))
-                    .foregroundStyle(Color.primary)
-                    .clipShape(Capsule())
-                }
-                .buttonStyle(.plain)
-            }
+            Spacer()
         }
         .overlay {
             if showSystemShare {
@@ -563,17 +585,79 @@ struct QuoteCardView: View {
         .padding(.vertical, 12)
     }
 
+    /// 文字版菜单：点击主体直接复制当前格式；侧下拉切换引文/思考组合格式
+    private var textFormatMenu: some View {
+        Menu(
+            content: {
+                Picker("文字格式", selection: $textFormat) {
+                    ForEach(ShareTextFormat.allCases) { format in
+                        Text(format.displayName).tag(format)
+                    }
+                }
+            },
+            label: {
+                Image(systemName: "text.quote")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(Color.primary.opacity(0.75))
+                    .frame(width: 38, height: 30)
+                    .background(
+                        RoundedRectangle(cornerRadius: 7, style: .continuous)
+                            .fill(Color.primary.opacity(0.05))
+                    )
+            },
+            primaryAction: {
+                copyShareText()
+            }
+        )
+        .menuStyle(.button)
+        .fixedSize()
+        .help("复制文字版（点击直接复制；下拉切换格式）")
+    }
+
+    // MARK: - Toast（动作反馈：顶部轻量胶囊，替代按钮内变文字）
+
+    @ViewBuilder
+    private var shareToastView: some View {
+        if let shareToast {
+            HStack(spacing: 6) {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.system(size: 11))
+                Text(shareToast)
+                    .font(.system(size: 11.5, weight: .medium))
+                    .lineLimit(1)
+            }
+            .foregroundStyle(Color(hex: "#1F9E51"))
+            .padding(.horizontal, 12)
+            .padding(.vertical, 7)
+            .background(.ultraThinMaterial, in: Capsule())
+            .overlay(Capsule().strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5))
+            .transition(.move(edge: .top).combined(with: .opacity))
+        }
+    }
+
+    @MainActor
+    private func flash(_ message: String) {
+        withAnimation(.easeOut(duration: 0.18)) { shareToast = message }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.2) {
+            withAnimation(.easeIn(duration: 0.18)) { shareToast = nil }
+        }
+    }
+
     // MARK: - Share Actions
 
     @MainActor
     private func shareToX() {
         // 「包含思考」勾选时文字版也带上思考；未勾选走纯引文
         let format: ShareTextFormat = (includeThought && hasThought) ? .quoteWithThought : .quoteOnly
+        guard let image = generateCardNSImage() else {
+            flash("卡片图生成失败，请重试")
+            return
+        }
         let note = SocialShare.shareToX(
             text: ShareTextComposer.composeText(format: format, highlight: highlight, book: book),
-            image: generateCardNSImage()
+            image: image
         )
-        flashShareNote(note)
+        flash(note)
     }
 
     @MainActor
@@ -581,7 +665,7 @@ struct QuoteCardView: View {
         SocialShare.copyText(
             ShareTextComposer.composeText(format: textFormat, highlight: highlight, book: book)
         )
-        flashShareNote("文字版已复制")
+        flash("文字版已复制（\(textFormat.displayName)）")
     }
 
     /// 系统分享菜单投递内容：卡片图优先；生成失败退回纯文本
@@ -594,51 +678,23 @@ struct QuoteCardView: View {
         return [text]
     }
 
-    @MainActor
-    private func flashShareNote(_ note: String) {
-        shareNote = note
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
-            shareNote = nil
-        }
-    }
-
     // MARK: - Image Rendering Actions
+
     @MainActor
     private func generateCardNSImage() -> NSImage? {
         // 3x 超采样导出，卡片背景已在源视图内含纯色兜底（不透明），
-        // 导出内容不含投影 —— 分享到微信/微博等白底场景不会出现灰脏半透明边。
-        let renderer = ImageRenderer(content: cardContent)
-        renderer.scale = 3.0
-        guard let cgImage = renderer.cgImage else { return renderer.nsImage }
-
-        // 经 8-bit RGBA 位图上下文落盘，避免 TIFF 往返造成的色彩/透明度损耗
-        let width = cgImage.width
-        let height = cgImage.height
-        guard let context = CGContext(
-            data: nil,
-            width: width,
-            height: height,
-            bitsPerComponent: 8,
-            bytesPerRow: width * 4,
-            space: CGColorSpace(name: CGColorSpace.sRGB)!,
-            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-        ) else { return nil }
-
-        context.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
-        guard let flattened = context.makeImage() else { return nil }
-        return NSImage(cgImage: flattened, size: NSSize(width: width / 3, height: height / 3))
+        // 导出内容不含投影 —— 分享白底场景不带脏边
+        QuoteCardImageRenderer.render(cardContent)
     }
 
     @MainActor
     private func copyCardImage() {
-        guard let image = generateCardNSImage() else { return }
-        let pasteboard = NSPasteboard.general
-        pasteboard.clearContents()
-        pasteboard.writeObjects([image])
-        copyFeedback = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-            copyFeedback = false
+        guard let image = generateCardNSImage() else {
+            flash("卡片图生成失败，请重试")
+            return
         }
+        SocialShare.copyImage(image)
+        flash("卡片图已复制")
     }
 
     @MainActor
@@ -646,7 +702,10 @@ struct QuoteCardView: View {
         guard let image = generateCardNSImage(),
               let tiff = image.tiffRepresentation,
               let bitmap = NSBitmapImageRep(data: tiff),
-              let pngData = bitmap.representation(using: .png, properties: [:]) else { return }
+              let pngData = bitmap.representation(using: .png, properties: [:]) else {
+            flash("卡片图生成失败，请重试")
+            return
+        }
 
         let savePanel = NSSavePanel()
         savePanel.allowedContentTypes = [.png]
@@ -655,11 +714,33 @@ struct QuoteCardView: View {
 
         if savePanel.runModal() == .OK, let targetURL = savePanel.url {
             try? pngData.write(to: targetURL)
-            saveFeedback = true
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-                saveFeedback = false
-            }
+            flash("已保存高清 PNG")
         }
+    }
+}
+
+/// 紧凑 icon-only 工具按钮：hover 反馈 + tooltip 说明
+private struct CardIconButton: View {
+    let systemImage: String
+    let helpText: String
+    let action: () -> Void
+
+    @State private var hovered = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(Color.primary.opacity(hovered ? 0.95 : 0.72))
+                .frame(width: 30, height: 30)
+                .background(
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .fill(Color.primary.opacity(hovered ? 0.12 : 0.05))
+                )
+        }
+        .buttonStyle(.plain)
+        .onHover { hovered = $0 }
+        .help(helpText)
     }
 }
 
