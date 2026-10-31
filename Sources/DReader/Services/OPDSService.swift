@@ -542,10 +542,11 @@ extension OPDSService {
         return epubType?.href
     }
 
-    /// 下载 EPUB（逐字节计数上报进度），落 DownloadedBooks。
+    /// 下载 EPUB（逐字节计数上报进度）。默认落 DownloadedBooks；试读可传 destination 到临时目录。
     func downloadEPUB(
         entry: Entry,
         source: Source?,
+        destination: URL? = nil,
         progress: (@Sendable (Double) -> Void)? = nil
     ) async throws -> URL {
         guard let href = pickEPUBLink(entry) else { throw OPDSError.noEpubLink }
@@ -587,14 +588,20 @@ extension OPDSService {
         }
 
         let fm = FileManager.default
-        let downloadsDir = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-            .appendingPathComponent("DReader/DownloadedBooks", isDirectory: true)
-        try fm.createDirectory(at: downloadsDir, withIntermediateDirectories: true)
-        let safeName = entry.title
-            .replacingOccurrences(of: "/", with: "_")
-            .replacingOccurrences(of: ":", with: "_")
-            .trimmingCharacters(in: .whitespaces)
-        let destinationURL = downloadsDir.appendingPathComponent("\(safeName).epub")
+        let destinationURL: URL
+        if let destination {
+            try fm.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
+            destinationURL = destination
+        } else {
+            let downloadsDir = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+                .appendingPathComponent("DReader/DownloadedBooks", isDirectory: true)
+            try fm.createDirectory(at: downloadsDir, withIntermediateDirectories: true)
+            let safeName = entry.title
+                .replacingOccurrences(of: "/", with: "_")
+                .replacingOccurrences(of: ":", with: "_")
+                .trimmingCharacters(in: .whitespaces)
+            destinationURL = downloadsDir.appendingPathComponent("\(safeName).epub")
+        }
         // 幂等：同名覆盖（与既有导入命名习惯一致）
         try data.write(to: destinationURL, options: .atomic)
         return destinationURL

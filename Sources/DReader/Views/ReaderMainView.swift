@@ -20,54 +20,60 @@ struct ReaderMainView: View {
         ZStack(alignment: .top) {
             Group {
                 if vm.isViewingBookshelf {
-                    RealisticBookshelfView(
-                        books: vm.books,
-                        onSelectBook: { book in
-                            vm.selectBookForReading(book)
-                        },
-                        onImportEPUB: {
-                            vm.showImportOpenPanel()
-                        },
-                        onOpenReadingInsights: {
-                            vm.showReadingInsights = true
-                        },
-                        onOpenOnlineHub: {
-                            vm.showOnlineBookHub = true
-                        },
-                        onOpenWeChatSync: {
-                            vm.showWeChatSyncModal = true
-                        },
-                        onOpenGlobalNotebooks: {
-                            vm.showGlobalNotebooksModal = true
-                        },
-                        onDeleteBook: { id in
-                            vm.removeBook(id: id)
-                        },
-                        onResetProgress: { id in
-                            vm.resetBookProgress(id: id)
-                        },
-                        onOpenXRay: { book in
-                            vm.selectBookForReading(book)
-                            vm.sidebarTab = .xray
-                            vm.isSidebarVisible = true
-                        },
-                        onAddClassic: { classic in
-                            Task {
-                                await vm.importClassicDirectly(classic)
-                            }
-                        },
-                        onStartReview: {
-                            vm.showReviewSessionModal = true
-                        },
-                        chineseScriptMode: vm.settings.chineseScriptMode
-                    )
-                    .transition(.opacity)
+                    if vm.isBrowsingOnlineLibrary {
+                        OnlineLibraryView(vm: vm)
+                            .transition(.opacity)
+                    } else {
+                        RealisticBookshelfView(
+                            books: vm.books,
+                            onSelectBook: { book in
+                                vm.selectBookForReading(book)
+                            },
+                            onImportEPUB: {
+                                vm.showImportOpenPanel()
+                            },
+                            onOpenReadingInsights: {
+                                vm.showReadingInsights = true
+                            },
+                            onOpenOnlineHub: {
+                                vm.openOnlineLibrary()
+                            },
+                            onOpenWeChatSync: {
+                                vm.showWeChatSyncModal = true
+                            },
+                            onOpenGlobalNotebooks: {
+                                vm.showGlobalNotebooksModal = true
+                            },
+                            onDeleteBook: { id in
+                                vm.removeBook(id: id)
+                            },
+                            onResetProgress: { id in
+                                vm.resetBookProgress(id: id)
+                            },
+                            onOpenXRay: { book in
+                                vm.selectBookForReading(book)
+                                vm.sidebarTab = .xray
+                                vm.isSidebarVisible = true
+                            },
+                            onAddClassic: { classic in
+                                Task {
+                                    await vm.importClassicDirectly(classic)
+                                }
+                            },
+                            onStartReview: {
+                                vm.showReviewSessionModal = true
+                            },
+                            chineseScriptMode: vm.settings.chineseScriptMode
+                        )
+                        .transition(.opacity)
+                    }
                 } else {
                     readingWorkspaceView
                         .transition(.opacity)
                 }
             }
             .animation(.easeInOut(duration: 0.22), value: vm.isViewingBookshelf)
+            .animation(.easeInOut(duration: 0.22), value: vm.isBrowsingOnlineLibrary)
 
             // Global Error Notification Toast
             if let errorMsg = vm.errorMessage {
@@ -147,19 +153,6 @@ struct ReaderMainView: View {
             ReadingInsightsModalView(stats: vm.readingStats) {
                 vm.showReadingInsights = false
             }
-        }
-        .sheet(isPresented: $vm.showOnlineBookHub) {
-            OnlineBookHubModalView(
-                onBookDownloadedAndImport: { localURL in
-                    Task { @MainActor in
-                        vm.showOnlineBookHub = false
-                        await vm.openEPUB(url: localURL)
-                    }
-                },
-                onClose: {
-                    vm.showOnlineBookHub = false
-                }
-            )
         }
         .sheet(isPresented: $vm.showWeChatSyncModal) {
             WeChatReadingSyncModalView(viewModel: vm) {
@@ -286,9 +279,79 @@ struct ReaderMainView: View {
     }
 
     // MARK: - Reading Workspace View
+    /// 试读横幅：标记当前是「只读前 N 章 / 共 M 章」的库内预压览，提供回库动作。
+    private var previewBanner: some View {
+        let chapterCount = vm.currentBook?.chapters.count ?? 0
+        return HStack(spacing: 10) {
+            Image(systemName: "book.pages")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(Color(hex: "#9E7A45"))
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text("试读模式 · 前 \(chapterCount) 章 / 全书 \(max(vm.previewTotalChapterCount, chapterCount)) 章")
+                    .font(.system(size: 11.5, weight: .semibold))
+                    .foregroundStyle(.primary.opacity(0.85))
+                Text("试读内容不会存进书架与阅读记录。")
+                    .font(.system(size: 9.5))
+                    .foregroundStyle(.secondary.opacity(0.8))
+            }
+
+            Spacer()
+
+            if case .opds = vm.previewSource {
+                Button {
+                    vm.importOPDSPreview()
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: "square.and.arrow.down.on.square")
+                            .font(.system(size: 10, weight: .semibold))
+                        Text("导入完整本")
+                            .font(.system(size: 11, weight: .semibold))
+                    }
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 5.5)
+                    .background(Color(hex: "#9E7A45"), in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .help("完整本已下载到临时目录，导入后走全解析管线落架")
+            } else if vm.isInPreviewMode {
+                Button {
+                    vm.exitPreview()
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: "arrow.uturn.backward")
+                            .font(.system(size: 10, weight: .semibold))
+                        Text("回书库下载完整本")
+                            .font(.system(size: 11, weight: .semibold))
+                    }
+                    .foregroundStyle(.primary.opacity(0.85))
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 5.5)
+                    .background(.ultraThinMaterial, in: Capsule())
+                    .overlay(Capsule().stroke(Color.primary.opacity(0.12), lineWidth: 0.5))
+                }
+                .buttonStyle(.plain)
+            }
+
+            Button {
+                vm.exitPreview()
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.system(size: 13))
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .help("结束试读，返回在线书库")
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        .background(Color(hex: "#9E7A45").opacity(0.08))
+        .overlay(Rectangle().stroke(Color(hex: "#9E7A45").opacity(0.18), lineWidth: 0.6))
+    }
+
     private var readingWorkspaceView: some View {
-        HStack(spacing: 0) {
-            // 1. Sidebar (TOC, Highlights, Books)
+        HStack(spacing: 0) {            // 1. Sidebar (TOC, Highlights, Books)
             if !vm.settings.isZenMode && vm.isSidebarVisible {
                 SidebarView(
                     currentTab: $vm.sidebarTab,
@@ -350,6 +413,11 @@ struct ReaderMainView: View {
                 // Top Toolbar (hidden in Zen Mode)
                 if !vm.settings.isZenMode {
                     readerTopBar
+                }
+
+                // 试读横幅（在线书库预览模式：只读前 3 章，不落书架）
+                if vm.isInPreviewMode && !vm.settings.isZenMode {
+                    previewBanner
                 }
 
                 // Content View with Floating Controls Overlay
@@ -693,7 +761,7 @@ struct ReaderMainView: View {
             AppleToolbarButton(
                 icon: "globe.asia.australia.fill",
                 action: {
-                    vm.showOnlineBookHub = true
+                    vm.openOnlineLibrary()
                 },
                 helpText: "探索在线数字书库 (⌘+L)"
             )

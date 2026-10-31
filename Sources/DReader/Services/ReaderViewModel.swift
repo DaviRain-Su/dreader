@@ -25,11 +25,11 @@ final class ReaderViewModel: @unchecked Sendable {
     private var deletedHighlights: [Highlight] = []
 
     var isViewingBookshelf: Bool = true // Default to showing Bookshelf on launch
+    var isBrowsingOnlineLibrary: Bool = false // 书架层子页面：在线数字书库多栏页
     var sidebarTab: SidebarTab = .toc
     var isSidebarVisible: Bool = false
     var isAIPanelVisible: Bool = false
     var showReadingInsights: Bool = false
-    var showOnlineBookHub: Bool = false
     var showWeChatSyncModal: Bool = false
     var showGlobalNotebooksModal: Bool = false
     var showReviewSessionModal: Bool = false
@@ -37,6 +37,25 @@ final class ReaderViewModel: @unchecked Sendable {
     var errorMessage: String?
     var chapterRenderID: UUID = UUID()
     var pendingRecap: RecapHint? = nil
+
+    // MARK: 试读（在线书库 → 只读前几章，不落书架）
+    /// 试读元数据：记录书从哪来，用于"完整导入"时回到既有的下载管线。
+    enum PreviewSource: Equatable {
+        case opds(fileURL: URL)          // 完整 EPUB 已在临时目录，导入即原文件走 openEPUB
+        case weread(bookId: String, title: String, author: String, cover: String) // 完整本需再走微信抓取
+    }
+    var previewTotalChapterCount: Int = 0
+    private(set) var previewBook: EPUBBook?
+    var isInPreviewMode: Bool { previewBook != nil }
+
+    /// 统一入口：从书架层打开在线数字书库页面。
+    func openOnlineLibrary() {
+        if !isViewingBookshelf { returnToBookshelf() }
+        withAnimation(.easeInOut(duration: 0.22)) {
+            isViewingBookshelf = true
+            isBrowsingOnlineLibrary = true
+        }
+    }
 
     /// 前情回顾的延迟浮现任务（换书时取消旧的），以及本会话内已关闭提示的书
     private var recapTask: Task<Void, Never>?
@@ -203,6 +222,7 @@ final class ReaderViewModel: @unchecked Sendable {
         stopChapterReadAloud()
         withAnimation(.easeInOut(duration: 0.25)) {
             isViewingBookshelf = true
+            isBrowsingOnlineLibrary = false
             selectionManager.clear()
         }
     }
@@ -286,6 +306,7 @@ final class ReaderViewModel: @unchecked Sendable {
     private func scheduleRecapIfAwayLong(for book: EPUBBook) {
         recapTask?.cancel()
         pendingRecap = nil
+        guard previewBook == nil else { return }
         guard !recapDismissedBookTitles.contains(book.title), book.currentChapterIndex == 0 else { return }
         guard let activity = database.latestActivity(bookTitle: book.title) else { return }
         let days = max(1, Int(Date().timeIntervalSince(activity.date) / 86_400))
@@ -344,9 +365,11 @@ final class ReaderViewModel: @unchecked Sendable {
     }
 
     /// 切章、换书、返回书架或退出时同步保存；滚动期间只做短时间去抖。
+    /// 试读不入库：不位置落库。
     func flushReadingPosition() {
         readingSaveTask?.cancel()
         readingSaveTask = nil
+        guard previewBook == nil else { return }
         guard let book = currentBook else { return }
         saveReadingPosition(
             bookId: book.id,
@@ -356,6 +379,7 @@ final class ReaderViewModel: @unchecked Sendable {
     }
 
     private func scheduleReadingPositionSave() {
+        guard previewBook == nil else { return }
         guard let book = currentBook, let chapter = book.currentChapter,
               readyChapterURL == chapter.fileURL,
               readyChapterIndex == book.currentChapterIndex else { return }
@@ -371,7 +395,8 @@ final class ReaderViewModel: @unchecked Sendable {
     }
 
     private func saveReadingPosition(bookId: UUID, chapterIndex: Int, progress: Double) {
-        guard readAloud.state == .idle,
+        guard previewBook == nil,
+              readAloud.state == .idle,
               !completedReadingBookIDs.contains(bookId) else { return }
         database.saveReadingPosition(.init(
             bookId: bookId,
@@ -674,9 +699,68 @@ final class ReaderViewModel: @unchecked Sendable {
     }
 
     private func updateBookInLibrary(_ book: EPUBBook) {
+        guard previewBook == nil else { return }
         if let idx = books.firstIndex(where: { $0.id == book.id }) {
             books[idx] = book
         }
+    }
+
+    // MARK: - 试读（在线书库）
+
+    var previewSource: PreviewSource?
+
+    /// 试读打开：不落书架、不写位置/统计，关掉即丢。书的前 N 章由调用方已经裁好。
+    @MainActor
+    func enterPreview(book: EPUBBook, meta: PreviewSource, totalChapters: Int) {
+        flushReadingPosition()          // 此前若在读别的书，先落位保存
+        stopChapterReadAloud()
+        readingSaveTask?.cancel()
+        pendingListeningResume = nil
+        pendingReadingDestination = nil
+        readyChapterURL = nil
+        readyChapterIndex = nil
+        chapterScrollProgress = 0
+        completedReadingBookIDs.remove(book.id)
+        previewBook = book
+        previewTotalChapterCount = totalChapters
+        previewSource = meta
+        withAnimation(.easeInOut(duration: 0.25)) {
+            currentBook = book
+            isViewingBookshelf = false
+            isBrowsingOnlineLibrary = false
+            isSidebarVisible = false
+            selectionManager.clear()
+        }
+    }
+
+    /// 试读收摊：临时书丢弃（temp 文件留给系统 tmp 清理或被"完整导入"复用）。
+    @MainActor
+    func exitPreview() {
+        previewTotalChapterCount = 0
+        previewSource = nil
+        previewBook = nil
+        readingSaveTask?.cancel()
+        pendingReadingDestination = nil
+        withAnimation(.easeInOut(duration: 0.25)) {
+            currentBook = nil
+            isViewingBookshelf = true
+            isBrowsingOnlineLibrary = true
+            selectionManager.clear()
+        }
+    }
+
+    /// OPDS 试读 → 完整导入：完整文件已下载在临时目录，直接走既有 openEPUB 全管线（二次解析 + 落架）。
+    @MainActor
+    func importOPDSPreview() {
+        guard case .opds(let fileURL)? = previewSource else { return }
+        previewTotalChapterCount = 0
+        previewSource = nil
+        previewBook = nil
+        withAnimation(.easeInOut(duration: 0.25)) {
+            isViewingBookshelf = true
+            isBrowsingOnlineLibrary = true
+        }
+        Task { await openEPUB(url: fileURL) }
     }
 
     // MARK: - Highlighting & Thoughts (WeChat Read style)

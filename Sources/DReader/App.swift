@@ -22,7 +22,7 @@ struct DReaderApp: App {
                 .keyboardShortcut("o", modifiers: .command)
 
                 Button("在线数字书库探索中心...") {
-                    viewModel.showOnlineBookHub = true
+                    viewModel.openOnlineLibrary()
                 }
                 .keyboardShortcut("l", modifiers: .command)
 
