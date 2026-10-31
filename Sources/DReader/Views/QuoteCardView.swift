@@ -80,6 +80,9 @@ struct QuoteCardView: View {
     @State private var includeThought: Bool = true
     @State private var copyFeedback: Bool = false
     @State private var saveFeedback: Bool = false
+    @State private var textFormat: ShareTextFormat = .quoteWithThought
+    @State private var shareNote: String? = nil // 分享动作反馈（含剪贴板提示），2.5s 自动收
+    @State private var showSystemShare: Bool = false
 
     private var hasThought: Bool {
         !(highlight.note?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
@@ -433,52 +436,170 @@ struct QuoteCardView: View {
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
 
-    // MARK: - Bottom Action Bar
+    // MARK: - Bottom Action Bar（双行：主行 X 分享 + 次行其余分发动作）
     private var actionBar: some View {
-        HStack(spacing: 12) {
-            Text("支持一键复制到剪贴板或保存为高清图片分享")
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary)
+        VStack(spacing: 8) {
+            HStack(spacing: 12) {
+                Text("生成高清卡片图，一键分发到社交平台")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
 
-            Spacer()
+                Spacer()
 
-            // Copy Image Button
-            Button {
-                copyCardImage()
-            } label: {
-                HStack(spacing: 5) {
-                    Image(systemName: copyFeedback ? "checkmark" : "doc.on.doc")
-                    Text(copyFeedback ? "已复制图片！" : "复制图片")
+                // 分享到 X（主路径）：文字进发帖窗、卡片图自动进剪贴板
+                Button {
+                    shareToX()
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: "paperplane.fill")
+                        Text(shareNote ?? "分享到 X")
+                            .lineLimit(1)
+                    }
+                    .font(.system(size: 12, weight: .semibold))
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 7)
+                    .background(shareNote == nil ? Color(nsColor: .controlAccentColor) : Color.green.opacity(0.9))
+                    .foregroundStyle(.white)
+                    .clipShape(Capsule())
                 }
-                .font(.system(size: 12, weight: .medium))
-                .padding(.horizontal, 14)
-                .padding(.vertical, 7)
-                .background(copyFeedback ? Color.green.opacity(0.15) : Color.primary.opacity(0.06))
-                .foregroundStyle(copyFeedback ? Color.green : Color.primary)
-                .clipShape(Capsule())
+                .help("打开 X 发帖窗；卡片图自动进剪贴板，⌘V 粘贴图文")
             }
-            .buttonStyle(.plain)
 
-            // Save PNG Button
-            Button {
-                saveCardPNG()
-            } label: {
-                HStack(spacing: 5) {
-                    Image(systemName: saveFeedback ? "checkmark" : "arrow.down.circle.fill")
-                    Text(saveFeedback ? "保存成功！" : "保存高清 PNG...")
+            HStack(spacing: 12) {
+                Spacer()
+
+                // 系统分享菜单：邮件/短信/其他客户端零成本接入
+                Button {
+                    showSystemShare = true
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: "square.and.arrow.up")
+                        Text("系统分享")
+                    }
+                    .font(.system(size: 12, weight: .medium))
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 7)
+                    .background(Color.primary.opacity(0.06))
+                    .foregroundStyle(Color.primary)
+                    .clipShape(Capsule())
                 }
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(.white)
-                .padding(.horizontal, 16)
-                .padding(.vertical, 7)
-                .background(Color(nsColor: .controlAccentColor))
-                .clipShape(Capsule())
-                .shadow(color: .black.opacity(0.2), radius: 4, y: 1.5)
+                .buttonStyle(.plain)
+                .help("调用 macOS 系统分享菜单（邮件、消息、其他客户端等）")
+
+                // 复制文字版：点击即复制当前格式；侧箭头切格式
+                Menu(
+                    content: {
+                        Picker("文字格式", selection: $textFormat) {
+                            ForEach(ShareTextFormat.allCases) { format in
+                                Text(format.displayName).tag(format)
+                            }
+                        }
+                    },
+                    label: {
+                        HStack(spacing: 5) {
+                            Image(systemName: "text.quote")
+                            Text("复制文字版")
+                        }
+                        .font(.system(size: 12, weight: .medium))
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 7)
+                        .background(Color.primary.opacity(0.06))
+                        .foregroundStyle(Color.primary)
+                        .clipShape(Capsule())
+                    },
+                    primaryAction: {
+                        copyShareText()
+                    }
+                )
+                .menuStyle(.button)
+                .fixedSize()
+                .help("复制文字版划线（按所选格式）")
+
+                // Copy Image Button
+                Button {
+                    copyCardImage()
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: copyFeedback ? "checkmark" : "doc.on.doc")
+                        Text(copyFeedback ? "已复制图片！" : "复制图片")
+                    }
+                    .font(.system(size: 12, weight: .medium))
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 7)
+                    .background(copyFeedback ? Color.green.opacity(0.15) : Color.primary.opacity(0.06))
+                    .foregroundStyle(copyFeedback ? Color.green : Color.primary)
+                    .clipShape(Capsule())
+                }
+                .buttonStyle(.plain)
+
+                // Save PNG Button
+                Button {
+                    saveCardPNG()
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: saveFeedback ? "checkmark" : "arrow.down.circle.fill")
+                        Text(saveFeedback ? "保存成功！" : "保存高清 PNG")
+                    }
+                    .font(.system(size: 12, weight: .semibold))
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 7)
+                    .background(Color.primary.opacity(0.06))
+                    .foregroundStyle(Color.primary)
+                    .clipShape(Capsule())
+                }
+                .buttonStyle(.plain)
             }
-            .buttonStyle(.plain)
+        }
+        .overlay {
+            if showSystemShare {
+                SharingServicePickerLauncher(items: systemShareItems()) {
+                    showSystemShare = false
+                }
+                .frame(width: 24, height: 12)
+                .opacity(0.01)
+            }
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 12)
+    }
+
+    // MARK: - Share Actions
+
+    @MainActor
+    private func shareToX() {
+        // 「包含思考」勾选时文字版也带上思考；未勾选走纯引文
+        let format: ShareTextFormat = (includeThought && hasThought) ? .quoteWithThought : .quoteOnly
+        let note = SocialShare.shareToX(
+            text: ShareTextComposer.composeText(format: format, highlight: highlight, book: book),
+            image: generateCardNSImage()
+        )
+        flashShareNote(note)
+    }
+
+    @MainActor
+    private func copyShareText() {
+        SocialShare.copyText(
+            ShareTextComposer.composeText(format: textFormat, highlight: highlight, book: book)
+        )
+        flashShareNote("文字版已复制")
+    }
+
+    /// 系统分享菜单投递内容：卡片图优先；生成失败退回纯文本
+    @MainActor
+    private func systemShareItems() -> [Any] {
+        let text = ShareTextComposer.composeText(format: textFormat, highlight: highlight, book: book)
+        if let image = generateCardNSImage() {
+            return [image, text]
+        }
+        return [text]
+    }
+
+    @MainActor
+    private func flashShareNote(_ note: String) {
+        shareNote = note
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
+            shareNote = nil
+        }
     }
 
     // MARK: - Image Rendering Actions
@@ -540,4 +661,22 @@ struct QuoteCardView: View {
             }
         }
     }
+}
+
+/// 系统分享菜单宿主：按钮触发时挂载一层隐形 NSView，在它锚点上原地弹 NSSharingServicePicker。
+private struct SharingServicePickerLauncher: NSViewRepresentable {
+    let items: [Any]
+    let onPresented: () -> Void
+
+    func makeNSView(context: Context) -> NSView {
+        let host = NSView()
+        DispatchQueue.main.async {
+            let picker = NSSharingServicePicker(items: items)
+            picker.show(relativeTo: host.bounds, of: host, preferredEdge: .maxY)
+            onPresented()
+        }
+        return host
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {}
 }
