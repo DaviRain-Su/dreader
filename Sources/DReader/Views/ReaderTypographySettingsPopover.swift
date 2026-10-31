@@ -272,6 +272,22 @@ struct ReaderTypographySettingsPopover: View {
             }
             .help("Tufte margin notes：横排阅读时，划线下的思考直接以批注卡显示在正文两侧空白")
 
+            // 批注字号（楷体夹批相对正文的比例档位）
+            VStack(alignment: .leading, spacing: 6) {
+                Text("批注字号 (相对正文)")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.secondary)
+
+                Picker("", selection: $settings.marginNoteTextScale) {
+                    ForEach(ReaderSettings.MarginNoteTextScale.allCases) { scale in
+                        Text(scale.rawValue).tag(scale)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .disabled(!settings.isMarginNotes)
+            }
+
             // 仿真翻页
             Toggle(isOn: $settings.isPageTurnAnimation) {
                 HStack(spacing: 4) {

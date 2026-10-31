@@ -118,7 +118,7 @@ enum MarginNotesLayout {
 struct MarginNoteCardView: View {
     let highlight: Highlight
     let width: CGFloat
-    let bodyFontSize: CGFloat
+    let noteFontSize: CGFloat
     let isActive: Bool
     let onTap: () -> Void
 
@@ -140,17 +140,17 @@ struct MarginNoteCardView: View {
             }
             // 划线原文段：完整内容长在页面上，这里截 3 行提示出处（楷体小批）
             Text(highlight.text.replacingOccurrences(of: "\n", with: " "))
-                .font(.custom("Kaiti SC", size: max(11.5, bodyFontSize * 0.72)))
+                .font(.custom("Kaiti SC", size: max(11, noteFontSize * 0.84)))
                 .foregroundStyle(Color.primary.opacity(0.48))
                 .lineSpacing(2.5)
                 .lineLimit(3)
-            // 思考全文：页边批注的主角——楷体夹批是中文批注的传统字体，字号跟正文设置联动
+            // 思考全文：页边批注的主角——楷体夹批是中文批注的传统字体，字号档位在排版浮窗
             Text(highlight.note ?? "")
-                .font(.custom("Kaiti SC", size: max(13, bodyFontSize * 0.86)))
+                .font(.custom("Kaiti SC", size: max(13, noteFontSize)))
                 .foregroundStyle(Color.primary.opacity(isLifted ? 0.92 : 0.82))
                 .lineSpacing(3)
             Text(highlight.createdAt.formatted(date: .numeric, time: .omitted))
-                .font(.system(size: max(9, bodyFontSize * 0.55)))
+                .font(.system(size: max(8.5, noteFontSize * 0.64)))
                 .foregroundStyle(Color.primary.opacity(0.3))
         }
         .padding(.leading, 9)
@@ -232,7 +232,7 @@ struct MarginNotesOverlay: View {
                     MarginNoteCardView(
                         highlight: highlight,
                         width: placement.width,
-                        bodyFontSize: vm.settings.fontSize,
+                        noteFontSize: vm.settings.fontSize * vm.settings.marginNoteTextScale.ratio,
                         isActive: false,
                         onTap: {
                             vm.selectionManager.activeHighlightCard = HighlightCardInfo(

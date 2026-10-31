@@ -240,6 +240,36 @@ final class ReaderSettings: @unchecked Sendable {
         }
     }
 
+    /// 页边批注字号档位：楷体夹批相对正文字号的比例
+    enum MarginNoteTextScale: String, CaseIterable, Identifiable, Codable {
+        case compact = "较小"
+        case standard = "标准"
+        case large = "较大"
+        var id: String { rawValue }
+
+        /// 思考全文相对正文字号的倍率；原文段与日期从它级联缩放
+        var ratio: Double {
+            switch self {
+            case .compact: return 0.76
+            case .standard: return 0.86
+            case .large: return 0.98
+            }
+        }
+    }
+
+    // 页边批注字体大小（楷体夹批相对正文的比例档位）
+    var marginNoteTextScale: MarginNoteTextScale = {
+        if let raw = UserDefaults.standard.string(forKey: "dreader.margin_note_text_scale"),
+           let scale = MarginNoteTextScale(rawValue: raw) {
+            return scale
+        }
+        return .standard
+    }() {
+        didSet {
+            UserDefaults.standard.set(marginNoteTextScale.rawValue, forKey: "dreader.margin_note_text_scale")
+        }
+    }
+
     // 仿真翻页：翻页时旧页以整幅纸面平移滑出（快照合成，无闪烁）
     var isPageTurnAnimation: Bool = {
         UserDefaults.standard.object(forKey: "dreader.page_turn_animation") == nil
