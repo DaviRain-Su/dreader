@@ -150,4 +150,77 @@ final class BilingualChapterQueueTests: XCTestCase {
         queue.cancel(forKey: "另一本")
         try await waitUntil(!queue.hasPendingWork)
     }
+
+    func testFullBookScheduleKeepsPendingQueueIntact() async throws {
+        let queue = BilingualChapterQueue()
+        let recorder = TranslationRecorder()
+        queue.isTranslated = { _, _ in false }
+        queue.translateHandler = { _, index in
+            try? await Task.sleep(for: .milliseconds(200))
+            recorder.append(index)
+            return true
+        }
+        queue.schedule(bookKey: "接力书2", chapterCount: 6, fromIndex: 0)
+        try await waitUntil(queue.activeIndex == 0) // 明确 0 在翻
+        queue.requestFullBook(fromIndex: 0) // pending=[1..5]
+        try await waitUntil(recorder.snapshotIndices.contains(0))
+        // 0 翻出后切章:schedule 不得把全书模式降级——否则余列被静默清空,
+        // 后台接力整条失联且永不恢复
+        queue.schedule(bookKey: "接力书2", chapterCount: 6, fromIndex: 2)
+        try await waitUntil(!queue.hasPendingWork)
+        XCTAssertEqual(Set(recorder.snapshotIndices), Set(0..<6),
+                       "全书接力中切章,其余未译章必须保持队列在场(已翻章重复允许)")
+        queue.cancel(forKey: nil)
+    }
+
+    func testReprioritizeBackToActiveChapterClearsStalePending() async throws {
+        let queue = BilingualChapterQueue()
+        let recorder = TranslationRecorder()
+        queue.isTranslated = { _, _ in false }
+        queue.translateHandler = { _, index in
+            try? await Task.sleep(for: .milliseconds(80))
+            recorder.append(index)
+            return true
+        }
+        queue.schedule(bookKey: "残列书", chapterCount: 4, fromIndex: 0)
+        try await waitUntil(recorder.snapshotIndices.contains(0)) // 0 翻完(单章模式排空即停)
+        queue.reprioritize(fromIndex: 2)
+        try await waitUntil(queue.activeIndex == 2)
+        queue.reprioritize(fromIndex: 3) // 切走:pending=[3](2 还在翻)
+        queue.reprioritize(fromIndex: 2) // 切回正在翻的 2:残留的 3 必须被清
+        try await Task.sleep(for: .milliseconds(400))
+        XCTAssertEqual(recorder.snapshotIndices, [0, 2],
+                       "切回在翻章时旧 pending 不得在其完成后白翻")
+        queue.cancel(forKey: nil)
+        try await waitUntil(!queue.hasPendingWork)
+    }
+
+    func testFullBookReprioritizesAroundTranslatedTarget() async throws {
+        let queue = BilingualChapterQueue()
+        let recorder = TranslationRecorder()
+        queue.isTranslated = { _, index in index == 5 }
+        queue.translateHandler = { _, index in
+            try? await Task.sleep(for: .milliseconds(150))
+            recorder.append(index)
+            return true
+        }
+        queue.schedule(bookKey: "转向书", chapterCount: 6, fromIndex: 0)
+        try await waitUntil(queue.activeIndex == 0)
+        queue.requestFullBook(fromIndex: 0)
+        try await waitUntil(recorder.snapshotIndices.contains(1)) // 0、1 依次完成,2 起翻
+        // 切到已译章 5:全书模式不得因「目标已译」放弃围绕新目标重排。
+        // 重排生效的核心标志:先排完 pending 队首 4(围绕 5 的辐射序),旧的 3 退居其后
+        queue.reprioritize(fromIndex: 5)
+        try await waitUntil(!queue.hasPendingWork)
+        let seq = recorder.snapshotIndices
+        if let slot2 = seq.firstIndex(of: 2),
+           let slot3 = seq.firstIndex(of: 3),
+           let slot4 = seq.firstIndex(of: 4) {
+            XCTAssertLessThan(slot2, slot3, "在翻的章不受重排打断")
+            XCTAssertLessThan(slot4, slot3, "已译目标(5)不阻断重排:转向后 4 先于旧序 3")
+        } else {
+            XCTFail("重排后 2/3/4 都应被翻(仅 5 已译不翻),实际序:\(seq)")
+        }
+        queue.cancel(forKey: nil)
+    }
 }

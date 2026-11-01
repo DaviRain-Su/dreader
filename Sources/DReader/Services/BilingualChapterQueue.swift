@@ -74,18 +74,22 @@ final class BilingualChapterQueue: @unchecked Sendable {
         }
         self.bookKey = newBook
         self.chapterCount = max(chapterCount, 1)
-        self.mode = .chapterOnly
+        // 全书接力进行中不整体回单章:降级会把 pendingQueue 里其余未译章静默清空,
+        // 整列顿时失联且永不恢复;目标章的新位置改由下面的 reprioritize 在全书分支
+        // 里按辐射序整列重排(当前章进队首,其余未译章保持在场)
+        if mode != .fullBook {
+            self.mode = .chapterOnly
+        }
         lock.unlock()
         reprioritize(fromIndex: fromIndex)
     }
 
     /// 切章:未译的新当前章插队。单章模式只排本章;全书模式仍按辐射序整列重排
-    /// (已开始的章不打断,已译章过滤)
+    /// (已开始的章不打断,已译章过滤;目标章即使已译也重排——队列要围绕新目标转向)
     func reprioritize(fromIndex index: Int) {
         lock.lock()
         defer { lock.unlock() }
         guard let key = bookKey, chapterCount > 0 else { return }
-        guard !(isTranslated?(key, index) ?? false) else { return }
         if mode == .fullBook {
             var order = Self.radiatingOrder(current: index, count: chapterCount)
                 .filter { idx in !(isTranslated?(key, idx) ?? false) }
@@ -101,8 +105,15 @@ final class BilingualChapterQueue: @unchecked Sendable {
                 scheduledKeys.insert(active)
             }
         } else {
-            // 单章模式:只排当前章;本章已在翻则什么都不做
-            guard activeChapterIndex != index else { return }
+            // 单章模式:已译章无需再排
+            guard !(isTranslated?(key, index) ?? false) else { return }
+            // 本章已在翻(用户切走又切回):清掉切走时留下的过时队列——若不清,
+            // active 完成后循环会继续消费 stale pending,在用户已离开的章上白翻
+            guard activeChapterIndex != index else {
+                pendingQueue = []
+                scheduledKeys = activeChapterIndex.map { [$0] } ?? []
+                return
+            }
             pendingQueue = [index]
             scheduledKeys = [index]
             if let active = activeChapterIndex {

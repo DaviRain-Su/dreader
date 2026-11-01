@@ -280,6 +280,8 @@ final class BatchTranslationTests: XCTestCase {
         XCTAssertFalse(service.chapterCacheMatchesFingerprint(
             bookTitle: "指纹书", chapterIndex: 0, fingerprint: fpB),
             "指纹不符的旧缓存必须作废")
+        // 滞留写盘任务(含判废竞态后的补偿删除)需要一点调度时间收尾
+        try await Task.sleep(for: .milliseconds(100))
         XCTAssertNil(service.getCachedTranslations(bookTitle: "指纹书", chapterIndex: 0),
                      "作废后的旧译文不得再被读到(防张冠李戴)")
     }
@@ -301,6 +303,90 @@ final class BatchTranslationTests: XCTestCase {
         )
         XCTAssertEqual(service.getCachedTranslations(bookTitle: "旧版书", chapterIndex: 2)?[0],
                        "旧版译文", "legacy 缓存不无故作废")
+    }
+
+    // MARK: - 单车道排队 / 收尾完整性 / 兜底记账(评审回归)
+
+    func testSecondBatchWaitsOnLaneInsteadOfBeingRejected() async throws {
+        let service = BilingualTranslationService(cacheDirectory: makeTempCacheDirectory())
+        let agent = AIAgentService(testBatchDriverOverride: { items in
+            try await Task.sleep(for: .milliseconds(60))
+            return Dictionary(items.map { ($0.index, "译\($0.index)") }, uniquingKeysWith: { a, _ in a })
+        })
+        let first = TranslationRecorder()
+        let second = TranslationRecorder()
+        async let one: Void = service.translateChapterBatch(
+            paragraphs: (0..<10).map { (index: $0, text: "甲章段落原文\($0)") },
+            bookTitle: "车道书", chapterTitle: "第一章", chapterIndex: 0,
+            agentService: agent,
+            onParagraphTranslated: { idx, trans in first.append(idx, trans) }
+        )
+        // 同一车道另一章同时发起:必须排队等车道空出并跑完,而非静默拒收——
+        // 否则「翻译全书」/切章入队的章会被整条空转排空
+        async let two: Void = service.translateChapterBatch(
+            paragraphs: (0..<6).map { (index: $0, text: "乙章段落原文\($0)") },
+            bookTitle: "车道书", chapterTitle: "第二章", chapterIndex: 1,
+            agentService: agent,
+            onParagraphTranslated: { idx, trans in second.append(idx, trans) }
+        )
+        _ = await one
+        _ = await two
+        XCTAssertEqual(second.snapshotDict.count, 6, "第二会话必须排队跑完,不得被单车道拒收")
+        XCTAssertEqual(first.snapshotDict.count, 10)
+        XCTAssertEqual(
+            Set(second.snapshotDict.keys), Set(0..<6))
+    }
+
+    func testCancelledBatchLeavesNoFingerprintSidecar() async throws {
+        let service = BilingualTranslationService(cacheDirectory: makeTempCacheDirectory())
+        // 130 段 → 3 包(60 上限):包 1(0–59)快返发完即触发取消;后两包慢/不入住
+        let agent = AIAgentService(testBatchDriverOverride: { items in
+            let isSlowBatch = items.contains { $0.index >= 60 }
+            if isSlowBatch {
+                try await Task.sleep(for: .milliseconds(900))
+            }
+            return Dictionary(items.map { ($0.index, "译\($0.index)") }, uniquingKeysWith: { a, _ in a })
+        })
+        let paragraphs = (0..<130).map { (index: $0, text: "取消不能转正段落\($0)") }
+        let recorder = TranslationRecorder()
+        await service.translateChapterBatch(
+            paragraphs: paragraphs,
+            bookTitle: "取消完整性书", chapterTitle: "第一章", chapterIndex: 0,
+            agentService: agent,
+            onParagraphTranslated: { idx, trans in recorder.append(idx, trans) },
+            isCancelled: { !recorder.snapshotTexts.isEmpty }
+        )
+        let fingerprintURL = service.testCacheDirectory
+            .appendingPathComponent("取消完整性书_ch0.fingerprint")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fingerprintURL.path),
+                       "中途取消/收尾不完整的批翻不得落章指纹(否则半截字典会被接力当作完整版永久跳章)")
+        try await Task.sleep(for: .milliseconds(60))
+        XCTAssertEqual(service.currentProgressRatio, 1.0, accuracy: 0.0001, "取消路径仍要收尾复位进度")
+    }
+
+    func testMissingParagraphFallsBackPublishedExactlyOnce() async throws {
+        let service = BilingualTranslationService(cacheDirectory: makeTempCacheDirectory())
+        let agent = AIAgentService(testBatchDriverOverride: { items in
+            // 段 0 有译文,段 1 缺译 → 走逐段兜底(Embedded 驱动)
+            Dictionary(items.filter { $0.index == 0 }.map { ($0.index, "译\($0.index)") },
+                       uniquingKeysWith: { a, _ in a })
+        })
+        if let embedded = ACPAgentPreset.allPresets.first(where: { $0.driverType == .embedded }) {
+            agent.selectPreset(embedded)
+        }
+        let publishRecorder = TranslationRecorder()
+        await service.translateChapterBatch(
+            paragraphs: [(0, "缺段原文甲"), (1, "缺段原文乙")],
+            bookTitle: "缺段记账书", chapterTitle: "第一章", chapterIndex: 0,
+            agentService: agent,
+            onParagraphTranslated: { idx, trans in publishRecorder.append(idx, trans) }
+        )
+        // 缺译段在批翻轮只记账不发布;兜底轮(单段路径)负责翻译、计数与发布各一次。
+        // 旧行为缺段会在两轮各发布一次,进度与通知都会虚涨
+        XCTAssertEqual(publishRecorder.snapshotIndices.filter { $0 == 1 }.count, 1,
+                       "缺译段只能发布一次(兜底记账不得双轨)")
+        XCTAssertEqual(publishRecorder.snapshotIndices.filter { $0 == 0 }.count, 1)
+        XCTAssertFalse((publishRecorder.snapshotDict[1] ?? "").isEmpty, "缺译段兜底必须产出译文")
     }
 }
 

@@ -131,7 +131,9 @@ final class LibraryDatabase: @unchecked Sendable {
             wechat_bookmark_id TEXT,
             wechat_author TEXT,
             note_locally_edited INTEGER,
-            color_locally_edited INTEGER
+            color_locally_edited INTEGER,
+            prefix TEXT,
+            suffix TEXT
         );
         CREATE TABLE IF NOT EXISTS bookmarks (
             id TEXT PRIMARY KEY,
@@ -176,6 +178,9 @@ final class LibraryDatabase: @unchecked Sendable {
         sqlite3_exec(db, "ALTER TABLE review_schedule ADD COLUMN ease_factor REAL NOT NULL DEFAULT 2.5;", nil, nil, nil)
         sqlite3_exec(db, "ALTER TABLE highlights ADD COLUMN note_locally_edited INTEGER;", nil, nil, nil)
         sqlite3_exec(db, "ALTER TABLE highlights ADD COLUMN color_locally_edited INTEGER;", nil, nil, nil)
+        // 划线前后文快照(旧库幂等增列;CREATE 分支已含,ALTER 报错被忽略)
+        sqlite3_exec(db, "ALTER TABLE highlights ADD COLUMN prefix TEXT;", nil, nil, nil)
+        sqlite3_exec(db, "ALTER TABLE highlights ADD COLUMN suffix TEXT;", nil, nil, nil)
     }
 
     // MARK: - Mastery Review Scheduling (Readwise-style spaced resurfacing)
@@ -198,7 +203,7 @@ final class LibraryDatabase: @unchecked Sendable {
                h.created_at, h.note, h.updated_at, h.source, h.wechat_book_id, h.wechat_bookmark_id, h.wechat_author,
                COALESCE(r.mastery_level, 0), COALESCE(r.review_count, 0),
                CASE WHEN r.due_at IS NOT NULL AND r.due_at < ? THEN 1 ELSE 0 END,
-               h.note_locally_edited, h.color_locally_edited
+               h.note_locally_edited, h.color_locally_edited, h.prefix, h.suffix
         FROM highlights h
         LEFT JOIN review_schedule r ON r.highlight_id = h.id
         WHERE r.highlight_id IS NULL                    -- brand-new, never scheduled
@@ -227,6 +232,8 @@ final class LibraryDatabase: @unchecked Sendable {
                 colorHex: text(stmt, 6) ?? "#FFE066",
                 createdAt: Date(timeIntervalSince1970: sqlite3_column_double(stmt, 7)),
                 note: text(stmt, 8),
+                prefix: text(stmt, 19),
+                suffix: text(stmt, 20),
                 updatedAt: sqlite3_column_type(stmt, 9) != SQLITE_NULL
                     ? Date(timeIntervalSince1970: sqlite3_column_double(stmt, 9)) : nil,
                 source: text(stmt, 10),
@@ -245,7 +252,6 @@ final class LibraryDatabase: @unchecked Sendable {
         }
         return results
     }
-
     /// Total cards due right now (for the badge on the review entry).
     func dueReviewCount(asOf date: Date = Date()) -> Int {
         guard let db else { return 0 }
@@ -469,7 +475,7 @@ final class LibraryDatabase: @unchecked Sendable {
         let sql = """
         SELECT id, book_id, book_title, chapter_index, chapter_title, text, color_hex,
                created_at, note, updated_at, source, wechat_book_id, wechat_bookmark_id, wechat_author,
-               note_locally_edited, color_locally_edited
+               note_locally_edited, color_locally_edited, prefix, suffix
         FROM highlights ORDER BY created_at DESC
         """
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
@@ -494,6 +500,8 @@ final class LibraryDatabase: @unchecked Sendable {
                 colorHex: text(stmt, 6) ?? "#FFE066",
                 createdAt: createdAt,
                 note: text(stmt, 8),
+                prefix: text(stmt, 16),
+                suffix: text(stmt, 17),
                 updatedAt: updatedAt,
                 source: text(stmt, 10),
                 wechatBookId: text(stmt, 11),
@@ -517,8 +525,8 @@ final class LibraryDatabase: @unchecked Sendable {
         INSERT OR REPLACE INTO highlights
         (id, book_id, book_title, chapter_index, chapter_title, text, color_hex,
          created_at, note, updated_at, source, wechat_book_id, wechat_bookmark_id, wechat_author,
-         note_locally_edited, color_locally_edited)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+         note_locally_edited, color_locally_edited, prefix, suffix)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
         defer { sqlite3_finalize(stmt) }
@@ -554,6 +562,8 @@ final class LibraryDatabase: @unchecked Sendable {
             } else {
                 sqlite3_bind_null(stmt, 16)
             }
+            bindOptionalText(stmt, 17, h.prefix)
+            bindOptionalText(stmt, 18, h.suffix)
             _ = sqlite3_step(stmt)
         }
         sqlite3_exec(db, "COMMIT", nil, nil, nil)

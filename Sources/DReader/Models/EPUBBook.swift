@@ -188,6 +188,9 @@ struct Highlight: Identifiable, Codable, Hashable, Sendable {
         self.colorHex = try container.decode(String.self, forKey: .colorHex)
         self.createdAt = try container.decode(Date.self, forKey: .createdAt)
         self.note = try container.decodeIfPresent(String.self, forKey: .note)
+        // 前后文快照与 note 同代存亡:decode 丢弃会让持久化划线永远退回首处兜底
+        self.prefix = try container.decodeIfPresent(String.self, forKey: .prefix)
+        self.suffix = try container.decodeIfPresent(String.self, forKey: .suffix)
         self.updatedAt = try container.decodeIfPresent(Date.self, forKey: .updatedAt)
         self.source = try container.decodeIfPresent(String.self, forKey: .source)
         self.wechatBookId = try container.decodeIfPresent(String.self, forKey: .wechatBookId)

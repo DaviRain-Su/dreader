@@ -687,12 +687,20 @@ struct EPUBWebView: NSViewRepresentable {
             )
 
             let highlightItems: [[String: Any]] = parent.highlights.map { h in
-                [
+                var item: [String: Any] = [
                     "id": h.id.uuidString,
                     "text": ChineseScriptConverter.convert(h.text, mode: settings.chineseScriptMode),
                     "colorHex": h.colorHex,
                     "note": h.note ?? ""
                 ]
+                // 换章/脚本切换路径与全加载路径同快照口径;简繁模式下快照与 DOM 同转换状态,打分才对得上
+                if let prefix = h.prefix, !prefix.isEmpty {
+                    item["prefix"] = ChineseScriptConverter.convert(prefix, mode: settings.chineseScriptMode)
+                }
+                if let suffix = h.suffix, !suffix.isEmpty {
+                    item["suffix"] = ChineseScriptConverter.convert(suffix, mode: settings.chineseScriptMode)
+                }
+                return item
             }
 
             guard let jsonData = try? JSONSerialization.data(withJSONObject: [
@@ -772,12 +780,19 @@ struct EPUBWebView: NSViewRepresentable {
             )
 
             let highlightItems: [[String: Any]] = highlights.map { h in
-                [
+                var item: [String: Any] = [
                     "id": h.id.uuidString,
                     "text": ChineseScriptConverter.convert(h.text, mode: settings.chineseScriptMode),
                     "colorHex": h.colorHex,
                     "note": h.note ?? ""
                 ]
+                if let prefix = h.prefix, !prefix.isEmpty {
+                    item["prefix"] = ChineseScriptConverter.convert(prefix, mode: settings.chineseScriptMode)
+                }
+                if let suffix = h.suffix, !suffix.isEmpty {
+                    item["suffix"] = ChineseScriptConverter.convert(suffix, mode: settings.chineseScriptMode)
+                }
+                return item
             }
 
             guard let jsonData = try? JSONSerialization.data(withJSONObject: [
@@ -1042,13 +1057,22 @@ struct EPUBWebView: NSViewRepresentable {
                   let jsonAgentData = try? JSONSerialization.data(withJSONObject: [agentName]),
                   let jsonAgent = String(data: jsonAgentData, encoding: .utf8) else { return }
 
-            // 左右分栏对照走右列直填(textContent),逐段对照走卡片替换(innerHTML)——结构不同不可混用
-            let js: String
-            if lastBilingualEffectiveMode == .sideBySide {
-                js = "window.dreaderUpdateSideTranslation(\(index), \(jsonText)[0]);"
-            } else {
-                js = "window.dreaderUpdateTranslation(\(index), \(jsonText)[0], \(jsonAgent)[0]);"
-            }
+            // 落地按页面真实结构路由,不按全局模式推断:sideBySide 下 blockquote 内段落
+            // 仍是逐段卡结构(injectBilingualBlocks 刻意不穿透 quote),slot 形态才是事实
+            let js = """
+            (function() {
+              var t = document.getElementById('dreader-trans-slot-\(index)');
+              if (t) {
+                if (t.classList.contains('dreader-bilingual-side-slot')) {
+                  window.dreaderUpdateSideTranslation(\(index), \(jsonText)[0]);
+                } else {
+                  window.dreaderUpdateTranslation(\(index), \(jsonText)[0], \(jsonAgent)[0]);
+                }
+                return;
+              }
+              window.dreaderUpdateSideTranslation(\(index), \(jsonText)[0]);
+            })();
+            """
             webView.evaluateJavaScript(js, completionHandler: nil)
         }
 

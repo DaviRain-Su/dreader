@@ -12,8 +12,21 @@ final class BilingualTranslationService: @unchecked Sendable {
     @ObservationIgnored private let cacheDirectory: URL
     @ObservationIgnored private let lock = NSLock()
     /// 章级落盘串行链:同章每段各起一个「全量字典写盘」Task,乱序落地会用
-    /// 旧快照覆盖新条目(实测丢段);按 key 前后链式等待,保证只落最新
+    /// 旧快照覆盖新条目(实测丢段);按 key 前后链式等待,保证只落最新。
+    /// 任务执行时才锁内现取全集快照——启动时捕获的旧快照不再滞留链上,
+    /// 判废前提交的写任务也不会把已作废的字典复活(迟到写盘污染裸读路径)
     @ObservationIgnored private var diskWriteChain: [String: Task<Void, Never>] = [:]
+    /// 章写盘递增序号:链中任务执行时用它判定自己是否仍排链尾,
+    /// 中段任务静默让位,落盘 IO 只随「最后入队的那波」走(逐段 O(n²) 写放大消失)
+    @ObservationIgnored private var diskWriteSeq: [String: Int] = [:]
+    /// 章写盘代纪:判废时递增;在飞写任务在取字典/落盘各校验点发现代纪变更
+    /// 即放弃,落盘后校验不通过还会补偿删除——判废与写盘竞态时旧字典不能复活
+    @ObservationIgnored private var diskEpoch: [String: Int] = [:]
+    /// 单车道:同一时刻只跑一个批翻会话;被占时排队等待(而非拒收)——
+    /// 「翻译全书」/切章入队的章是等车道空出来的,逐一拒收会把整条接力队列空转排空
+    @ObservationIgnored private let laneSemaphore = AsyncSemaphore(permits: 1)
+    /// 批翻会话序号:finishBatchSession 双重身份校验用(同章晚到的 defer 不误清新会话)
+    @ObservationIgnored private var activeSessionSerial: Int = 0
 
     /// 这两个观察属性只在 MainActor 上写(不持 service 锁),供弹窗进度条观察
     var isTranslatingChapter: Bool = false
@@ -52,7 +65,7 @@ final class BilingualTranslationService: @unchecked Sendable {
         }
 
         // 2. Check disk cache
-        let fileURL = cacheDirectory.appendingPathComponent("\(cleanTitle)_ch\(chapterIndex).json")
+        let fileURL = cacheDirectory.appendingPathComponent("\(chapterFileKey(cleanTitle: cleanTitle, chapterIndex: chapterIndex)).json")
         guard let data = try? Data(contentsOf: fileURL),
               let dict = try? JSONDecoder().decode([String: String].self, from: data) else {
             return nil
@@ -81,8 +94,6 @@ final class BilingualTranslationService: @unchecked Sendable {
         translation: String
     ) {
         lock.lock()
-        defer { lock.unlock() }
-
         let cleanTitle = sanitizeTitle(bookTitle)
         if memoryCache[cleanTitle] == nil {
             memoryCache[cleanTitle] = [:]
@@ -91,23 +102,73 @@ final class BilingualTranslationService: @unchecked Sendable {
             memoryCache[cleanTitle]?[chapterIndex] = [:]
         }
         memoryCache[cleanTitle]?[chapterIndex]?[paragraphIndex] = translation
+        lock.unlock()
 
-        // Persist to disk asynchronously — 关键:同章串行,防旧快照乱序覆盖新条目
-        guard let chapterDict = memoryCache[cleanTitle]?[chapterIndex] else { return }
-        let stringKeyedDict = chapterDict.reduce(into: [String: String]()) { acc, pair in
-            acc["\(pair.key)"] = pair.value
-        }
-        let chapterKey = "\(cleanTitle)_ch\(chapterIndex)"
-        let previousWrite = diskWriteChain[chapterKey]
+        // Persist to disk asynchronously — 章写链负责串行与「只落链尾」
+        enqueueChapterWrite(cleanTitle: cleanTitle, chapterIndex: chapterIndex)
+    }
+
+    // MARK: - 章级写链(执行时现取全集,链尾独写)
+
+    /// 一章缓存的共用键:`书名_ch序号`,磁盘文件/写链/指纹 sidecar 同源
+    private func chapterFileKey(cleanTitle: String, chapterIndex: Int) -> String {
+        "\(cleanTitle)_ch\(chapterIndex)"
+    }
+
+    /// 把一章的落盘任务追加到章写链。任务执行时才锁内现取当下全集:
+    /// 链尾永远写最新快照,不再有「提交时捕获」的旧字典滞留链上。
+    private func enqueueChapterWrite(cleanTitle: String, chapterIndex: Int) {
+        let chapterKey = chapterFileKey(cleanTitle: cleanTitle, chapterIndex: chapterIndex)
         let cacheDir = self.cacheDirectory
+        lock.lock()
+        let previousWrite = diskWriteChain[chapterKey]
+        diskWriteSeq[chapterKey, default: 0] &+= 1
+        let seq = diskWriteSeq[chapterKey] ?? 0
+        let epoch = diskEpoch[chapterKey] ?? 0
+        lock.unlock()
         let writeTask = Task.detached(priority: .background) {
             if let previous = previousWrite { await previous.value } // 链式等待前一次写盘
-            if let data = try? JSONEncoder().encode(stringKeyedDict) {
+            // 已有更后任务接管此章:本轮由它写,中段任务静默让位(写盘 IO 不再逐段放大)
+            guard self.isChainTail(chapterKey: chapterKey, seq: seq) else { return }
+            // 判废后(epoch 已翻代)不再写:旧字典不能复活
+            guard self.hasDiskEpoch(chapterKey: chapterKey, epoch: epoch) else { return }
+            guard let dict = self.currentDiskChapterDict(cleanTitle: cleanTitle, chapterIndex: chapterIndex) else { return }
+            guard self.hasDiskEpoch(chapterKey: chapterKey, epoch: epoch) else { return }
+            if let data = try? JSONEncoder().encode(dict) {
                 let fileURL = cacheDir.appendingPathComponent("\(chapterKey).json")
                 try? data.write(to: fileURL, options: .atomic)
+                // 写后补偿:字典已取好但落盘瞬间恰逢判废 → 补偿删除,不让旧内容复活
+                guard self.hasDiskEpoch(chapterKey: chapterKey, epoch: epoch) else {
+                    try? FileManager.default.removeItem(at: fileURL)
+                    return
+                }
             }
         }
+        lock.lock()
         diskWriteChain[chapterKey] = writeTask
+        lock.unlock()
+    }
+
+    private func hasDiskEpoch(chapterKey: String, epoch: Int) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return (diskEpoch[chapterKey] ?? 0) == epoch
+    }
+
+    private func isChainTail(chapterKey: String, seq: Int) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return diskWriteSeq[chapterKey] == seq
+    }
+
+    /// 锁内取一章当前全字典(字符串键);空章返回 nil(不落盘)
+    private func currentDiskChapterDict(cleanTitle: String, chapterIndex: Int) -> [String: String]? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let dict = memoryCache[cleanTitle]?[chapterIndex], !dict.isEmpty else { return nil }
+        return dict.reduce(into: [String: String]()) { acc, pair in
+            acc["\(pair.key)"] = pair.value
+        }
     }
 
     // MARK: - 章指纹(防改版/改抽段规则后译文张冠李戴)
@@ -133,26 +194,33 @@ final class BilingualTranslationService: @unchecked Sendable {
     #endif
 
     /// 校验当前缓存是否还属于这版抽段:sidecar 缺失(legacy)视为有效;
-    /// 指纹不同则内存清空 + 磁盘文件删除,返回 false
+    /// 指纹不同则内存清空 + 磁盘 json/sidecar 一起删除,返回 false
     @discardableResult
     func chapterCacheMatchesFingerprint(
         bookTitle: String, chapterIndex: Int, fingerprint: String
     ) -> Bool {
         let cleanTitle = sanitizeTitle(bookTitle)
-        let sidecarKey = "\(cleanTitle)_ch\(chapterIndex)"
+        let sidecarKey = chapterFileKey(cleanTitle: cleanTitle, chapterIndex: chapterIndex)
         let jsonURL = cacheDirectory.appendingPathComponent("\(sidecarKey).json")
         let sidecarURL = cacheDirectory.appendingPathComponent("\(sidecarKey).fingerprint")
         func invalidateStaleCache() {
             memoryCache[cleanTitle]?[chapterIndex] = nil
+            storedFingerprints.removeValue(forKey: sidecarKey)
+            diskEpoch[sidecarKey, default: 0] &+= 1
             try? FileManager.default.removeItem(at: jsonURL)
-            // sidecar 保留:后续读取继续按指纹拒绝(迟到的链式写盘重写 json 也会被拦)
+            // sidecar 一并删除:此后的判定走 legacy 分支,同一章只在「第一次发现过期」
+            // 时作废一轮,不再每轮 body 读都重判一次(旧实现保留 sidecar 会陷入反复作废);
+            // 滞留写盘任务执行时锁内现取全集,被清空的章取到 nil 不写盘——错位旧译不会复活
+            try? FileManager.default.removeItem(at: sidecarURL)
         }
         lock.lock()
         defer { lock.unlock() }
         if let stored = storedFingerprints[sidecarKey] {
-            if stored == fingerprint || isLegacyFingerprint(stored) { return true }
-            invalidateStaleCache() // 内存表命中但不匹配:同样整体作废
-            return false
+            guard stored == fingerprint else {
+                invalidateStaleCache() // 内存指纹表命中但不匹配:同样整体作废
+                return false
+            }
+            return true
         }
         guard let stored = try? String(contentsOf: sidecarURL, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines),
               !stored.isEmpty else {
@@ -169,16 +237,12 @@ final class BilingualTranslationService: @unchecked Sendable {
     func recordChapterFingerprint(bookTitle: String, chapterIndex: Int, paragraphs: [(index: Int, text: String)]) {
         let cleanTitle = sanitizeTitle(bookTitle)
         let fingerprint = Self.chapterFingerprint(paragraphs: paragraphs)
-        let sidecarKey = "\(cleanTitle)_ch\(chapterIndex)"
+        let sidecarKey = chapterFileKey(cleanTitle: cleanTitle, chapterIndex: chapterIndex)
         lock.lock()
         storedFingerprints[sidecarKey] = fingerprint
         lock.unlock()
         let sidecarURL = cacheDirectory.appendingPathComponent("\(sidecarKey).fingerprint")
         try? fingerprint.write(to: sidecarURL, atomically: true, encoding: .utf8)
-    }
-
-    private func isLegacyFingerprint(_ stored: String) -> Bool {
-        false // 预留:后续若引入多代指纹格式,在这里按前缀识别
     }
 
     // MARK: - Translate Single Paragraph with Active Agent
@@ -269,7 +333,8 @@ final class BilingualTranslationService: @unchecked Sendable {
         chapterTitle: String,
         chapterIndex: Int,
         agentService: AIAgentService,
-        onParagraphTranslated: @escaping @MainActor (Int, String) -> Void
+        onParagraphTranslated: @escaping @MainActor (Int, String) -> Void,
+        onBatchStarted: (@MainActor ([Int]) -> Void)? = nil
     ) async {
         await translateChapterBatch(
             paragraphs: paragraphs,
@@ -277,8 +342,15 @@ final class BilingualTranslationService: @unchecked Sendable {
             chapterTitle: chapterTitle,
             chapterIndex: chapterIndex,
             agentService: agentService,
-            onParagraphTranslated: onParagraphTranslated
+            onParagraphTranslated: onParagraphTranslated,
+            onBatchStarted: onBatchStarted
         )
+    }
+
+    /// 批翻会话键单一出处:「书名|章序」——service 内登记与 ReaderViewModel 的
+    /// 让路判定(后台接力进行中不叠手动批翻)共用自己的这个实现
+    static func batchKey(bookTitle: String, chapterIndex: Int) -> String {
+        "\(bookTitle)|\(chapterIndex)"
     }
 
     func translateChapterBatch(
@@ -293,22 +365,28 @@ final class BilingualTranslationService: @unchecked Sendable {
     ) async {
         guard !paragraphs.isEmpty else { return }
 
-        // 单车道登记(MainActor 原子判断):同一时刻只跑一个批翻会话,防重复触发/手动与接力并发互踩进度
-        let nowKey = "\(bookTitle)|\(chapterIndex)"
-        let proceed = await MainActor.run { () -> Bool in
-            if self.isTranslatingChapter { return false }
+        // 单车道:被占时排队等待而非拒收——接力队列/手动触发的章都要跑,只有
+        // 「等待」语义能保住顺序与不空转。acquire 后登记会话身份(MainActor 原子);
+        // isTranslatingChapter 只是观察镜像,窗口语义由信号量独占保证
+        await laneSemaphore.acquire()
+        guard !Task.isCancelled else {
+            laneSemaphore.release() // 排队期间被取消(换书/关双语):让位,不占用车道
+            return
+        }
+        let nowKey = Self.batchKey(bookTitle: bookTitle, chapterIndex: chapterIndex)
+        let sessionId = await MainActor.run { () -> Int in
+            self.activeSessionSerial &+= 1
             self.isTranslatingChapter = true
             self.currentProgressRatio = 0.0
             self.activeBatchKey = nowKey
-            return true
-        }
-        guard proceed else {
-            NSLog("[双语] 单车道跳过:书=%@ 章=%d 已有会话在翻(%@)", bookTitle, chapterIndex, activeBatchKey ?? "nil")
-            return
+            return self.activeSessionSerial
         }
         defer {
-            Task { @MainActor [key = nowKey] in
-                self.finishBatchSession(key)
+            laneSemaphore.release() // 车道让位:排队等候的下个会话立即接管
+            let key = nowKey
+            let sid = sessionId
+            Task { @MainActor in
+                self.finishBatchSession(key: key, sessionId: sid)
             }
         }
 
@@ -363,11 +441,20 @@ final class BilingualTranslationService: @unchecked Sendable {
             }
         }
         NSLog("[双语] 批翻整章收尾：书=%@ 章=%d 耗时=%.1fs", bookTitle, chapterIndex, Date().timeIntervalSince(startedAt))
-        await MainActor.run {
-            self.finishBatchSession(nowKey)
+        // 收尾完整性核查:全部待翻段都有译文才落章指纹并补写一次盘。中途取消/
+        // 兜底失败的半截字典若写入指纹,会被 isTranslated「非空即真」当完整版放行,
+        // 自动接力从此永久跳过该章且缓存残缺无从发觉——残缺时保持无指纹状态,
+        // 下次进章指纹判定重新走全章翻译
+        let settled = getCachedTranslations(bookTitle: bookTitle, chapterIndex: chapterIndex) ?? [:]
+        let missingAtEnd = pending.filter { (settled[$0.index] ?? "").isEmpty }
+        if missingAtEnd.isEmpty {
+            // 本版抽段的章指纹落 sidecar,此后任何改版/规则变化在读取时立即判过期
+            recordChapterFingerprint(bookTitle: bookTitle, chapterIndex: chapterIndex, paragraphs: paragraphs)
+            enqueueChapterWrite(cleanTitle: sanitizeTitle(bookTitle), chapterIndex: chapterIndex)
+        } else {
+            NSLog("[双语] 批翻收尾不完整:共 %d 段,缺译 %d 段,不落章指纹待重翻",
+                  pending.count, missingAtEnd.count)
         }
-        // 本版抽段的章指纹落 sidecar,此后任何改版/规则变化在读取时立即判过期
-        recordChapterFingerprint(bookTitle: bookTitle, chapterIndex: chapterIndex, paragraphs: paragraphs)
     }
 
     /// 单包处理：两次批翻尝试；缺编号段逐段兜底；两连败退化为整包串行逐段（单段路径内含 Embedded 兜底）
@@ -418,21 +505,25 @@ final class BilingualTranslationService: @unchecked Sendable {
         if let cancelledFn = isCancelled, await cancelledFn() { return }
 
         var missing: [(index: Int, text: String)] = []
-        for (idx, _) in batch {
+        for item in batch {
+            let idx = item.index
             let raw = mapped[idx] ?? ""
             let sourceText = fullTextByIndex[idx] ?? ""
             var trans: String? = raw.isEmpty ? nil : raw
-            // 回声假翻译闸:原文原样吐回/英文未翻视同缺失,走逐段兜底重试
+            // 回声假翻译闸:原文原样吐回/英文未翻视同缺译,先记账
             if let t = trans, Self.isEchoTranslation(source: sourceText, translated: t) {
                 trans = nil
                 NSLog("[双语] 段 %d 批翻输出为回声假翻译,改走兜底", idx)
             }
-            await saveAndPublish(
-                idx: idx, text: trans, srcText: sourceText,
-                total: total, bookTitle: bookTitle, chapterTitle: chapterTitle, chapterIndex: chapterIndex,
-                agent: agent, counter: counter, onParagraphTranslated: onParagraphTranslated
-            )
-            if trans == nil {
+            if let trans {
+                await saveAndPublish(
+                    idx: idx, text: trans, srcText: sourceText,
+                    total: total, bookTitle: bookTitle, chapterTitle: chapterTitle, chapterIndex: chapterIndex,
+                    agent: agent, counter: counter, onParagraphTranslated: onParagraphTranslated
+                )
+            } else {
+                // 缺段只记账,计数与 agent 重试/Embedded 兜底统一下面的第二轮执行——
+                // 否则兜底路径会为同一段计数两次(批翻轮漏翻译一次 + 兜底轮一次),进度虚涨
                 missing.append((index: idx, text: sourceText))
             }
         }
@@ -440,7 +531,6 @@ final class BilingualTranslationService: @unchecked Sendable {
             NSLog("[双语] 批翻缺 %d 段，开始逐段兜底：%d", missing.count,
                   missing.first?.index ?? -1)
         }
-        guard !missing.isEmpty else { return }
 
         for item in missing {
             if let cancelledFn = isCancelled, await cancelledFn() { return }
@@ -488,16 +578,16 @@ final class BilingualTranslationService: @unchecked Sendable {
         title.replacingOccurrences(of: "/", with: "_")
             .replacingOccurrences(of: ":", with: "_")
             .replacingOccurrences(of: " ", with: "_")
-            .replacingOccurrences(of: "　", with: "_")
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     // MARK: - 批次进行状态(段号在飞)
 
-    /// 会话收尾:只清 activeBatchKey 归属自己的状态(defer Task 晚到不会误清接力新章的会话)
+    /// 会话收尾:key+序号双重身份校验。同键晚到的 defer(排队等车道的旧会话)
+    /// 若只按 key 比较,会误清新会话的进行状态——序号对不上则保持新会话不动
     @MainActor
-    private func finishBatchSession(_ key: String?) {
-        guard key == nil || activeBatchKey == key else { return }
+    private func finishBatchSession(key: String, sessionId: Int) {
+        guard activeBatchKey == key, activeSessionSerial == sessionId else { return }
         isTranslatingChapter = false
         currentProgressRatio = 1.0
         activeBatchKey = nil

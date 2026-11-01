@@ -156,6 +156,11 @@ struct EPUBThemeInjector {
         for h in highlights {
             let cleanText = h.text.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !cleanText.isEmpty else { continue }
+            // 带前后文快照的划线不在静态阶段包裹:正则只能包住首处,同文本多条会嵌套错置,
+            // 且恢复端 mark[data-id] 守卫会让 JS 消歧永不执行。留给 dreaderRestoreHighlights
+            // 按快照打分落位;旧划线(无快照)保持正则首处就地包的原行为
+            let hasSnapshot = (h.prefix?.isEmpty == false) || (h.suffix?.isEmpty == false)
+            if hasSnapshot { continue }
             let hasNote = (h.note?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false)
             let badgeHTML = hasNote ? "<span class=\"dreader-thought-dot\" title=\"查看想法\">💭</span>" : ""
             let markStart = "<mark class=\"dreader-highlight\" data-id=\"\(h.id.uuidString)\" data-color=\"\(h.colorHex)\" style=\"background-color: \(h.colorHex)40 !important; border-block-end: 2.5px solid \(h.colorHex) !important;\" onclick=\"window.dreaderClickHighlight('\(h.id.uuidString)', event)\">"
@@ -1741,32 +1746,42 @@ struct EPUBThemeInjector {
                     candidates.push(range);
                 }
 
-                // 1. Single text node exact match
+                // 1. Single text node exact match — 同节点内重复文本每个出现都各产一个候选;
+                // 否则 candidates.length>1 打分门槛在「同段重复」这一最常见场景永不触发
                 for (let i = 0; i < textNodes.length; i++) {
                     const tn = textNodes[i];
                     const val = tn.nodeValue || '';
-                    const idx = val.indexOf(searchText);
-                    if (idx !== -1) {
+                    let idx = val.indexOf(searchText);
+                    let hits = 0;
+                    while (idx !== -1 && hits < 8) {
                         pushCandidate(rangeFor(tn, idx, idx + searchText.length));
+                        hits++;
+                        idx = val.indexOf(searchText, idx + Math.max(1, searchText.length));
                     }
                 }
 
-                // 2. Single text node flexible whitespace match
+                // 2. Single text node flexible whitespace match — 与策略 1 同口径收集全部出现
                 for (let i = 0; i < textNodes.length; i++) {
                     const tn = textNodes[i];
                     const val = tn.nodeValue || '';
                     const normVal = normalize(val);
                     if (normVal.indexOf(normTarget) !== -1) {
                         const escaped = normTarget.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&').replace(/\\s+/g, '\\\\s+');
-                        const regex = new RegExp(escaped, 'i');
-                        const match = regex.exec(val);
-                        if (match) {
-                            pushCandidate(rangeFor(tn, match.index, match.index + match[0].length));
+                        const regex = new RegExp(escaped, 'gi');
+                        let m = regex.exec(val);
+                        let hits = 0;
+                        while (m !== null && hits < 8) {
+                            pushCandidate(rangeFor(tn, m.index, m.index + m[0].length));
+                            hits++;
+                            m = regex.exec(val);
+                            if (m !== null && m[0].length === 0) break; // 零长匹配防死循环
                         }
                     }
                 }
 
                 // 3. Multi-node matching across inline tags
+                // 3. Multi-node matching across inline tags — 全文串接后按出现位置逐个收集
+                // (同文本跨行内标签的多次出现各产一个候选,与策略 1/2 同口径)
                 let fullText = '';
                 const nodeMap = [];
                 for (let i = 0; i < textNodes.length; i++) {
@@ -1776,28 +1791,32 @@ struct EPUBThemeInjector {
                     nodeMap.push({ node: tn, start: start, end: fullText.length });
                 }
 
-                let matchStart = fullText.indexOf(searchText);
-                let matchEnd = (matchStart !== -1) ? (matchStart + searchText.length) : -1;
-
-                if (matchStart === -1) {
+                const crossOccurrences = [];
+                let scan = fullText.indexOf(searchText);
+                let occHits = 0;
+                while (scan !== -1 && occHits < 16) {
+                    crossOccurrences.push({ start: scan, end: scan + searchText.length });
+                    occHits++;
+                    scan = fullText.indexOf(searchText, scan + Math.max(1, searchText.length));
+                }
+                if (crossOccurrences.length === 0) {
                     // 跨段划线：字符串里的空白可以是零个或多个（fullText 里是纯文本节点串接，段落边界没有空白）
                     const escaped = normTarget.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&').replace(/\\s+/g, '\\\\s*');
                     const re = new RegExp(escaped, 'i');
                     const m = re.exec(fullText);
                     if (m) {
-                        matchStart = m.index;
-                        matchEnd = m.index + m[0].length;
+                        crossOccurrences.push({ start: m.index, end: m.index + m[0].length });
                     }
                 }
 
-                if (matchStart !== -1 && matchEnd !== -1) {
+                for (const occ of crossOccurrences) {
                     let startNodeInfo = null, endNodeInfo = null;
                     for (let i = 0; i < nodeMap.length; i++) {
                         const entry = nodeMap[i];
-                        if (!startNodeInfo && matchStart >= entry.start && matchStart < entry.end) {
+                        if (!startNodeInfo && occ.start >= entry.start && occ.start < entry.end) {
                             startNodeInfo = entry;
                         }
-                        if (matchEnd > entry.start && matchEnd <= entry.end) {
+                        if (occ.end > entry.start && occ.end <= entry.end) {
                             endNodeInfo = entry;
                             break;
                         }
@@ -1806,14 +1825,17 @@ struct EPUBThemeInjector {
                     if (startNodeInfo && endNodeInfo) {
                         if (endNodeInfo.node === startNodeInfo.node) {
                             pushCandidate(rangeFor(startNodeInfo.node,
-                                                   matchStart - startNodeInfo.start,
-                                                   matchEnd - startNodeInfo.start));
+                                                   occ.start - startNodeInfo.start,
+                                                   occ.end - startNodeInfo.start));
                         } else {
-                            const crossRange = rangeFor(startNodeInfo.node, matchStart - startNodeInfo.start, 0);
-                            if (crossRange) {
-                                crossRange.setEnd(endNodeInfo.node, matchEnd - endNodeInfo.start);
+                            // 直接构造跨节点 Range:rangeFor(node, s, 0) 传入的 end 早于 start,
+                            // 按 DOM 规范会把 start 折叠到该点,多包首节点前缀文字
+                            try {
+                                const crossRange = document.createRange();
+                                crossRange.setStart(startNodeInfo.node, occ.start - startNodeInfo.start);
+                                crossRange.setEnd(endNodeInfo.node, occ.end - endNodeInfo.start);
                                 candidates.push(crossRange);
-                            }
+                            } catch (e) { /* 偏移越界则放弃该候选 */ }
                         }
                     }
                 }

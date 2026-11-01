@@ -1758,7 +1758,7 @@ final class ReaderViewModel: @unchecked Sendable {
     /// 当前书|章的批翻会话身份,与 service.activeBatchKey 对齐(弹窗只跟踪本页章)
     private var bilingualBatchKey: String {
         guard let book = currentBook else { return "|" }
-        return "\(book.title)|\(book.currentChapterIndex)"
+        return BilingualTranslationService.batchKey(bookTitle: book.title, chapterIndex: book.currentChapterIndex)
     }
     /// 仅本章在批翻时才亮进度(后台章在翻不干扰本页)
     var isTranslatingChapter: Bool {
@@ -1786,9 +1786,13 @@ final class ReaderViewModel: @unchecked Sendable {
         if let memoized = chapterFingerprintMemo[url] {
             fingerprint = memoized
         } else {
-            fingerprint = BilingualTranslationService.chapterFingerprint(
-                paragraphs: chapterParagraphs(book: book, chapterIndex: chapterIndex)
-            )
+            let paragraphs = chapterParagraphs(book: book, chapterIndex: chapterIndex)
+            guard !paragraphs.isEmpty else {
+                // 空章(抽取失败/无正文)不写 memo——空指纹毒化该 URL 的后续判定,
+                // 之后书上真有内容时指纹永远不会被重算
+                return nil
+            }
+            fingerprint = BilingualTranslationService.chapterFingerprint(paragraphs: paragraphs)
             chapterFingerprintMemo[url] = fingerprint
         }
         guard service.chapterCacheMatchesFingerprint(
@@ -1843,9 +1847,9 @@ final class ReaderViewModel: @unchecked Sendable {
     func translateCurrentChapterWithAgent() {
         guard let book = currentBook, let chapter = book.currentChapter else { return }
         let chapterIndex = book.currentChapterIndex
-        // 单车道检查:别的章在翻时不硬抢(会被 service 跳过),改走队列把本章置顶接续
+        // 单车道检查:别的章在翻时不硬抢(改走队列把本章置顶接续,车道空出即轮到)
         let service = BilingualTranslationService.shared
-        if service.isTranslatingChapter, service.activeBatchKey != "\(book.title)|\(chapterIndex)" {
+        if service.isTranslatingChapter, service.activeBatchKey != BilingualTranslationService.batchKey(bookTitle: book.title, chapterIndex: chapterIndex) {
             BilingualChapterQueue.shared.schedule(
                 bookKey: book.title,
                 chapterCount: book.chapters.count,
@@ -1862,18 +1866,21 @@ final class ReaderViewModel: @unchecked Sendable {
         let paragraphs = chapterParagraphs(book: book, chapterIndex: chapterIndex)
         guard !paragraphs.isEmpty else { return }
 
-        let cached = BilingualTranslationService.shared.getCachedTranslations(bookTitle: bookTitle, chapterIndex: chapterIndex) ?? [:]
-        let toTranslate = paragraphs.filter { cached[$0.index] == nil }
-
+        // 全章直传:收尾指纹按「这版抽段全集」才算得对——传「未译子集」会让
+        // 手动批翻的指纹与读取路径的全章指纹永不相遇,缓存判废联动断线(实测)。
+        // 未译段筛选由 service 内部 pending 过滤接手;车上排队时 defer 收尾按此收
         Task {
             await BilingualTranslationService.shared.translateEntireChapter(
-                paragraphs: toTranslate,
+                paragraphs: paragraphs,
                 bookTitle: bookTitle,
                 chapterTitle: chapterTitle,
                 chapterIndex: chapterIndex,
                 agentService: agentService,
                 onParagraphTranslated: { idx, trans in
                     self.updateTranslationAction?(idx, trans, agentName)
+                },
+                onBatchStarted: { [weak self] indices in
+                    self?.updateBatchPendingAction?(bookTitle, chapterIndex, indices)
                 }
             )
         }
