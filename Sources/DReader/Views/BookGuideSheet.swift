@@ -1,30 +1,29 @@
 import SwiftUI
 
-/// AI 导读 sheet(读伴式四分区):全书导读 / 章节导读 / 问答 / 笔记。
-/// 入口:书架详情「AI 导读」按钮 + 阅读器侧栏导读 tab。
+/// AI 导读内容视图(读伴式三分区):全书导读 / 章节导读 / 笔记。
+/// 嵌入两处:AIChatPanel 的导读段(阅读中)+ BookGuideSheet 薄壳(书架入口)。
 /// 生成走 PiAgentService(p guide lane),落库 LibraryDatabase.book_guides,可重新生成覆盖。
-struct BookGuideSheet: View {
+/// 问答不在这里——问答归 AIChatPanel 聊天主线(带会话历史)。
+struct BookGuideContent: View {
     let book: EPUBBook
     var initialChapter: EPUBChapter? = nil
     var chineseScriptMode: ChineseScriptMode = .original
     /// 章正文提供(阅读器打开时由 ReaderViewModel 注入;书架入口为 nil,导读退化为标题级)
     var chapterBodyProvider: (() -> String)? = nil
+    /// 嵌在窄面板时用紧凑字号(侧栏 320–560;书架 sheet 680)
+    var compactLayout: Bool = false
 
-    @Environment(\.dismiss) private var dismiss
     @State private var selectedTab: GuideTab = .wholeBook
     @State private var wholeGuide: BookGuide?
     @State private var chapterGuide: ChapterGuide?
     @State private var isGeneratingGuide = false
     @State private var guideError: String?
-    @State private var chatMessages: [ChatMessage] = []
-    @State private var chatInput = ""
     @State private var notes: [GuideNote] = []
     @State private var newNote = ""
 
     enum GuideTab: String, CaseIterable, Identifiable {
         case wholeBook = "全书导读"
         case chapter = "章节导读"
-        case chat = "问答"
         case notes = "笔记"
 
         var id: String { rawValue }
@@ -33,7 +32,6 @@ struct BookGuideSheet: View {
             switch self {
             case .wholeBook: return "book.pages"
             case .chapter: return "doc.text.magnifyingglass"
-            case .chat: return "bubble.left.and.bubble.right"
             case .notes: return "square.and.pencil"
             }
         }
@@ -47,43 +45,23 @@ struct BookGuideSheet: View {
         initialChapter ?? book.currentChapter
     }
 
+    /// 紧凑/舒展双档字号(面板 vs 书架 sheet)
+    private var bodyFontSize: CGFloat { compactLayout ? 12.5 : 14 }
+    private var cardPadding: CGFloat { compactLayout ? 12 : 16 }
+
     var body: some View {
         VStack(spacing: 0) {
-            headerBar
             tabSelector
             Divider().opacity(0.3)
             content
         }
-        .background(Color(hex: "#F4F2ED"))
-        .frame(minWidth: 680, minHeight: 560)
         .task {
             await loadOrGenerateWholeGuide()
             loadNotes()
         }
     }
 
-    // MARK: - Header
-
-    private var headerBar: some View {
-        HStack {
-            Button("关闭") { dismiss() }
-                .keyboardShortcut(.escape, modifiers: [])
-                .buttonStyle(.bordered)
-            Spacer()
-            Label("AI 导读 · \(title)", systemImage: "sparkles")
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(Color(hex: "#1F3FB0"))
-            Spacer()
-            if isGeneratingGuide {
-                HStack(spacing: 6) {
-                    ProgressView().controlSize(.small)
-                    Text("生成中…").font(.system(size: 11)).foregroundStyle(.secondary)
-                }
-            }
-        }
-        .padding(.horizontal, 24)
-        .frame(height: 60)
-    }
+    // MARK: - Tab Selector
 
     private var tabSelector: some View {
         HStack(spacing: 4) {
@@ -116,7 +94,7 @@ struct BookGuideSheet: View {
                 .disabled(isGeneratingGuide)
             }
         }
-        .padding(.horizontal, 24)
+        .padding(.horizontal, compactLayout ? 12 : 24)
         .padding(.vertical, 8)
     }
 
@@ -125,7 +103,6 @@ struct BookGuideSheet: View {
         switch selectedTab {
         case .wholeBook: wholeBookSection
         case .chapter: chapterSection
-        case .chat: chatSection
         case .notes: notesSection
         }
     }
@@ -135,6 +112,9 @@ struct BookGuideSheet: View {
     private var wholeBookSection: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
+                if isGeneratingGuide && wholeGuide == nil {
+                    generatingBanner("正在生成全书导读…")
+                }
                 if let error = guideError {
                     errorBanner(error)
                 }
@@ -148,11 +128,11 @@ struct BookGuideSheet: View {
                                 ForEach(Array(guide.mapEntries.enumerated()), id: \.offset) { _, entry in
                                     HStack(alignment: .top, spacing: 8) {
                                         Text(entry.range)
-                                            .font(.system(size: 12, weight: .semibold))
+                                            .font(.system(size: 11, weight: .semibold))
                                             .foregroundStyle(Color(hex: "#1F3FB0"))
-                                            .frame(minWidth: 72, alignment: .leading)
+                                            .frame(minWidth: 64, alignment: .leading)
                                         Text(entry.summary)
-                                            .font(.system(size: 13))
+                                            .font(.system(size: bodyFontSize))
                                             .foregroundStyle(Color(hex: "#141414"))
                                     }
                                 }
@@ -168,10 +148,10 @@ struct BookGuideSheet: View {
                                 ForEach(guide.keyTerms, id: \.term) { term in
                                     HStack(alignment: .firstTextBaseline, spacing: 6) {
                                         Text(term.term)
-                                            .font(.system(size: 12, weight: .semibold))
+                                            .font(.system(size: 11, weight: .semibold))
                                             .foregroundStyle(Color(hex: "#1F3FB0"))
                                         Text(term.definition)
-                                            .font(.system(size: 13))
+                                            .font(.system(size: bodyFontSize))
                                             .foregroundStyle(Color(hex: "#141414"))
                                     }
                                 }
@@ -182,7 +162,7 @@ struct BookGuideSheet: View {
                     emptyState("全书导读尚未生成")
                 }
             }
-            .padding(24)
+            .padding(compactLayout ? 14 : 24)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
@@ -194,8 +174,11 @@ struct BookGuideSheet: View {
             VStack(alignment: .leading, spacing: 18) {
                 if let chapter = targetChapter {
                     Text(ChineseScriptConverter.convert(chapter.title, mode: chineseScriptMode))
-                        .font(.system(size: 17, weight: .semibold, design: .serif))
+                        .font(.system(size: compactLayout ? 14 : 17, weight: .semibold, design: .serif))
                         .foregroundStyle(Color(hex: "#141414"))
+                }
+                if isGeneratingGuide && chapterGuide == nil {
+                    generatingBanner("正在生成本章导读…")
                 }
                 if let error = guideError {
                     errorBanner(error)
@@ -210,7 +193,7 @@ struct BookGuideSheet: View {
                                 ForEach(Array(guide.backgroundPoints.enumerated()), id: \.offset) { _, point in
                                     HStack(alignment: .top, spacing: 6) {
                                         Circle().fill(Color(hex: "#1F3FB0")).frame(width: 4, height: 4).padding(.top, 6)
-                                        Text(point).font(.system(size: 13)).foregroundStyle(Color(hex: "#141414"))
+                                        Text(point).font(.system(size: bodyFontSize)).foregroundStyle(Color(hex: "#141414"))
                                     }
                                 }
                             }
@@ -221,7 +204,7 @@ struct BookGuideSheet: View {
                             VStack(alignment: .leading, spacing: 10) {
                                 ForEach(Array(guide.socraticQuestions.enumerated()), id: \.offset) { idx, q in
                                     Text("\(idx + 1). \(q)")
-                                        .font(.system(size: 13, design: .serif))
+                                        .font(.system(size: bodyFontSize, design: .serif))
                                         .foregroundStyle(Color(hex: "#141414"))
                                         .lineSpacing(4)
                                 }
@@ -239,102 +222,8 @@ struct BookGuideSheet: View {
                     }
                 }
             }
-            .padding(24)
+            .padding(compactLayout ? 14 : 24)
             .frame(maxWidth: .infinity, alignment: .leading)
-        }
-    }
-
-    // MARK: - 问答
-
-    private var chatSection: some View {
-        VStack(spacing: 0) {
-            ScrollViewReader { proxy in
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 12) {
-                        if chatMessages.isEmpty {
-                            VStack(spacing: 8) {
-                                Text("向 AI 提问这本书")
-                                    .font(.system(size: 14, weight: .medium))
-                                    .foregroundStyle(.secondary)
-                                Text("如「作者的核心论点是什么」「第三章在讲什么」")
-                                    .font(.system(size: 12))
-                                    .foregroundStyle(.secondary.opacity(0.7))
-                            }
-                            .frame(maxWidth: .infinity)
-                            .padding(.top, 60)
-                        }
-                        ForEach(chatMessages) { msg in
-                            ChatBubble(message: msg)
-                                .id(msg.id)
-                        }
-                    }
-                    .padding(20)
-                }
-                .onChange(of: chatMessages.count) { _, _ in
-                    if let last = chatMessages.last {
-                        withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }
-                    }
-                }
-            }
-            Divider().opacity(0.3)
-            HStack(alignment: .bottom, spacing: 10) {
-                TextField("输入问题…", text: $chatInput, axis: .vertical)
-                    .textFieldStyle(.roundedBorder)
-                    .lineLimit(1...4)
-                    .onSubmit { sendChat() }
-                Button {
-                    sendChat()
-                } label: {
-                    Image(systemName: "arrow.up.circle.fill")
-                        .font(.system(size: 22))
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(Color(hex: "#1F3FB0"))
-                .disabled(chatInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            }
-            .padding(14)
-        }
-    }
-
-    private func sendChat() {
-        let prompt = chatInput.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !prompt.isEmpty else { return }
-        chatInput = ""
-        let userMsg = ChatMessage(role: .user, content: prompt)
-        chatMessages.append(userMsg)
-        // 占位 assistant 消息(流式回填)
-        let placeholder = ChatMessage(role: .assistant, content: "")
-        chatMessages.append(placeholder)
-        let placeholderID = placeholder.id
-
-        Task {
-            do {
-                let context = wholeGuide.map { guide -> String in
-                    var ctx = "【全书导读】\(guide.whatProblem)\n"
-                    for entry in guide.mapEntries.prefix(6) {
-                        ctx += "【\(entry.range)】\(entry.summary)\n"
-                    }
-                    return ctx
-                } ?? ""
-                let chapterContext = targetChapter.map { "当前章节:\(ChineseScriptConverter.convert($0.title, mode: chineseScriptMode))" } ?? ""
-                let answer = try await PiAgentService.shared.collectGuide(
-                    prompt: context + chapterContext + "\n【读者问题】\(prompt)"
-                )
-                if let idx = chatMessages.firstIndex(where: { $0.id == placeholderID }) {
-                    chatMessages[idx] = ChatMessage(
-                        role: .assistant, content: answer,
-                        quoteContext: nil, noteSource: nil
-                    )
-                }
-            } catch {
-                if let idx = chatMessages.firstIndex(where: { $0.id == placeholderID }) {
-                    chatMessages[idx] = ChatMessage(
-                        role: .assistant,
-                        content: "⚠️ 问答失败:\(error.localizedDescription)",
-                        quoteContext: nil, noteSource: nil
-                    )
-                }
-            }
         }
     }
 
@@ -364,7 +253,7 @@ struct BookGuideSheet: View {
                                 .buttonStyle(.plain)
                             }
                             Text(note.content)
-                                .font(.system(size: 13))
+                                .font(.system(size: bodyFontSize))
                                 .foregroundStyle(Color(hex: "#141414"))
                                 .textSelection(.enabled)
                         }
@@ -373,25 +262,25 @@ struct BookGuideSheet: View {
                         .clipShape(RoundedRectangle(cornerRadius: 8))
                     }
                 }
-                .padding(20)
+                .padding(compactLayout ? 14 : 20)
             }
             Divider().opacity(0.3)
             HStack(alignment: .bottom, spacing: 10) {
                 TextField("记一笔…", text: $newNote, axis: .vertical)
                     .textFieldStyle(.roundedBorder)
-                    .lineLimit(1...4)
+                    .lineLimit(1...3)
                     .onSubmit { addNote() }
                 Button {
                     addNote()
                 } label: {
                     Image(systemName: "plus.circle.fill")
-                        .font(.system(size: 22))
+                        .font(.system(size: 20))
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(Color(hex: "#1F3FB0"))
                 .disabled(newNote.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
-            .padding(14)
+            .padding(12)
         }
     }
 
@@ -420,14 +309,14 @@ struct BookGuideSheet: View {
     ) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             Label(title, systemImage: systemImage)
-                .font(.system(size: 13, weight: .semibold))
+                .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(Color(hex: "#1F3FB0"))
             content()
-                .font(.system(size: 14, design: .serif))
+                .font(.system(size: bodyFontSize, design: .serif))
                 .foregroundStyle(Color(hex: "#141414"))
                 .lineSpacing(5)
         }
-        .padding(16)
+        .padding(cardPadding)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color.white.opacity(0.55))
         .clipShape(RoundedRectangle(cornerRadius: 10))
@@ -444,6 +333,19 @@ struct BookGuideSheet: View {
         .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color.orange.opacity(0.08))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+
+    private func generatingBanner(_ message: String) -> some View {
+        HStack(spacing: 8) {
+            ProgressView().controlSize(.small)
+            Text(message)
+                .font(.system(size: 12))
+                .foregroundStyle(Color(hex: "#6D6A63"))
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(hex: "#1F3FB0").opacity(0.06))
         .clipShape(RoundedRectangle(cornerRadius: 8))
     }
 
@@ -589,38 +491,41 @@ struct BookGuideSheet: View {
     }
 }
 
-/// 问答气泡
-private struct ChatBubble: View {
-    let message: ChatMessage
+/// 书架入口薄壳:全屏 sheet 包 BookGuideContent(标题栏 + 关闭)。
+/// 阅读中的导读走 AIChatPanel 导读段,不再用这里。
+struct BookGuideSheet: View {
+    let book: EPUBBook
+    var initialChapter: EPUBChapter? = nil
+    var chineseScriptMode: ChineseScriptMode = .original
+    var chapterBodyProvider: (() -> String)? = nil
+
+    @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        HStack(alignment: .bottom, spacing: 8) {
-            if message.role == .assistant {
-                Image(systemName: "sparkles")
-                    .font(.system(size: 11))
+        VStack(spacing: 0) {
+            HStack {
+                Button("关闭") { dismiss() }
+                    .keyboardShortcut(.escape, modifiers: [])
+                    .buttonStyle(.bordered)
+                Spacer()
+                Label("AI 导读 · \(ChineseScriptConverter.convert(book.title, mode: chineseScriptMode))", systemImage: "sparkles")
+                    .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(Color(hex: "#1F3FB0"))
-                    .padding(.bottom, 4)
+                Spacer()
+                // 对称占位,让标题居中
+                Text(" ").font(.system(size: 13)).buttonStyle(.bordered)
             }
-            Text(message.content)
-                .font(.system(size: 13, design: message.role == .assistant ? .serif : .default))
-                .foregroundStyle(Color(hex: "#141414"))
-                .textSelection(.enabled)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .background(
-                    message.role == .user
-                        ? Color(hex: "#1F3FB0").opacity(0.12)
-                        : Color.white.opacity(0.6)
-                )
-                .clipShape(RoundedRectangle(cornerRadius: 10))
-            if message.role == .user {
-                Image(systemName: "person.crop.circle")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-                    .padding(.bottom, 4)
-            }
+            .padding(.horizontal, 24)
+            .frame(height: 60)
+            BookGuideContent(
+                book: book,
+                initialChapter: initialChapter,
+                chineseScriptMode: chineseScriptMode,
+                chapterBodyProvider: chapterBodyProvider
+            )
         }
-        .frame(maxWidth: .infinity, alignment: message.role == .user ? .trailing : .leading)
+        .background(Color(hex: "#F4F2ED"))
+        .frame(minWidth: 680, minHeight: 560)
     }
 }
 

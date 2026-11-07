@@ -178,6 +178,25 @@ final class LibraryDatabase: @unchecked Sendable {
             generated_at REAL NOT NULL DEFAULT 0,
             model TEXT NOT NULL DEFAULT ''
         );
+        CREATE TABLE IF NOT EXISTS chat_sessions (
+            id TEXT PRIMARY KEY,
+            book_id TEXT NOT NULL,
+            title TEXT NOT NULL DEFAULT '',
+            chapter_anchor TEXT NOT NULL DEFAULT '',
+            created_at REAL NOT NULL DEFAULT 0,
+            updated_at REAL NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_chat_sessions_book ON chat_sessions(book_id, updated_at DESC);
+        CREATE TABLE IF NOT EXISTS chat_messages (
+            id TEXT PRIMARY KEY,
+            session_id TEXT NOT NULL,
+            role TEXT NOT NULL,
+            content TEXT NOT NULL,
+            quote_context TEXT,
+            note_source_json TEXT,
+            created_at REAL NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_chat_messages_session ON chat_messages(session_id, created_at);
         """
         sqlite3_exec(db, sql, nil, nil, nil)
         // SM-2 ease 因子列（对已存在的旧表幂等——列已有时 ALTER 报错被忽略）
@@ -236,6 +255,179 @@ final class LibraryDatabase: @unchecked Sendable {
             defer { sqlite3_finalize(stmt) }
             bindText(stmt, 1, bookId.uuidString)
             _ = sqlite3_step(stmt)
+        }
+    }
+
+    // MARK: - 聊天会话(chat_sessions / chat_messages;按书 scope,重启不丢)
+
+    /// 一条聊天会话的元数据(消息按需加载)
+    struct ChatSessionMeta: Identifiable, Hashable, Sendable {
+        let id: UUID
+        let bookId: UUID
+        var title: String
+        var chapterAnchor: String
+        var createdAt: Date
+        var updatedAt: Date
+    }
+
+    /// 建会话(标题默认取首问前 24 字)
+    func createChatSession(bookId: UUID, title: String, chapterAnchor: String = "") -> UUID {
+        let id = UUID()
+        let now = Date().timeIntervalSince1970
+        dbQueue.sync {
+            guard let db else { return }
+            var stmt: OpaquePointer?
+            let sql = "INSERT INTO chat_sessions (id, book_id, title, chapter_anchor, created_at, updated_at) VALUES (?,?,?,?,?,?)"
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
+            defer { sqlite3_finalize(stmt) }
+            bindText(stmt, 1, id.uuidString)
+            bindText(stmt, 2, bookId.uuidString)
+            bindText(stmt, 3, title)
+            bindText(stmt, 4, chapterAnchor)
+            sqlite3_bind_double(stmt, 5, now)
+            sqlite3_bind_double(stmt, 6, now)
+            _ = sqlite3_step(stmt)
+            scheduleBackup()
+        }
+        return id
+    }
+
+    /// 改会话标题(重命名)
+    func renameChatSession(id: UUID, title: String) {
+        dbQueue.sync {
+            guard let db else { return }
+            var stmt: OpaquePointer?
+            let sql = "UPDATE chat_sessions SET title = ?, updated_at = ? WHERE id = ?"
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
+            defer { sqlite3_finalize(stmt) }
+            bindText(stmt, 1, title)
+            sqlite3_bind_double(stmt, 2, Date().timeIntervalSince1970)
+            bindText(stmt, 3, id.uuidString)
+            _ = sqlite3_step(stmt)
+            scheduleBackup()
+        }
+    }
+
+    /// 删会话(连带消息)
+    func deleteChatSession(id: UUID) {
+        dbQueue.sync {
+            guard let db else { return }
+            for sql in ["DELETE FROM chat_messages WHERE session_id = ?", "DELETE FROM chat_sessions WHERE id = ?"] {
+                var stmt: OpaquePointer?
+                guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { continue }
+                defer { sqlite3_finalize(stmt) }
+                bindText(stmt, 1, id.uuidString)
+                _ = sqlite3_step(stmt)
+            }
+            scheduleBackup()
+        }
+    }
+
+    /// 删书时连带清理全部会话与消息
+    func deleteChatSessions(forBookId bookId: UUID) {
+        dbQueue.sync {
+            guard let db else { return }
+            for sql in [
+                "DELETE FROM chat_messages WHERE session_id IN (SELECT id FROM chat_sessions WHERE book_id = ?)",
+                "DELETE FROM chat_sessions WHERE book_id = ?",
+            ] {
+                var stmt: OpaquePointer?
+                guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
+                defer { sqlite3_finalize(stmt) }
+                bindText(stmt, 1, bookId.uuidString)
+                _ = sqlite3_step(stmt)
+            }
+            scheduleBackup()
+        }
+    }
+
+    /// 一本书的会话列表(按更新时间倒序;供面板「最近会话」)
+    func loadChatSessions(bookId: UUID, limit: Int = 50) -> [ChatSessionMeta] {
+        dbQueue.sync {
+            guard let db else { return [] }
+            var stmt: OpaquePointer?
+            let sql = "SELECT id, title, chapter_anchor, created_at, updated_at FROM chat_sessions WHERE book_id = ? ORDER BY updated_at DESC LIMIT ?"
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
+            defer { sqlite3_finalize(stmt) }
+            bindText(stmt, 1, bookId.uuidString)
+            sqlite3_bind_int(stmt, 2, Int32(limit))
+            var sessions: [ChatSessionMeta] = []
+            while sqlite3_step(stmt) == SQLITE_ROW {
+                guard let idStr = text(stmt, 0), let id = UUID(uuidString: idStr),
+                      let bookUUID = UUID(uuidString: bookId.uuidString) else { continue }
+                sessions.append(ChatSessionMeta(
+                    id: id,
+                    bookId: bookUUID,
+                    title: text(stmt, 1) ?? "",
+                    chapterAnchor: text(stmt, 2) ?? "",
+                    createdAt: Date(timeIntervalSince1970: sqlite3_column_double(stmt, 3)),
+                    updatedAt: Date(timeIntervalSince1970: sqlite3_column_double(stmt, 4))
+                ))
+            }
+            return sessions
+        }
+    }
+
+    /// 追加一条消息并 bump 会话 updated_at
+    func appendChatMessage(_ message: ChatMessage, sessionId: UUID, bookId: UUID) {
+        let noteData: Data? = message.noteSource.flatMap { try? JSONEncoder().encode($0) }
+        dbQueue.sync {
+            guard let db else { return }
+            var stmt: OpaquePointer?
+            let sql = "INSERT OR REPLACE INTO chat_messages (id, session_id, role, content, quote_context, note_source_json, created_at) VALUES (?,?,?,?,?,?,?)"
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
+            defer { sqlite3_finalize(stmt) }
+            bindText(stmt, 1, message.id.uuidString)
+            bindText(stmt, 2, sessionId.uuidString)
+            bindText(stmt, 3, message.role.rawValue)
+            bindText(stmt, 4, message.content)
+            if let quote = message.quoteContext { bindText(stmt, 5, quote) } else { sqlite3_bind_null(stmt, 5) }
+            if let noteJSON = noteData.flatMap({ String(data: $0, encoding: .utf8) }) {
+                bindText(stmt, 6, noteJSON)
+            } else {
+                sqlite3_bind_null(stmt, 6)
+            }
+            sqlite3_bind_double(stmt, 7, message.timestamp.timeIntervalSince1970)
+            _ = sqlite3_step(stmt)
+            sqlite3_finalize(stmt)
+            stmt = nil
+            guard sqlite3_prepare_v2(db, "UPDATE chat_sessions SET updated_at = ? WHERE id = ?", -1, &stmt, nil) == SQLITE_OK else { return }
+            defer { sqlite3_finalize(stmt) }
+            bindText(stmt, 2, sessionId.uuidString)
+            sqlite3_bind_double(stmt, 1, Date().timeIntervalSince1970)
+            _ = sqlite3_step(stmt)
+            scheduleBackup()
+        }
+    }
+
+    /// 读一个会话的全部消息(按时间正序)
+    func loadChatMessages(sessionId: UUID) -> [ChatMessage] {
+        dbQueue.sync {
+            guard let db else { return [] }
+            var stmt: OpaquePointer?
+            let sql = "SELECT id, role, content, quote_context, note_source_json, created_at FROM chat_messages WHERE session_id = ? ORDER BY created_at"
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
+            defer { sqlite3_finalize(stmt) }
+            bindText(stmt, 1, sessionId.uuidString)
+            var messages: [ChatMessage] = []
+            while sqlite3_step(stmt) == SQLITE_ROW {
+                guard let idStr = text(stmt, 0), let id = UUID(uuidString: idStr),
+                      let roleRaw = text(stmt, 1),
+                      let role = ChatMessage.Role(rawValue: roleRaw),
+                      let content = text(stmt, 2) else { continue }
+                let noteSource: AINoteSource? = text(stmt, 4).flatMap { json in
+                    json.data(using: .utf8).flatMap { try? JSONDecoder().decode(AINoteSource.self, from: $0) }
+                }
+                messages.append(ChatMessage(
+                    id: id,
+                    role: role,
+                    content: content,
+                    quoteContext: text(stmt, 3),
+                    timestamp: Date(timeIntervalSince1970: sqlite3_column_double(stmt, 5)),
+                    noteSource: noteSource
+                ))
+            }
+            return messages
         }
     }
 

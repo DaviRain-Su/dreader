@@ -12,6 +12,7 @@ struct RealisticBookshelfView: View {
     var onDeleteBook: ((UUID) -> Void)? = nil
     var onResetProgress: ((UUID) -> Void)? = nil
     var onOpenXRay: ((EPUBBook) -> Void)? = nil
+    var onOpenGuide: ((EPUBBook) -> Void)? = nil
     var onAddClassic: ((ChineseClassicsRegistry.ClassicBook) -> Void)? = nil
     var onStartReview: (() -> Void)? = nil
     var chineseScriptMode: ChineseScriptMode = .original
@@ -79,6 +80,7 @@ struct RealisticBookshelfView: View {
                     onSelectBook: onSelectBook,
                     onImportEPUB: onImportEPUB,
                     onOpenXRay: onOpenXRay,
+                    onOpenGuide: onOpenGuide,
                     onResetProgress: onResetProgress,
                     onDeleteBook: onDeleteBook,
                     emptyMessage: searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -114,6 +116,7 @@ struct RealisticBookshelfView: View {
                                 onSelectBook: onSelectBook,
                                 onImportEPUB: onImportEPUB,
                                 onOpenXRay: onOpenXRay,
+                                onOpenGuide: onOpenGuide,
                                 onResetProgress: onResetProgress,
                                 onDeleteBook: onDeleteBook,
                                 chineseScriptMode: chineseScriptMode
@@ -563,6 +566,7 @@ private struct SingleShelfRowView: View {
     let onSelectBook: (EPUBBook) -> Void
     let onImportEPUB: () -> Void
     var onOpenXRay: ((EPUBBook) -> Void)? = nil
+    var onOpenGuide: ((EPUBBook) -> Void)? = nil
     var onResetProgress: ((UUID) -> Void)? = nil
     var onDeleteBook: ((UUID) -> Void)? = nil
     var chineseScriptMode: ChineseScriptMode = .original
@@ -587,6 +591,9 @@ private struct SingleShelfRowView: View {
                             },
                             onOpenXRay: {
                                 onOpenXRay?(book)
+                            },
+                            onOpenGuide: {
+                                onOpenGuide?(book)
                             },
                             onResetProgress: {
                                 onResetProgress?(book.id)

@@ -4,6 +4,7 @@ struct RealisticBookItemView: View {
     let book: EPUBBook
     let onOpen: () -> Void
     var onOpenXRay: (() -> Void)? = nil
+    var onOpenGuide: (() -> Void)? = nil
     var onResetProgress: (() -> Void)? = nil
     var onDelete: (() -> Void)? = nil
     var chineseScriptMode: ChineseScriptMode = .original
@@ -255,6 +256,14 @@ struct RealisticBookItemView: View {
                     onOpenXRay()
                 } label: {
                     Label("查看全书透视 (X-Ray)", systemImage: "atom")
+                }
+            }
+
+            if let onOpenGuide = onOpenGuide {
+                Button {
+                    onOpenGuide()
+                } label: {
+                    Label("AI 导读", systemImage: "sparkles")
                 }
             }
 

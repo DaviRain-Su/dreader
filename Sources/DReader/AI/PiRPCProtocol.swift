@@ -62,8 +62,8 @@ enum PiRPCProtocol {
 
     // MARK: - 模型清单/状态解析
 
-    /// pi 模型条目(从 get_available_models 响应提取;纯值 Sendable)
-    struct ModelInfo: Equatable, Sendable, Identifiable {
+    /// pi 模型条目(从 get_available_models 响应提取;纯值 Sendable,可磁盘缓存)
+    struct ModelInfo: Equatable, Sendable, Identifiable, Codable {
         var provider: String
         var modelID: String
         var name: String

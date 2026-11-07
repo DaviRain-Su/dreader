@@ -72,6 +72,34 @@ final class PiAgentService: @unchecked Sendable {
     init() {
         let count = max(1, BilingualTranslationService.batchConcurrency)
         translateLanes = (0..<count).map { PiChannel(laneID: "translate-\($0)", systemPrompt: Self.translationSystemPrompt) }
+        modelDefaults = .standard
+        restoreSelectedModel()
+    }
+
+    /// 恢复上次选择的模型(重启后 lane 起进程时以启动参数外的 set_model 应用)
+    private func restoreSelectedModel() {
+        if let saved = modelDefaults.string(forKey: Self.selectedModelKey), !saved.isEmpty {
+            currentModel = saved
+            applyModelToAllLanes(full: saved)
+        }
+    }
+
+    /// 把 "provider/modelID" 拆开应用到全 lane(恢复持久化选择 / 切换共用)
+    private func applyModelToAllLanes(full: String) {
+        guard let slash = full.firstIndex(of: "/") else { return }
+        let provider = String(full[..<slash])
+        let modelID = String(full[full.index(after: slash)...])
+        let chat = chatLane
+        let guide = guideLane
+        translateLaneLock.lock()
+        let lanes = translateLanes
+        translateLaneLock.unlock()
+        Task { [weak self] in
+            for lane in [chat, guide] + lanes {
+                try? await lane.setModel(provider: provider, modelID: modelID)
+            }
+            _ = self // 保持 self 存活到应用完成
+        }
     }
 
     /// 测试注入缝构造(仿 RankingService.init(configuration:) 先例):
@@ -117,61 +145,98 @@ final class PiAgentService: @unchecked Sendable {
 
     // MARK: - 模型选择(get_available_models / set_model)
 
-    /// 拉取 pi 可用模型清单 + 当前模型(设置 sheet onAppear / 重新检测时调用)
+    /// 已选模型持久化键(跨重启;lane 启动时自动应用)
+    static let selectedModelKey = "ai.selectedModel"
+    /// 模型清单磁盘缓存键(742KB 只拉一次,之后秒开)
+    static let modelsCacheKey = "ai.availableModelsCache"
+    /// 缓存有效期(6h;过期后台静默刷新)
+    static let modelsCacheTTL: TimeInterval = 6 * 3600
+
+    private let modelDefaults: UserDefaults
+
+    /// 拉取 pi 可用模型清单 + 当前模型(设置 sheet onAppear / 重新检测时调用)。
+    /// 清单走磁盘缓存:命中且未过期直接返回,过期/缺失才拉 pi 并回写缓存。
     func refreshModels() {
-        guard !isLoadingModels else { return }
+        // 缓存命中:秒开(不起新进程);当前模型仍从活 lane 拉(便宜,0.85s)
+        if let cached = Self.decodeCachedModels(),
+           cached.fetchedAt.timeIntervalSinceNow > -Self.modelsCacheTTL,
+           !cached.models.isEmpty {
+            availableModels = cached.models
+            fetchCurrentModelOnly()
+            return
+        }
         isLoadingModels = true
         let lane = chatLane
         Task { [weak self] in
             guard let self else { return }
             var models: [PiRPCProtocol.ModelInfo] = []
-            var current = ""
             do {
                 models = try await lane.fetchAvailableModels()
+                Self.writeModelsCache(models)
             } catch {
                 NSLog("[PiAgent] get_available_models 失败: %@", error.localizedDescription)
+                // 拉取失败回落过期缓存(有总比空好)
+                if let cached = Self.decodeCachedModels() { models = cached.models }
             }
             do {
                 if let cur = try await lane.fetchCurrentModel() {
-                    current = "\(cur.provider)/\(cur.modelID)"
+                    let full = "\(cur.provider)/\(cur.modelID)"
+                    await MainActor.run {
+                        self.currentModel = full
+                        self.isLoadingModels = false
+                    }
+                } else {
+                    await MainActor.run { self.isLoadingModels = false }
                 }
             } catch {
                 NSLog("[PiAgent] get_state 失败: %@", error.localizedDescription)
+                await MainActor.run { self.isLoadingModels = false }
             }
             await MainActor.run {
-                self.availableModels = models
-                self.currentModel = current
+                if !models.isEmpty { self.availableModels = models }
                 self.isLoadingModels = false
             }
         }
     }
 
-    /// 切换模型:全 lane 同步 set_model(chat/guide/translate 共用一份 pi 配置面)
+    /// 只拉当前模型(便宜;缓存命中路径与列表刷新后的补充拉取共用)
+    private func fetchCurrentModelOnly() {
+        let lane = chatLane
+        Task { [weak self] in
+            guard let self else { return }
+            guard let cur = try? await lane.fetchCurrentModel() else { return }
+            await MainActor.run {
+                self.currentModel = "\(cur.provider)/\(cur.modelID)"
+            }
+        }
+    }
+
+    /// 模型清单磁盘缓存读写(纯值列表 JSON;与已选模型键同域)
+    private static func decodeCachedModels() -> (models: [PiRPCProtocol.ModelInfo], fetchedAt: Date)? {
+        guard let data = UserDefaults.standard.data(forKey: modelsCacheKey),
+              let payload = try? JSONDecoder().decode(CachedModelsPayload.self, from: data) else { return nil }
+        return (payload.models, payload.fetchedAt)
+    }
+
+    private static func writeModelsCache(_ models: [PiRPCProtocol.ModelInfo]) {
+        let payload = CachedModelsPayload(models: models, fetchedAt: Date())
+        if let data = try? JSONEncoder().encode(payload) {
+            UserDefaults.standard.set(data, forKey: modelsCacheKey)
+        }
+    }
+
+    private struct CachedModelsPayload: Codable {
+        var models: [PiRPCProtocol.ModelInfo]
+        var fetchedAt: Date
+    }
+
+    /// 切换模型:全 lane 同步 set_model(chat/guide/translate 共用一份 pi 配置面);持久化,重启自动应用
     func selectModel(provider: String, modelID: String) {
         let full = "\(provider)/\(modelID)"
         guard currentModel != full else { return }
         currentModel = full // 乐观更新,失败由下次 refreshModels 校正
-        let chat = chatLane
-        let guide = guideLane
-        translateLaneLock.lock()
-        let lanes = translateLanes
-        translateLaneLock.unlock()
-        Task { [weak self] in
-            var failures: [String] = []
-            for lane in [chat, guide] + lanes {
-                do {
-                    try await lane.setModel(provider: provider, modelID: modelID)
-                } catch {
-                    failures.append(lane.laneID)
-                    NSLog("[PiAgent] set_model lane %@ 失败: %@", lane.laneID, error.localizedDescription)
-                }
-            }
-            if !failures.isEmpty {
-                await MainActor.run {
-                    NSLog("[PiAgent] set_model 部分失败 lane: %@", failures.joined(separator: ","))
-                }
-            }
-        }
+        modelDefaults.set(full, forKey: Self.selectedModelKey)
+        applyModelToAllLanes(full: full)
     }
 
     // MARK: - 聊天(AIChatPanel / ReviewSessionModalView 同签名)

@@ -5,13 +5,13 @@ struct BookshelfBookDetailView: View {
     let book: EPUBBook
     let onContinue: () -> Void
     var onOpenXRay: (() -> Void)? = nil
+    var onOpenGuide: (() -> Void)? = nil
     var onResetProgress: (() -> Void)? = nil
     var onDelete: (() -> Void)? = nil
     var chineseScriptMode: ChineseScriptMode = .original
 
     @Environment(\.dismiss) private var dismiss
     @State private var cover: NSImage?
-    @State private var showGuideSheet = false
 
     private var title: String {
         ChineseScriptConverter.convert(book.title, mode: chineseScriptMode)
@@ -107,7 +107,7 @@ struct BookshelfBookDetailView: View {
                             .padding(.top, 6)
 
                             Button {
-                                showGuideSheet = true
+                                onOpenGuide?()
                             } label: {
                                 Label("AI 导读", systemImage: "sparkles")
                                     .font(.system(size: 13))
@@ -126,9 +126,6 @@ struct BookshelfBookDetailView: View {
             }
         }
         .frame(minWidth: 760, minHeight: 560)
-        .sheet(isPresented: $showGuideSheet) {
-            BookGuideSheet(book: book, chineseScriptMode: chineseScriptMode)
-        }
         .accessibilityElement(children: .contain)
         .task(id: book.coverImageURL) {
             cover = nil

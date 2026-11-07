@@ -66,6 +66,11 @@ struct ReaderMainView: View {
                                 vm.sidebarTab = .xray
                                 vm.isSidebarVisible = true
                             },
+                            onOpenGuide: { book in
+                                vm.selectBookForReading(book)
+                                vm.sidebarTab = .guide
+                                vm.isSidebarVisible = true
+                            },
                             onAddClassic: { classic in
                                 Task {
                                     await vm.importClassicDirectly(classic)

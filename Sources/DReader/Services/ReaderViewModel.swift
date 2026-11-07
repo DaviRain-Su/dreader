@@ -1643,6 +1643,7 @@ final class ReaderViewModel: @unchecked Sendable {
             hasListeningResume = false
         }
         database.deletePositions(for: id)
+        database.deleteChatSessions(forBookId: id)
         completedReadingBookIDs.remove(id)
         if let idx = books.firstIndex(where: { $0.id == id }) {
             let removedBook = books.remove(at: idx)

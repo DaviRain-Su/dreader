@@ -7,6 +7,7 @@ struct BookshelfGalleryView: View {
     let onSelectBook: (EPUBBook) -> Void
     var onImportEPUB: (() -> Void)? = nil
     var onOpenXRay: ((EPUBBook) -> Void)? = nil
+    var onOpenGuide: ((EPUBBook) -> Void)? = nil
     var onResetProgress: ((UUID) -> Void)? = nil
     var onDeleteBook: ((UUID) -> Void)? = nil
     var emptyMessage = "书库暂时还没有藏书"
@@ -155,6 +156,7 @@ struct BookshelfGalleryView: View {
                         onSelectBook(book)
                     },
                     onOpenXRay: { onOpenXRay?(book) },
+                    onOpenGuide: { onOpenGuide?(book) },
                     onResetProgress: { onResetProgress?(book.id) },
                     onDelete: { onDeleteBook?(book.id) },
                     chineseScriptMode: chineseScriptMode

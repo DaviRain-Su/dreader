@@ -31,13 +31,38 @@ struct AIChatPanel: View {
     /// Jump-to-text in the reader (clickable AI citations)
     var onJumpToOriginalText: ((String) -> Void)? = nil
     var onSaveMessageAsNote: ((ChatMessage) -> Void)? = nil
+    /// 初始段(外部入口可直达导读;默认问答)
+    var initialSection: PanelSection = .chat
 
+    /// 面板两大段:导读(读伴式三分区)/ 问答(带会话历史的聊天)
+    enum PanelSection: String, CaseIterable, Identifiable {
+        case guide = "导读"
+        case chat = "问答"
+        var id: String { rawValue }
+        var icon: String {
+            switch self {
+            case .guide: return "book.pages"
+            case .chat: return "bubble.left.and.bubble.right"
+            }
+        }
+    }
+
+    @State private var panelSection: PanelSection = .chat
     @State private var messages: [ChatMessage] = []
     @State private var inputText: String = ""
     @State private var showSettingsSheet: Bool = false
     @State private var currentStreamingAnswer: String = ""
     @State private var searchScope: AISearchScope = .chapter
     @State private var isBriefingExpanded: Bool = true
+    /// 面板宽度(拖拽分隔条调;320–560,默认 400)
+    @State private var panelWidth: CGFloat = 400
+    /// 一键展开半屏(Readwise 双形态:同一会话,更多空间)
+    @State private var isExpanded: Bool = false
+
+    // 会话持久化(按书 scope;重启/切书不丢)
+    @State private var sessions: [LibraryDatabase.ChatSessionMeta] = []
+    @State private var currentSessionID: UUID?
+    @State private var showSessionList: Bool = false
 
     private let quickPrompts: [(title: String, icon: String, prompt: String)] = [
         ("深度解析", "sparkles", "请结合全书语境，深入剖析这段文字的思想内涵与深层寓意"),
@@ -51,6 +76,120 @@ struct AIChatPanel: View {
         VStack(spacing: 0) {
             // Header
             headerBar
+
+            // 分段:导读 / 问答(读伴式两分区融合进同一面板)
+            sectionSelector
+
+            if panelSection == .guide {
+                // 导读段:读伴式三分区(全书/章节/笔记)融合进面板
+                if let book {
+                    BookGuideContent(
+                        book: book,
+                        initialChapter: currentChapter,
+                        chapterBodyProvider: chapterBodyText,
+                        compactLayout: true
+                    )
+                } else {
+                    VStack(spacing: 8) {
+                        Spacer()
+                        Image(systemName: "sparkles")
+                            .font(.system(size: 28))
+                            .foregroundStyle(.secondary)
+                        Text("请先打开一本书以查看 AI 导读")
+                            .font(.system(size: 12.5))
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                    }
+                }
+            } else {
+                chatSection
+            }
+        }
+        .frame(width: isExpanded ? (NSScreen.main?.frame.width ?? 1440) * 0.5 : panelWidth)
+        .background(.ultraThinMaterial)
+        .overlay(
+            Rectangle()
+                .fill(Color(nsColor: .separatorColor).opacity(0.3))
+                .frame(width: 0.5),
+            alignment: .leading
+        )
+        // 左缘拖拽调宽把手(320–560;展开态禁用)
+        .overlay(alignment: .leading) {
+            if !isExpanded {
+                Rectangle()
+                    .fill(Color.clear)
+                    .frame(width: 8)
+                    .contentShape(Rectangle())
+                    .onHover { hovering in
+                        if hovering {
+                            NSCursor.resizeLeftRight.push()
+                        } else {
+                            NSCursor.pop()
+                        }
+                    }
+                    .gesture(
+                        DragGesture(minimumDistance: 1)
+                            .onChanged { value in
+                                panelWidth = min(560, max(320, panelWidth - value.translation.width))
+                            }
+                    )
+            }
+        }
+        .sheet(isPresented: $showSettingsSheet) {
+            AIAgentSettingsSheet(agentService: agentService)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("DReaderTriggerAIPrompt"))) { notif in
+            if let info = notif.userInfo,
+               let prompt = info["prompt"] as? String,
+               let quote = info["quote"] as? String {
+                panelSection = .chat
+                sendCustomPrompt(prompt, quote: quote)
+            }
+        }
+        .onAppear {
+            panelSection = initialSection
+            loadSessionsForCurrentBook()
+        }
+        .onChange(of: book?.id) { _, _ in
+            // 切书:重载该书会话列表,回到最近一条或空
+            loadSessionsForCurrentBook()
+        }
+    }
+
+    // MARK: - Section Selector(导读 / 问答)
+
+    private var sectionSelector: some View {
+        HStack(spacing: 4) {
+            ForEach(PanelSection.allCases) { section in
+                Button {
+                    withAnimation(.easeInOut(duration: 0.15)) {
+                        panelSection = section
+                    }
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: section.icon).font(.system(size: 10.5))
+                        Text(section.rawValue).font(.system(size: 11.5, weight: .medium))
+                    }
+                    .padding(.horizontal, 11)
+                    .padding(.vertical, 5)
+                    .background(panelSection == section ? Color.primary.opacity(0.08) : .clear)
+                    .foregroundStyle(panelSection == section ? Color.primary : Color.secondary)
+                    .clipShape(Capsule())
+                }
+                .buttonStyle(.plain)
+            }
+            Spacer()
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+    }
+
+    // MARK: - Chat Section(问答:会话持久化 + 流式)
+
+    private var chatSection: some View {
+        VStack(spacing: 0) {
+            // 会话切换条(最近会话 + 新会话)
+            sessionBar
 
             // Scope Selector Bar (Chapter / Full Book / Library RAG)
             scopeSelectorBar
@@ -126,24 +265,177 @@ struct AIChatPanel: View {
             // Input Bar
             inputBar
         }
-        .frame(minWidth: 280, idealWidth: 320, maxWidth: 360)
-        .background(.ultraThinMaterial)
-        .overlay(
-            Rectangle()
-                .fill(Color(nsColor: .separatorColor).opacity(0.3))
-                .frame(width: 0.5),
-            alignment: .leading
-        )
-        .sheet(isPresented: $showSettingsSheet) {
-            AIAgentSettingsSheet(agentService: agentService)
+    }
+
+    // MARK: - Session Bar(最近会话 + 新会话)
+
+    private var sessionBar: some View {
+        HStack(spacing: 6) {
+            // 会话切换器(下拉列出该书最近会话)
+            Menu {
+                ForEach(sessions) { session in
+                    Button {
+                        switchToSession(session)
+                    } label: {
+                        HStack {
+                            Text(session.title.isEmpty ? "未命名会话" : session.title)
+                                .lineLimit(1)
+                            Spacer()
+                            Text(session.updatedAt, style: .relative)
+                                .font(.system(size: 9))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+                if sessions.isEmpty {
+                    Text("暂无历史会话")
+                        .foregroundStyle(.secondary)
+                }
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "clock.arrow.circlepath")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                    Text(currentSessionTitle)
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 7))
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.horizontal, 7)
+                .padding(.vertical, 3)
+                .background(Color.primary.opacity(0.04))
+                .clipShape(Capsule())
+                .frame(maxWidth: 150)
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+            .help("切换历史会话")
+
+            // 新会话
+            Button {
+                startNewSession()
+            } label: {
+                Image(systemName: "plus.bubble")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 20, height: 20)
+            }
+            .buttonStyle(.plain)
+            .help("开始新会话")
+
+            Spacer()
         }
-        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("DReaderTriggerAIPrompt"))) { notif in
-            if let info = notif.userInfo,
-               let prompt = info["prompt"] as? String,
-               let quote = info["quote"] as? String {
-                sendCustomPrompt(prompt, quote: quote)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 4)
+    }
+
+    private var currentSessionTitle: String {
+        if let id = currentSessionID, let s = sessions.first(where: { $0.id == id }) {
+            return s.title.isEmpty ? "未命名会话" : s.title
+        }
+        return "新会话"
+    }
+
+    // MARK: - Session Persistence
+
+    /// 切书/初始化:重载该书会话列表,自动接最近一条
+    private func loadSessionsForCurrentBook() {
+        guard let book else {
+            sessions = []
+            currentSessionID = nil
+            messages = []
+            return
+        }
+        sessions = LibraryDatabase.shared.loadChatSessions(bookId: book.id)
+        if let latest = sessions.first {
+            currentSessionID = latest.id
+            messages = LibraryDatabase.shared.loadChatMessages(sessionId: latest.id)
+        } else {
+            currentSessionID = nil
+            messages = []
+        }
+    }
+
+    /// 切到指定历史会话
+    private func switchToSession(_ session: LibraryDatabase.ChatSessionMeta) {
+        guard session.id != currentSessionID else { return }
+        // 流式中的回答先落库,防止切换丢尾
+        flushStreamingToSession()
+        currentSessionID = session.id
+        messages = LibraryDatabase.shared.loadChatMessages(sessionId: session.id)
+        currentStreamingAnswer = ""
+    }
+
+    /// 开新会话(懒建:首条消息发出时才落库)
+    private func startNewSession() {
+        flushStreamingToSession()
+        currentSessionID = nil
+        messages = []
+        currentStreamingAnswer = ""
+        inputText = ""
+    }
+
+    /// 流式尾落库(切会话/切书前调用,防丢最后的回答)
+    private func flushStreamingToSession() {
+        let answer = currentStreamingAnswer.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !answer.isEmpty, let sessionID = currentSessionID, let book else { return }
+        LibraryDatabase.shared.appendChatMessage(
+            ChatMessage(role: .assistant, content: answer),
+            sessionId: sessionID,
+            bookId: book.id
+        )
+    }
+
+    /// 确保有当前会话(懒建:首条消息发出时创建)
+    @discardableResult
+    private func ensureSession(prompt: String) -> UUID? {
+        if let id = currentSessionID { return id }
+        guard let book else { return nil }
+        let title = String(prompt.prefix(24))
+        let anchor = currentChapter.map { "\($0.title)" } ?? ""
+        let id = LibraryDatabase.shared.createChatSession(
+            bookId: book.id, title: title, chapterAnchor: anchor
+        )
+        currentSessionID = id
+        sessions = LibraryDatabase.shared.loadChatSessions(bookId: book.id)
+        return id
+    }
+
+    /// 重命名当前会话(弹 NSAlert 输入)
+    private func renameCurrentSession(id: UUID) {
+        let alert = NSAlert()
+        alert.messageText = "重命名会话"
+        alert.alertStyle = .informational
+        let input = NSTextField(frame: NSRect(x: 0, y: 0, width: 240, height: 24))
+        input.stringValue = sessions.first(where: { $0.id == id })?.title ?? ""
+        alert.accessoryView = input
+        alert.addButton(withTitle: "确定")
+        alert.addButton(withTitle: "取消")
+        if alert.runModal() == .alertFirstButtonReturn {
+            let newTitle = input.stringValue.trimmingCharacters(in: .whitespaces)
+            guard !newTitle.isEmpty else { return }
+            LibraryDatabase.shared.renameChatSession(id: id, title: newTitle)
+            sessions = LibraryDatabase.shared.loadChatSessions(bookId: book?.id ?? UUID())
+        }
+    }
+
+    /// 删除会话(当前会话删后回落最近一条或空)
+    private func deleteSession(id: UUID) {
+        LibraryDatabase.shared.deleteChatSession(id: id)
+        sessions = LibraryDatabase.shared.loadChatSessions(bookId: book?.id ?? UUID())
+        if currentSessionID == id {
+            if let latest = sessions.first {
+                currentSessionID = latest.id
+                messages = LibraryDatabase.shared.loadChatMessages(sessionId: latest.id)
+            } else {
+                currentSessionID = nil
+                messages = []
             }
         }
+        currentStreamingAnswer = ""
     }
 
     // MARK: - Header
@@ -185,6 +477,20 @@ struct AIChatPanel: View {
 
             Spacer()
 
+            // 一键展开半屏(Readwise 双形态:同一会话,更多空间)
+            Button {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    isExpanded.toggle()
+                }
+            } label: {
+                Image(systemName: isExpanded ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 20, height: 20)
+            }
+            .buttonStyle(.plain)
+            .help(isExpanded ? "收起为侧栏" : "展开为半屏")
+
             // Agent Status Badge
             Button {
                 showSettingsSheet = true
@@ -217,10 +523,27 @@ struct AIChatPanel: View {
                 Divider()
 
                 Button {
-                    messages.removeAll()
-                    currentStreamingAnswer = ""
+                    startNewSession()
                 } label: {
-                    Label("清空当前对话", systemImage: "trash")
+                    Label("新会话(当前会话保留在历史)", systemImage: "plus.bubble")
+                }
+
+                // 重命名当前会话
+                if let id = currentSessionID {
+                    Button {
+                        renameCurrentSession(id: id)
+                    } label: {
+                        Label("重命名当前会话…", systemImage: "pencil")
+                    }
+                }
+
+                // 删除当前会话
+                if let id = currentSessionID {
+                    Button {
+                        deleteSession(id: id)
+                    } label: {
+                        Label("删除当前会话", systemImage: "trash")
+                    }
                 }
             } label: {
                 Image(systemName: "ellipsis.circle")
@@ -541,6 +864,7 @@ struct AIChatPanel: View {
 
     // MARK: - Send Action
     func sendCustomPrompt(_ prompt: String, quote: String? = nil) {
+        guard let book else { return }
         let actualQuote = quote ?? activeQuote
         let noteSource = AINoteSource(book: book, chapter: currentChapter)
         let userMsg = ChatMessage(
@@ -549,6 +873,10 @@ struct AIChatPanel: View {
             quoteContext: actualQuote
         )
         messages.append(userMsg)
+        // 落库(懒建会话:首条消息创建,标题取首问)
+        if let sessionID = ensureSession(prompt: prompt) {
+            LibraryDatabase.shared.appendChatMessage(userMsg, sessionId: sessionID, bookId: book.id)
+        }
         inputText = ""
         currentStreamingAnswer = ""
 
@@ -571,8 +899,8 @@ struct AIChatPanel: View {
             if book != nil {
                 let passages = retrieveBookPassages?(prompt) ?? []
                 if !passages.isEmpty {
-                    bookContext += "《\(book?.title ?? "")》中的相关段落：\n"
-                    let currentIdx = book?.currentChapterIndex ?? -1
+                    bookContext += "《\(book.title)》中的相关段落：\n"
+                    let currentIdx = book.currentChapterIndex
                     for (i, passage) in passages.enumerated() {
                         let chapterLabel = passage.chapterTitle.isEmpty ? "第\(passage.chapterIndex + 1)章" : passage.chapterTitle
                         let isCurrent = passage.chapterIndex == currentIdx ? "（当前章节）" : ""
@@ -599,8 +927,8 @@ struct AIChatPanel: View {
 
         agentService.sendMessage(
             history: messages,
-            bookTitle: book?.title ?? "未知书名",
-            author: book?.author ?? "未知作者",
+            bookTitle: book.title,
+            author: book.author,
             chapterTitle: resolvedChapterTitle,
             activeQuote: actualQuote,
             userPrompt: resolvedPrompt,
@@ -609,29 +937,31 @@ struct AIChatPanel: View {
             },
             onComplete: {
                 let answer = currentStreamingAnswer.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !answer.isEmpty {
-                    messages.append(ChatMessage(
-                        role: .assistant,
-                        content: answer,
-                        quoteContext: actualQuote,
-                        noteSource: noteSource
-                    ))
-                } else {
-                    messages.append(ChatMessage(
-                        role: .assistant,
-                        content: "（未收到来自 \(agentService.displayName) 的有效回答，请检查本地环境或切换 Agent）",
-                        quoteContext: actualQuote,
-                        noteSource: noteSource
-                    ))
+                let finalContent = answer.isEmpty
+                    ? "（未收到来自 \(agentService.displayName) 的有效回答，请检查本地环境或切换 Agent）"
+                    : answer
+                let assistantMsg = ChatMessage(
+                    role: .assistant,
+                    content: finalContent,
+                    quoteContext: actualQuote,
+                    noteSource: noteSource
+                )
+                messages.append(assistantMsg)
+                if let sessionID = currentSessionID {
+                    LibraryDatabase.shared.appendChatMessage(assistantMsg, sessionId: sessionID, bookId: book.id)
                 }
                 currentStreamingAnswer = ""
             },
             onError: { errorMsg in
-                messages.append(ChatMessage(
+                let errorMsgObj = ChatMessage(
                     role: .assistant,
                     content: "⚠️ 伴读响应异常：\(errorMsg)",
                     quoteContext: actualQuote
-                ))
+                )
+                messages.append(errorMsgObj)
+                if let sessionID = currentSessionID {
+                    LibraryDatabase.shared.appendChatMessage(errorMsgObj, sessionId: sessionID, bookId: book.id)
+                }
                 currentStreamingAnswer = ""
             }
         )

@@ -157,11 +157,12 @@ struct SidebarView: View {
                 }
             case .guide:
                 if let currentBook = book {
-                    BookGuideSheet(
+                    BookGuideContent(
                         book: currentBook,
                         initialChapter: currentBook.currentChapter,
                         chineseScriptMode: chineseScriptMode,
-                        chapterBodyProvider: onChapterBodyText
+                        chapterBodyProvider: onChapterBodyText,
+                        compactLayout: true
                     )
                 } else {
                     VStack(spacing: 8) {

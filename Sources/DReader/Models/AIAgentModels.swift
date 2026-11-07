@@ -32,7 +32,7 @@ enum AIAgentRole: String, CaseIterable, Identifiable, Codable {
     }
 }
 
-struct AINoteSource: Hashable, Sendable {
+struct AINoteSource: Hashable, Sendable, Codable {
     let bookId: UUID
     let bookTitle: String
     let chapterIndex: Int
