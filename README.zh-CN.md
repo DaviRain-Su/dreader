@@ -7,6 +7,7 @@
 [![CI](https://github.com/DaviRain-Su/dreader/actions/workflows/ci.yml/badge.svg)](https://github.com/DaviRain-Su/dreader/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/DaviRain-Su/dreader)](https://github.com/DaviRain-Su/dreader/releases)
 [![Stars](https://img.shields.io/github/stars/DaviRain-Su/dreader?style=social)](https://github.com/DaviRain-Su/dreader/stargazers)
+[![License](https://img.shields.io/github/license/DaviRain-Su/dreader)](LICENSE)
 
 [English](README.md) · **简体中文**
 
@@ -307,12 +308,12 @@ swift build -c release      # Release 构建
 
 ## 许可
 
-本仓库尚未声明顶层许可协议，默认保留所有权利。如需使用、Fork 或再分发，请开 issue 讨论。
+**MIT** —— 详见 [LICENSE](LICENSE)。可自由使用、Fork、分发。
 
-内置组件遵循各自协议：
+内置组件遵循各自协议，MIT 授权不覆盖它们：
 
 - **cmark 0.31.1** — BSD-2-Clause（`Vendor/Cmark/COPYING-BSD`）
-- **libmobi 0.12** — LGPL-3.0-or-later（`Vendor/Cmobi/COPYING-LGPL`），静态链接；源码随仓库提供于 `Vendor/Cmobi`，满足重链接义务。
+- **libmobi 0.12** — LGPL-3.0-or-later（`Vendor/Cmobi/COPYING-LGPL`），静态链接；完整源码随仓库提供于 `Vendor/Cmobi`，满足重链接义务。
 
 ---
 

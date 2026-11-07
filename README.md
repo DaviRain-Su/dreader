@@ -7,6 +7,7 @@
 [![CI](https://github.com/DaviRain-Su/dreader/actions/workflows/ci.yml/badge.svg)](https://github.com/DaviRain-Su/dreader/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/DaviRain-Su/dreader)](https://github.com/DaviRain-Su/dreader/releases)
 [![Stars](https://img.shields.io/github/stars/DaviRain-Su/dreader?style=social)](https://github.com/DaviRain-Su/dreader/stargazers)
+[![License](https://img.shields.io/github/license/DaviRain-Su/dreader)](LICENSE)
 
 **English** · [简体中文](README.zh-CN.md)
 
@@ -307,12 +308,12 @@ swift build -c release      # release build
 
 ## License
 
-This repository does not yet declare a top-level license — all rights reserved by default. If you intend to use, fork or redistribute DReader, please open an issue to discuss.
+**MIT** — see [LICENSE](LICENSE). Use it, fork it, ship it.
 
-Vendored components carry their own terms:
+Vendored components carry their own terms, and the MIT grant does not extend to them:
 
 - **cmark 0.31.1** — BSD-2-Clause (`Vendor/Cmark/COPYING-BSD`)
-- **libmobi 0.12** — LGPL-3.0-or-later (`Vendor/Cmobi/COPYING-LGPL`), statically linked; source is available in `Vendor/Cmobi`, satisfying the relink obligation.
+- **libmobi 0.12** — LGPL-3.0-or-later (`Vendor/Cmobi/COPYING-LGPL`), statically linked; its complete source ships in `Vendor/Cmobi`, satisfying the relink obligation.
 
 ---
 
