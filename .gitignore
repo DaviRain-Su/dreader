@@ -6,3 +6,9 @@ DerivedData/
 .idea/
 .vscode/
 test-output.log
+
+# 发布打包产物（本地 build-app.sh / ditto 生成，不入库）
+*.zip
+*.dmg
+*.xcarchive
+*.pkg
