@@ -255,18 +255,23 @@ final class PiRPCConnection: @unchecked Sendable {
 
     /// 字节级 LF 分帧:pi 文档警告勿用把 U+2028/U+2029 当记录边界的行读取器
     /// (Node readline 中招;实测 Swift `AsyncBytes.lines` 同样中招,LLM 输出含该字符时撕裂帧)。
-    /// 这里按 0x0A 切分,字节流内其他 Unicode 一律不视为记录边界。
+    /// 块读(64KB chunks)而非逐字节 for-await——818KB 模型清单逐字节读会挂起数十秒
+    /// (实测基准 20 分钟无输出),块读吞吐千倍级提升,分帧语义不变。
     static func lfSplitFrames(handle: FileHandle) -> AsyncStream<String> {
         AsyncStream { continuation in
             let task = Task.detached(priority: .userInitiated) {
                 var buffer = Data()
-                for try await byte in handle.bytes {
-                    if byte == 0x0A {
-                        let line = String(data: buffer, encoding: .utf8) ?? ""
-                        buffer.removeAll()
-                        continuation.yield(line)
-                    } else {
-                        buffer.append(byte)
+                while !Task.isCancelled {
+                    let chunk = handle.readData(ofLength: 64 * 1024)
+                    if chunk.isEmpty { break } // EOF
+                    buffer.append(chunk)
+                    // 在块内扫 LF,整行 yield(末尾不完整行留 buffer)
+                    var searchStart = buffer.startIndex
+                    while let lf = buffer[searchStart...].firstIndex(of: 0x0A) {
+                        let lineData = buffer[buffer.startIndex..<lf]
+                        continuation.yield(String(data: Data(lineData), encoding: .utf8) ?? "")
+                        buffer.removeSubrange(buffer.startIndex...lf)
+                        searchStart = buffer.startIndex
                     }
                 }
                 if !buffer.isEmpty, let tail = String(data: buffer, encoding: .utf8) {
