@@ -1002,7 +1002,7 @@ struct ReaderMainView: View {
                 HStack(spacing: 4.5) {
                     Image(systemName: "sparkles")
                         .font(.system(size: 11, weight: .semibold))
-                    Text("AI 伴读")
+                    Text("AI 问答")
                         .font(.system(size: 11.5, weight: .semibold))
                 }
                 .foregroundStyle(vm.isAIPanelVisible ? Color.white : Color.primary.opacity(0.75))
@@ -1014,7 +1014,7 @@ struct ReaderMainView: View {
                 )
             }
             .buttonStyle(.plain)
-            .help("展开/折叠 AI 伴读面板 (⌘+Shift+K)")
+            .help("展开/折叠 AI 问答面板 (⌘+Shift+K)")
         }
         .padding(.horizontal, 14)
         .frame(height: 40)

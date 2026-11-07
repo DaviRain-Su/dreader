@@ -133,6 +133,24 @@ final class PiRPCConnection: @unchecked Sendable {
         }
     }
 
+    /// 同步写一帧命令(不等待响应;actor 上下文里不能 await 时用)
+    func sendCommandSync(_ payload: [String: Any]) throws {
+        var framed = payload
+        let id: String = stateLock.withLock {
+            requestCounter += 1
+            return "dreader-req-\(requestCounter)"
+        }
+        framed["id"] = id
+        let data = try JSONSerialization.data(withJSONObject: framed)
+        guard process.isRunning else {
+            throw NSError(domain: "PiRPC", code: 2,
+                          userInfo: [NSLocalizedDescriptionKey: "pi RPC 进程未在运行"])
+        }
+        var line = data
+        line.append(0x0A) // LF 终止(pi 协议帧规则)
+        try stdinPipe.fileHandleForWriting.write(contentsOf: line)
+    }
+
     /// 响应行 → 字典(失败或非 JSON 返回 success=false 的兜底字典)
     static func parseResponseLine(_ line: String) -> [String: Any] {
         guard let data = line.data(using: .utf8),

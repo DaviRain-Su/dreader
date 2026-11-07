@@ -171,7 +171,7 @@ struct DReaderApp: App {
 
                 Divider()
 
-                Button("切换 AI 伴读面板") {
+                Button("切换 AI 问答面板") {
                     withAnimation {
                         viewModel.isAIPanelVisible.toggle()
                     }

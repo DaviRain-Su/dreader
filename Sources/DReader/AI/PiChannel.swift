@@ -16,6 +16,8 @@ actor PiChannel: PiTranslationDriving {
     private var systemPrompt: String?
     private var connection: PiRPCConnection?
     private var currentModel: String?
+    /// 进程刚启动、get_state 尚未回包时的乐观值(启动参数注入的模型)
+    private var pendingModel: String?
 
     nonisolated var id: String { laneID }
 
@@ -41,6 +43,13 @@ actor PiChannel: PiTranslationDriving {
         try conn.start(extraArgs: extraArgs)
         connection = conn
         currentModel = nil
+    }
+
+    /// 重启子进程(模型切换后生效;system prompt 沿用 lane 当前值)
+    func restart() throws {
+        connection?.terminate()
+        connection = nil
+        try ensureRunning()
     }
 
     /// 发送 prompt 并流式回传事件,直到 agent_settled(流自动结束)。
@@ -130,6 +139,62 @@ actor PiChannel: PiTranslationDriving {
             throw PiAgentError.commandFailed(command: "set_model", detail: PiRPCProtocol.errorMessage(from: response))
         }
         currentModel = "\(provider)/\(modelID)"
+    }
+
+    /// 同步设置模型(actor 上下文不能 await 时用;不等待响应,乐观更新)
+    func setModelSync(provider: String, modelID: String) throws {
+        let full = "\(provider)/\(modelID)"
+        guard currentModel != full else { return }
+        guard let conn = connection, conn.isRunning else {
+            throw PiAgentError.channelNotRunning(laneID: laneID)
+        }
+        try conn.sendCommandSync([
+            "type": "set_model",
+            "provider": provider,
+            "modelId": modelID,
+            "id": PiRequestID.next(),
+        ])
+        currentModel = full
+        pendingModel = full
+    }
+
+    /// 拉取 pi 可用模型清单(get_available_models;1448 条含全部 provider)
+    func fetchAvailableModels() async throws -> [PiRPCProtocol.ModelInfo] {
+        try ensureRunning()
+        guard let conn = connection else {
+            throw PiAgentError.channelNotRunning(laneID: laneID)
+        }
+        let responseLine = try await conn.sendCommand(
+            PiRPCProtocol.encodeGetAvailableModelsDict(requestID: PiRequestID.next())
+        )
+        let response = PiRPCConnection.parseResponseLine(responseLine)
+        guard response["success"] as? Bool == true else {
+            throw PiAgentError.commandFailed(command: "get_available_models",
+                                            detail: PiRPCProtocol.errorMessage(from: response))
+        }
+        return PiRPCProtocol.parseAvailableModels(from: response)
+    }
+
+    /// 拉取 pi 当前模型(get_state → model);回包前回落到乐观值
+    func fetchCurrentModel() async throws -> (provider: String, modelID: String)? {
+        try ensureRunning()
+        guard let conn = connection else {
+            throw PiAgentError.channelNotRunning(laneID: laneID)
+        }
+        let responseLine = try await conn.sendCommand([
+            "type": "get_state",
+            "id": PiRequestID.next(),
+        ])
+        let response = PiRPCConnection.parseResponseLine(responseLine)
+        guard response["success"] as? Bool == true,
+              let parsed = PiRPCProtocol.parseCurrentModel(from: response) else {
+            // get_state 慢/失败:回落到启动参数注入的乐观值
+            if let pendingModel, let slash = pendingModel.firstIndex(of: "/") {
+                return (String(pendingModel[..<slash]), String(pendingModel[pendingModel.index(after: slash)...]))
+            }
+            return nil
+        }
+        return parsed
     }
 
     /// 有序退出子进程

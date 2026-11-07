@@ -819,6 +819,18 @@ private struct LiveStreamingRow: View {
 struct AIAgentSettingsSheet: View {
     @Bindable var agentService: PiAgentService
     @Environment(\.dismiss) private var dismiss
+    @State private var modelSearch: String = ""
+
+    /// 模型清单按搜索词过滤(1448 条全列不现实;provider 前缀 + 模型名/ID 双匹配)
+    private var filteredModels: [PiRPCProtocol.ModelInfo] {
+        let q = modelSearch.trimmingCharacters(in: .whitespaces)
+        guard !q.isEmpty else { return agentService.availableModels }
+        return agentService.availableModels.filter {
+            $0.provider.localizedCaseInsensitiveContains(q)
+                || $0.modelID.localizedCaseInsensitiveContains(q)
+                || $0.name.localizedCaseInsensitiveContains(q)
+        }
+    }
 
     var body: some View {
         VStack(spacing: 16) {
@@ -836,30 +848,99 @@ struct AIAgentSettingsSheet: View {
             .padding(.bottom, 8)
 
             Form {
+                // 当前模型(用户要求:默认是什么模型必须可见)
                 HStack {
-                    Text("驱动类型:")
-                        .font(.system(size: 11, weight: .medium))
-                    Text("pi agent RPC(长驻子进程池)")
+                    Text("当前模型:")
+                        .font(.system(size: 12, weight: .medium))
+                    if agentService.isLoadingModels {
+                        ProgressView()
+                            .controlSize(.small)
+                        Text("拉取中…")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                    } else if agentService.currentModel.isEmpty {
+                        Text("未知(未获取到)")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Text(agentService.currentModel)
+                            .font(.system(size: 11, design: .monospaced))
+                            .textSelection(.enabled)
+                    }
+                    Spacer()
+                    Button("重新检测") {
+                        agentService.checkConnection()
+                        agentService.refreshModels()
+                    }
+                    .font(.system(size: 12))
+                }
+
+                Text("状态:")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.clear)
+                    .overlay(alignment: .leading) {
+                        HStack {
+                            Text("状态:")
+                                .font(.system(size: 12))
+                            Text(statusText)
+                                .font(.system(size: 11))
+                                .foregroundStyle(statusColor)
+                        }
+                    }
+
+                Divider()
+
+                // 模型选择:搜索过滤 + 列表(点击即切换,全 lane 生效)
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "cpu")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                        Text("切换模型(聊天 / 导读 / 翻译共用)")
+                            .font(.system(size: 12, weight: .medium))
+                    }
+                    TextField("搜索 provider 或模型名(如 magpie、glm、claude)…", text: $modelSearch)
+                        .textFieldStyle(.roundedBorder)
                         .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
+
+                    if agentService.availableModels.isEmpty, !agentService.isLoadingModels {
+                        Text("模型清单为空:请先运行 `pi` 完成登录,或点「重新检测」。")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                    } else {
+                        List(filteredModels.prefix(400)) { model in
+                            Button {
+                                agentService.selectModel(provider: model.provider, modelID: model.modelID)
+                            } label: {
+                                HStack {
+                                    VStack(alignment: .leading, spacing: 1) {
+                                        Text(model.displayLabel)
+                                            .font(.system(size: 11.5))
+                                            .lineLimit(1)
+                                        Text(model.id)
+                                            .font(.system(size: 9.5, design: .monospaced))
+                                            .foregroundStyle(.secondary)
+                                            .lineLimit(1)
+                                    }
+                                    Spacer()
+                                    if model.id == agentService.currentModel {
+                                        Image(systemName: "checkmark")
+                                            .font(.system(size: 10, weight: .bold))
+                                            .foregroundStyle(Color.accentColor)
+                                    }
+                                }
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                        }
+                        .listStyle(.plain)
+                        .frame(height: 180)
+                    }
                 }
 
                 Text("模型与密钥由 pi 统一管理:运行 `pi` 一次完成登录/配置,或在 ~/.pi/agent/models.json 配置 provider。DReader 无需单独配置。")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
-
-                HStack {
-                    Text("状态:")
-                        .font(.system(size: 12))
-                    Text(statusText)
-                        .font(.system(size: 11))
-                        .foregroundStyle(statusColor)
-                }
-
-                Button("重新检测") {
-                    agentService.checkConnection()
-                }
-                .font(.system(size: 12))
             }
 
             // Connection Help Note
@@ -869,7 +950,7 @@ struct AIAgentSettingsSheet: View {
                 Text("• 4 条常驻 RPC 通道:聊天 1 + 导读 1 + 翻译 2,互不阻塞。")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
-                Text("• 模型配置一次,聊天/导读/翻译共用;停止翻译不影响聊天。")
+                Text("• 模型切换对全部通道生效;停止翻译不影响聊天。")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
                 Text("• 安装:curl -fsSL https://pi.dev/install.sh | sh")
@@ -884,6 +965,7 @@ struct AIAgentSettingsSheet: View {
         .frame(width: 520)
         .onAppear {
             agentService.checkConnection()
+            agentService.refreshModels()
         }
     }
 

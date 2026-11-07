@@ -31,6 +31,15 @@ final class PiAgentService: @unchecked Sendable {
     /// 伴读思考角色(头像菜单选择;决定聊天 lane 的 system prompt)
     var role: AIAgentRole = .deepReader
 
+    /// pi 可用模型清单(设置 sheet Picker;首次打开设置页时拉取)
+    var availableModels: [PiRPCProtocol.ModelInfo] = []
+
+    /// 当前模型("provider/modelID";chat lane 的 get_state 实测值)
+    var currentModel: String = ""
+
+    /// 模型清单是否在拉取中
+    var isLoadingModels: Bool = false
+
     // MARK: - 非 UI 内部(@ObservationIgnored:锁内写不触发 SwiftUI 重入)
 
     /// 聊天/导读 lane 的 system prompt(替换 pi 默认 coding assistant prompt)
@@ -81,14 +90,17 @@ final class PiAgentService: @unchecked Sendable {
 
     // MARK: - 状态展示(替代 currentPreset.name 的展示文案)
 
-    /// 伴读引擎展示名(设置面板 / 聊天状态行引用)
+    /// 伴读引擎展示名(设置面板 / 聊天状态行引用;带当前模型)
     var displayName: String {
+        let base: String
         switch connectionStatus {
-        case .connected(let detail): return "pi agent(\(detail))"
-        case .checking: return "pi agent(连接中)"
-        case .failed: return "pi agent(未就绪)"
-        case .untested: return "pi agent"
+        case .connected(let detail): base = "pi agent(\(detail))"
+        case .checking: base = "pi agent(连接中)"
+        case .failed: base = "pi agent(未就绪)"
+        case .untested: base = "pi agent"
         }
+        guard !currentModel.isEmpty else { return base }
+        return "\(base) · \(currentModel)"
     }
 
     /// 探测 pi 二进制并置状态(启动/设置页刷新时调用)
@@ -100,6 +112,65 @@ final class PiAgentService: @unchecked Sendable {
             connectionStatus = .connected("就绪")
         } else {
             connectionStatus = .failed("未找到 pi CLI,请安装:curl -fsSL https://pi.dev/install.sh | sh")
+        }
+    }
+
+    // MARK: - 模型选择(get_available_models / set_model)
+
+    /// 拉取 pi 可用模型清单 + 当前模型(设置 sheet onAppear / 重新检测时调用)
+    func refreshModels() {
+        guard !isLoadingModels else { return }
+        isLoadingModels = true
+        let lane = chatLane
+        Task { [weak self] in
+            guard let self else { return }
+            var models: [PiRPCProtocol.ModelInfo] = []
+            var current = ""
+            do {
+                models = try await lane.fetchAvailableModels()
+            } catch {
+                NSLog("[PiAgent] get_available_models 失败: %@", error.localizedDescription)
+            }
+            do {
+                if let cur = try await lane.fetchCurrentModel() {
+                    current = "\(cur.provider)/\(cur.modelID)"
+                }
+            } catch {
+                NSLog("[PiAgent] get_state 失败: %@", error.localizedDescription)
+            }
+            await MainActor.run {
+                self.availableModels = models
+                self.currentModel = current
+                self.isLoadingModels = false
+            }
+        }
+    }
+
+    /// 切换模型:全 lane 同步 set_model(chat/guide/translate 共用一份 pi 配置面)
+    func selectModel(provider: String, modelID: String) {
+        let full = "\(provider)/\(modelID)"
+        guard currentModel != full else { return }
+        currentModel = full // 乐观更新,失败由下次 refreshModels 校正
+        let chat = chatLane
+        let guide = guideLane
+        translateLaneLock.lock()
+        let lanes = translateLanes
+        translateLaneLock.unlock()
+        Task { [weak self] in
+            var failures: [String] = []
+            for lane in [chat, guide] + lanes {
+                do {
+                    try await lane.setModel(provider: provider, modelID: modelID)
+                } catch {
+                    failures.append(lane.laneID)
+                    NSLog("[PiAgent] set_model lane %@ 失败: %@", lane.laneID, error.localizedDescription)
+                }
+            }
+            if !failures.isEmpty {
+                await MainActor.run {
+                    NSLog("[PiAgent] set_model 部分失败 lane: %@", failures.joined(separator: ","))
+                }
+            }
         }
     }
 

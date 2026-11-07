@@ -51,15 +51,51 @@ enum PiRPCProtocol {
     }
 
     /// 编码 `get_available_models` 命令帧
-    static func encodeGetAvailableModels(requestID: String) -> String {
-        let payload: [String: Any] = [
-            "type": "live_snapshot" /* 占位,由 encodePayload 生成实际帧 */,
-            "id": requestID,
-        ]
-        // get_available_models 无额外参数,直接编码
-        var actual: [String: Any] = payload
-        actual["type"] = "get_available_models"
-        return String(data: encodePayload(actual), encoding: .utf8) ?? "{}\n"
+    static func encodeGetAvailableModels(requestID: String) -> Data {
+        encodePayload(["type": "get_available_models", "id": requestID])
+    }
+
+    /// 编码 `get_available_models` 命令帧(字典形态,供 sendCommand 注入 id)
+    static func encodeGetAvailableModelsDict(requestID: String) -> [String: Any] {
+        ["type": "get_available_models", "id": requestID]
+    }
+
+    // MARK: - 模型清单/状态解析
+
+    /// pi 模型条目(从 get_available_models 响应提取;纯值 Sendable)
+    struct ModelInfo: Equatable, Sendable, Identifiable {
+        var provider: String
+        var modelID: String
+        var name: String
+
+        var id: String { "\(provider)/\(modelID)" }
+        /// 展示名:provider 有歧义时带前缀
+        var displayLabel: String {
+            name.isEmpty ? modelID : name
+        }
+    }
+
+    /// 解析 get_available_models 响应 → 模型清单
+    static func parseAvailableModels(from response: [String: Any]) -> [ModelInfo] {
+        guard let data = response["data"] as? [String: Any],
+              let models = data["models"] as? [[String: Any]] else { return [] }
+        return models.compactMap { m in
+            guard let provider = m["provider"] as? String,
+                  let modelID = m["id"] as? String else { return nil }
+            return ModelInfo(
+                provider: provider,
+                modelID: modelID,
+                name: m["name"] as? String ?? ""
+            )
+        }
+    }
+
+    /// 解析 get_state 响应 → 当前模型(provider/modelID)
+    static func parseCurrentModel(from response: [String: Any]) -> (provider: String, modelID: String)? {
+        guard let data = response["data"] as? [String: Any],
+              let model = data["model"] as? [String: Any],
+              let modelID = model["id"] as? String else { return nil }
+        return (model["provider"] as? String ?? "", modelID)
     }
 
     // MARK: - 事件解析
