@@ -6,7 +6,6 @@ enum SidebarTab: String, CaseIterable, Identifiable {
     case highlights = "划线笔记"
     case bookmarks = "书签"
     case xray = "X-Ray"
-    case guide = "导读"
     case library = "藏书"
 
     var id: String { rawValue }
@@ -17,7 +16,6 @@ enum SidebarTab: String, CaseIterable, Identifiable {
         case .highlights: return "highlighter"
         case .bookmarks: return "bookmark.fill"
         case .xray: return "atom"
-        case .guide: return "sparkles"
         case .library: return "books.vertical.fill"
         }
     }
@@ -40,8 +38,6 @@ struct SidebarView: View {
     var onSearchTerm: ((String) -> Void)? = nil
     var onAskAIAboutTerm: ((String) -> Void)? = nil
     var onOpenWeChatSync: (() -> Void)? = nil
-    /// 导读 tab 引导打开 AI 面板(导读已融合进去,面板是唯一入口)
-    var onOpenAIPanel: (() -> Void)? = nil
     var chineseScriptMode: ChineseScriptMode = .original
     var onChapterBodyText: (() -> String)? = nil
     let onDeleteBook: (UUID) -> Void
@@ -157,24 +153,6 @@ struct SidebarView: View {
                         Spacer()
                     }
                 }
-            case .guide:
-                // 导读已融合进 AI 面板(唯一入口);这里引导用户过去
-                VStack(spacing: 10) {
-                    Spacer()
-                    Image(systemName: "sparkles")
-                        .font(.system(size: 28))
-                        .foregroundStyle(.secondary)
-                    Text("导读已融入 AI 伴读面板")
-                        .font(.system(size: 12.5, weight: .medium))
-                    Button("打开 AI 面板") {
-                        onOpenAIPanel?()
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.small)
-                    .padding(.top, 4)
-                    Spacer()
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
             case .library:
                 libraryListView
             }
@@ -272,8 +250,6 @@ struct SidebarView: View {
             return "折角书签 · 共 \(currentBookBookmarks.count) 个"
         case .xray:
             return "全书透视 · X-Ray 深度解析"
-        case .guide:
-            return "AI 导读 · 全书地图与章节速览"
         case .library:
             return "私人藏书 · 共 \(books.count) 卷"
         }

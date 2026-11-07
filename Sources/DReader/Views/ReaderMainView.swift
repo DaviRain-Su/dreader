@@ -418,11 +418,6 @@ struct ReaderMainView: View {
             onOpenWeChatSync: {
                 vm.showWeChatSyncModal = true
             },
-            onOpenAIPanel: {
-                withAnimation(.easeInOut(duration: 0.2)) {
-                    vm.isAIPanelVisible = true
-                }
-            },
             chineseScriptMode: vm.settings.chineseScriptMode,
             onChapterBodyText: { [weak vm] in
                 vm?.currentChapterBodyText(maxLength: 2400) ?? ""
