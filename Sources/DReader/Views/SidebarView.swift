@@ -40,6 +40,8 @@ struct SidebarView: View {
     var onSearchTerm: ((String) -> Void)? = nil
     var onAskAIAboutTerm: ((String) -> Void)? = nil
     var onOpenWeChatSync: (() -> Void)? = nil
+    /// 导读 tab 引导打开 AI 面板(导读已融合进去,面板是唯一入口)
+    var onOpenAIPanel: (() -> Void)? = nil
     var chineseScriptMode: ChineseScriptMode = .original
     var onChapterBodyText: (() -> String)? = nil
     let onDeleteBook: (UUID) -> Void
@@ -156,26 +158,23 @@ struct SidebarView: View {
                     }
                 }
             case .guide:
-                if let currentBook = book {
-                    BookGuideContent(
-                        book: currentBook,
-                        initialChapter: currentBook.currentChapter,
-                        chineseScriptMode: chineseScriptMode,
-                        chapterBodyProvider: onChapterBodyText,
-                        compactLayout: true
-                    )
-                } else {
-                    VStack(spacing: 8) {
-                        Spacer()
-                        Image(systemName: "sparkles")
-                            .font(.system(size: 28))
-                            .foregroundStyle(.secondary)
-                        Text("请先打开一本书以查看 AI 导读")
-                            .font(.system(size: 12.5))
-                            .foregroundStyle(.secondary)
-                        Spacer()
+                // 导读已融合进 AI 面板(唯一入口);这里引导用户过去
+                VStack(spacing: 10) {
+                    Spacer()
+                    Image(systemName: "sparkles")
+                        .font(.system(size: 28))
+                        .foregroundStyle(.secondary)
+                    Text("导读已融入 AI 伴读面板")
+                        .font(.system(size: 12.5, weight: .medium))
+                    Button("打开 AI 面板") {
+                        onOpenAIPanel?()
                     }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                    .padding(.top, 4)
+                    Spacer()
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             case .library:
                 libraryListView
             }

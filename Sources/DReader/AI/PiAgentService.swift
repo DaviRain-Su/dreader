@@ -52,6 +52,58 @@ final class PiAgentService: @unchecked Sendable {
     你是一位兼备信达雅的文学翻译名家。按用户消息中的指令翻译文本,直接输出译文,禁止任何解释、引言、前后缀或 Markdown 围栏。
     """
 
+    // MARK: - 艾德勒四层次提问模型(《如何阅读一本书》产品化)
+
+    /// 阅读四层次(检视→分析→主题→自我要求);决定提问的 prompt 形态与 AI 的回答框架
+    enum ReadingLevel: String, CaseIterable, Identifiable {
+        /// 检视阅读:这本书在谈什么?值得我读吗?
+        case inspection = "检视"
+        /// 分析阅读:作者的主旨/论证?说得有道理吗?
+        case analysis = "分析"
+        /// 主题阅读:这本书和其他书怎么看同一问题?
+        case syntopical = "主题"
+        /// 自我要求:这本书跟我有什么关系?
+        case personal = "自我要求"
+
+        var id: String { rawValue }
+
+        var icon: String {
+            switch self {
+            case .inspection: return "book.pages"
+            case .analysis: return "magnifyingglass"
+            case .syntopical: return "books.vertical.fill"
+            case .personal: return "person.crop.circle"
+            }
+        }
+
+        /// 一句话说明(快捷 chips 与回答框架共用)
+        var hint: String {
+            switch self {
+            case .inspection: return "这本书在谈什么?值得读吗?"
+            case .analysis: return "作者的主旨与论证?说得有道理吗?"
+            case .syntopical: return "和其他书怎么看同一问题?"
+            case .personal: return "这本书跟我有什么关系?"
+            }
+        }
+
+        /// 回答框架(拼进 user prompt;让 AI 按层次组织回答)
+        var answerFramework: String {
+            switch self {
+            case .inspection:
+                return "按检视阅读框架回答:1)这本书整体在谈什么 2)作者想解决什么问题 3)值不值得深入读、为什么。"
+            case .analysis:
+                return "按分析阅读框架回答:1)作者的主旨与关键论证 2)你说有道理/没道理,理由是什么 3)这与我划线的这段有何关系。"
+            case .syntopical:
+                return "按主题阅读框架回答:1)各书对同一问题的立场 2)分歧点在哪 3)若互相反驳会怎样。"
+            case .personal:
+                return "按「自我要求的读者」框架回答:1)这些内容跟我有什么关系 2)我该把它用在哪里 3)如果只记一件事,是哪件。"
+            }
+        }
+    }
+
+    /// 当前层次(快捷 chips 选中态;决定 sendMessage 的回答框架)
+    var readingLevel: ReadingLevel = .analysis
+
     /// 聊天 lane 默认角色(与 chatSystemPrompt 对应)
     static let chatSystemPromptRole = AIAgentRole.deepReader
 
@@ -263,14 +315,17 @@ final class PiAgentService: @unchecked Sendable {
             Task { await lane.updateSystemPrompt(rolePrompt) }
         }
 
-        // 阅读语境拼进 user prompt(system prompt 由 lane 启动参数固定;
-        // pi 的 prompt 命令不支持每请求换 system)
+        // 阅读语境 + 四层次回答框架拼进 user prompt
+        // (system prompt 由 lane 启动参数固定;pi 的 prompt 命令不支持每请求换 system)
+        let framework = readingLevel.answerFramework
         let contextPrefixed = """
         【当前阅读语境】
         书籍:《\(bookTitle)》
         作者:\(author)
         章节:\(chapterTitle)
         \(activeQuote.flatMap { "【选中的重点段落】:\n『\($0)』\n" } ?? "")
+
+        【回答框架】\(framework)
 
         \(userPrompt)
         """

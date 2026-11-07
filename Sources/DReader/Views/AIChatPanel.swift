@@ -31,6 +31,7 @@ struct AIChatPanel: View {
     /// Jump-to-text in the reader (clickable AI citations)
     var onJumpToOriginalText: ((String) -> Void)? = nil
     var onSaveMessageAsNote: ((ChatMessage) -> Void)? = nil
+    var onSaveMessageAsReviewCard: ((ChatMessage) -> Void)? = nil
     /// 初始段(外部入口可直达导读;默认问答)
     var initialSection: PanelSection = .chat
 
@@ -81,13 +82,19 @@ struct AIChatPanel: View {
             sectionSelector
 
             if panelSection == .guide {
-                // 导读段:读伴式三分区(全书/章节/笔记)融合进面板
+                // 导读段:读伴式三分区(全书/章节/笔记)融合进面板;结论可追问进问答流
                 if let book {
                     BookGuideContent(
                         book: book,
                         initialChapter: currentChapter,
                         chapterBodyProvider: chapterBodyText,
-                        compactLayout: true
+                        compactLayout: true,
+                        onFollowUp: { quote in
+                            withAnimation(.easeInOut(duration: 0.15)) {
+                                panelSection = .chat
+                            }
+                            sendCustomPrompt("请结合全书语境,深入展开这条导读结论,并举书中原文佐证:", quote: quote)
+                        }
                     )
                 } else {
                     VStack(spacing: 8) {
@@ -218,6 +225,8 @@ struct AIChatPanel: View {
                                 onJumpToOriginalText?(quoted)
                             }, onSaveAsNote: { message in
                                 onSaveMessageAsNote?(message)
+                            }, onSaveAsReviewCard: { message in
+                                onSaveMessageAsReviewCard?(message)
                             })
                             .id(msg.id)
                         }
@@ -791,6 +800,36 @@ struct AIChatPanel: View {
     private var quickPromptChipsBar: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 6) {
+                // 艾德勒四层次 chips(选中态高亮;选中决定 sendMessage 的回答框架)
+                ForEach(PiAgentService.ReadingLevel.allCases) { level in
+                    Button {
+                        agentService.readingLevel = level
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: level.icon)
+                                .font(.system(size: 9))
+                                .foregroundStyle(agentService.readingLevel == level ? Color.accentColor : .secondary.opacity(0.8))
+                            Text(level.rawValue)
+                                .font(.system(size: 11, weight: .medium))
+                        }
+                        .padding(.horizontal, 9)
+                        .padding(.vertical, 5)
+                        .background(agentService.readingLevel == level ? Color.accentColor.opacity(0.1) : Color.primary.opacity(0.04))
+                        .clipShape(Capsule())
+                        .overlay(
+                            Capsule().stroke(
+                                agentService.readingLevel == level ? Color.accentColor.opacity(0.35) : Color.primary.opacity(0.08),
+                                lineWidth: 0.5
+                            )
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    .help(level.hint)
+                }
+
+                Divider()
+                    .frame(height: 14)
+
                 ForEach(quickPrompts, id: \.title) { item in
                     Button {
                         sendCustomPrompt(item.prompt)
@@ -893,6 +932,16 @@ struct AIChatPanel: View {
             libContext += "请站在全书架全局宏观视角，融会贯通书架中各名著的思想脉络，进行跨文本深度对照与综合剖析。"
             resolvedPrompt = prompt + libContext
 
+        case .book where agentService.readingLevel == .syntopical:
+            // 主题阅读:即使 scope 是本书,也把书架目录带上(艾德勒第三层:跟其他书比)
+            resolvedChapterTitle = "【主题阅读】" + (currentChapter?.title ?? "")
+            var syntopicalContext = "\n\n【主题阅读·书架藏书目录(用于跨书比对)】：\n"
+            for b in allBooks where b.id != book.id {
+                syntopicalContext += "- 《\(b.title)》 作者：\(b.author)，共 \(b.chapters.count) 章\n"
+            }
+            syntopicalContext += "请把本书与书架中主题相关的书做跨文本对照:立场、分歧、互相反驳。"
+            resolvedPrompt = prompt + syntopicalContext
+
         case .book:
             resolvedChapterTitle = "【全书全局视角】" + (currentChapter?.title ?? "")
             var bookContext = "\n\n【本书全文语境检索（从全书段落索引中精准命中）】：\n"
@@ -979,8 +1028,10 @@ private struct MessageRow: View {
     let message: ChatMessage
     var onJumpToQuotation: ((String) -> Void)? = nil
     var onSaveAsNote: ((ChatMessage) -> Void)? = nil
+    var onSaveAsReviewCard: ((ChatMessage) -> Void)? = nil
 
     @State private var savedFeedback: Bool = false
+    @State private var reviewFeedback: Bool = false
 
     /// Extracts verbatim quotations from AI markdown answers so they become
     /// clickable "jump to text" chips (in both 「…」 and "…" styles).
@@ -1066,6 +1117,26 @@ private struct MessageRow: View {
                             }
                             .buttonStyle(.plain)
                             .help("把这条 AI 解读保存到本书的划线与思考库")
+                        }
+
+                        // 艾德勒「自我要求」层:回答转复习卡(接 SM-2 到期队列)
+                        if let review = onSaveAsReviewCard, message.noteSource != nil {
+                            Button {
+                                review(message)
+                                reviewFeedback = true
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                                    reviewFeedback = false
+                                }
+                            } label: {
+                                HStack(spacing: 2) {
+                                    Image(systemName: reviewFeedback ? "checkmark.circle.fill" : "rectangle.stack.badge.plus")
+                                    Text(reviewFeedback ? "已入复习" : "转复习卡")
+                                }
+                                .font(.system(size: 10))
+                                .foregroundStyle(reviewFeedback ? Color.green : Color.secondary)
+                            }
+                            .buttonStyle(.plain)
+                            .help("把这条解读做成复习卡,进入 SM-2 到期队列(这本书跟我有什么关系)")
                         }
                     }
 

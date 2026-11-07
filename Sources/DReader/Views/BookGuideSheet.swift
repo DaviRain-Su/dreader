@@ -12,6 +12,8 @@ struct BookGuideContent: View {
     var chapterBodyProvider: (() -> String)? = nil
     /// 嵌在窄面板时用紧凑字号(侧栏 320–560;书架 sheet 680)
     var compactLayout: Bool = false
+    /// 追问回调(面板嵌入时注入):把导读结论作为引文送进问答流(艾德勒:导读是入口而非孤岛)
+    var onFollowUp: ((String) -> Void)? = nil
 
     @State private var selectedTab: GuideTab = .wholeBook
     @State private var wholeGuide: BookGuide?
@@ -119,18 +121,18 @@ struct BookGuideContent: View {
                     errorBanner(error)
                 }
                 if let guide = wholeGuide {
-                    guideCard(title: "这本书在解决什么问题", systemImage: "questionmark.circle") {
+                    guideCard(title: "这本书在解决什么问题", systemImage: "questionmark.circle",
+                              followUpQuote: guide.whatProblem) {
                         Text(guide.whatProblem)
                     }
                     if !guide.mapEntries.isEmpty {
                         guideCard(title: "全书地图", systemImage: "map") {
                             VStack(alignment: .leading, spacing: 10) {
                                 ForEach(Array(guide.mapEntries.enumerated()), id: \.offset) { _, entry in
-                                    HStack(alignment: .top, spacing: 8) {
-                                        Text(entry.range)
-                                            .font(.system(size: 11, weight: .semibold))
-                                            .foregroundStyle(Color(hex: "#1F3FB0"))
-                                            .frame(minWidth: 64, alignment: .leading)
+                                    FollowUpRow(
+                                        quote: "全书地图「\(entry.range)」:\(entry.summary)",
+                                        onFollowUp: onFollowUp
+                                    ) {
                                         Text(entry.summary)
                                             .font(.system(size: bodyFontSize))
                                             .foregroundStyle(Color(hex: "#141414"))
@@ -139,20 +141,26 @@ struct BookGuideContent: View {
                             }
                         }
                     }
-                    guideCard(title: "怎么读", systemImage: "book") {
+                    guideCard(title: "怎么读", systemImage: "book",
+                              followUpQuote: guide.readingAdvice) {
                         Text(guide.readingAdvice)
                     }
                     if !guide.keyTerms.isEmpty {
                         guideCard(title: "关键概念", systemImage: "lightbulb") {
                             VStack(alignment: .leading, spacing: 8) {
                                 ForEach(guide.keyTerms, id: \.term) { term in
-                                    HStack(alignment: .firstTextBaseline, spacing: 6) {
-                                        Text(term.term)
-                                            .font(.system(size: 11, weight: .semibold))
-                                            .foregroundStyle(Color(hex: "#1F3FB0"))
-                                        Text(term.definition)
-                                            .font(.system(size: bodyFontSize))
-                                            .foregroundStyle(Color(hex: "#141414"))
+                                    FollowUpRow(
+                                        quote: "关键概念「\(term.term)」:\(term.definition)",
+                                        onFollowUp: onFollowUp
+                                    ) {
+                                        HStack(alignment: .firstTextBaseline, spacing: 6) {
+                                            Text(term.term)
+                                                .font(.system(size: 11, weight: .semibold))
+                                                .foregroundStyle(Color(hex: "#1F3FB0"))
+                                            Text(term.definition)
+                                                .font(.system(size: bodyFontSize))
+                                                .foregroundStyle(Color(hex: "#141414"))
+                                        }
                                     }
                                 }
                             }
@@ -184,16 +192,22 @@ struct BookGuideContent: View {
                     errorBanner(error)
                 }
                 if let guide = chapterGuide {
-                    guideCard(title: "本章速览", systemImage: "doc.text") {
+                    guideCard(title: "本章速览", systemImage: "doc.text",
+                              followUpQuote: "本章速览:\(guide.overview)") {
                         Text(guide.overview)
                     }
                     if !guide.backgroundPoints.isEmpty {
                         guideCard(title: "背景与概念", systemImage: "books.vertical") {
                             VStack(alignment: .leading, spacing: 8) {
                                 ForEach(Array(guide.backgroundPoints.enumerated()), id: \.offset) { _, point in
-                                    HStack(alignment: .top, spacing: 6) {
-                                        Circle().fill(Color(hex: "#1F3FB0")).frame(width: 4, height: 4).padding(.top, 6)
-                                        Text(point).font(.system(size: bodyFontSize)).foregroundStyle(Color(hex: "#141414"))
+                                    FollowUpRow(
+                                        quote: "背景要点:\(point)",
+                                        onFollowUp: onFollowUp
+                                    ) {
+                                        HStack(alignment: .top, spacing: 6) {
+                                            Circle().fill(Color(hex: "#1F3FB0")).frame(width: 4, height: 4).padding(.top, 6)
+                                            Text(point).font(.system(size: bodyFontSize)).foregroundStyle(Color(hex: "#141414"))
+                                        }
                                     }
                                 }
                             }
@@ -203,10 +217,15 @@ struct BookGuideContent: View {
                         guideCard(title: "苏格拉底之问", systemImage: "questionmark.bubble") {
                             VStack(alignment: .leading, spacing: 10) {
                                 ForEach(Array(guide.socraticQuestions.enumerated()), id: \.offset) { idx, q in
-                                    Text("\(idx + 1). \(q)")
-                                        .font(.system(size: bodyFontSize, design: .serif))
-                                        .foregroundStyle(Color(hex: "#141414"))
-                                        .lineSpacing(4)
+                                    FollowUpRow(
+                                        quote: "苏格拉底之问:\(q)",
+                                        onFollowUp: onFollowUp
+                                    ) {
+                                        Text("\(idx + 1). \(q)")
+                                            .font(.system(size: bodyFontSize, design: .serif))
+                                            .foregroundStyle(Color(hex: "#141414"))
+                                            .lineSpacing(4)
+                                    }
                                 }
                             }
                         }
@@ -305,7 +324,7 @@ struct BookGuideContent: View {
     // MARK: - 复用组件
 
     private func guideCard<Content: View>(
-        title: String, systemImage: String, @ViewBuilder content: () -> Content
+        title: String, systemImage: String, followUpQuote: String? = nil, @ViewBuilder content: () -> Content
     ) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             Label(title, systemImage: systemImage)
@@ -315,6 +334,24 @@ struct BookGuideContent: View {
                 .font(.system(size: bodyFontSize, design: .serif))
                 .foregroundStyle(Color(hex: "#141414"))
                 .lineSpacing(5)
+            if let followUpQuote, let onFollowUp {
+                Button {
+                    onFollowUp(followUpQuote)
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "bubble.left.and.bubble.right")
+                            .font(.system(size: 9))
+                        Text("追问这条")
+                            .font(.system(size: 10.5, weight: .medium))
+                    }
+                    .foregroundStyle(Color(hex: "#1F3FB0").opacity(0.85))
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 4)
+                    .background(Color(hex: "#1F3FB0").opacity(0.08))
+                    .clipShape(Capsule())
+                }
+                .buttonStyle(.plain)
+            }
         }
         .padding(cardPadding)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -534,4 +571,28 @@ struct GuideNote: Codable, Identifiable, Sendable, Equatable {
     var id: UUID = UUID()
     var content: String
     var createdAt: Date
+}
+
+/// 可追问行:整行内容可点,把引文送进问答流(艾德勒:导读结论应可追问而非孤岛)
+private struct FollowUpRow<Content: View>: View {
+    let quote: String
+    let onFollowUp: ((String) -> Void)?
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
+        if let onFollowUp {
+            Button {
+                onFollowUp(quote)
+            } label: {
+                content()
+                    .multilineTextAlignment(.leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("点击进问答流追问这条")
+        } else {
+            content()
+        }
+    }
 }

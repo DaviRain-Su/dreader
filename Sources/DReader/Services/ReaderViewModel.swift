@@ -1269,6 +1269,30 @@ final class ReaderViewModel: @unchecked Sendable {
         highlights.append(note)
     }
 
+    /// 艾德勒「自我要求」层:AI 解读转复习卡(落划线库 + 立即进 SM-2 到期队列)。
+    /// 与 saveAIMessageAsNote 同库不同源(source="ai_review_card"),复习界面按源识别徽章。
+    @MainActor
+    func saveAIMessageAsReviewCard(_ message: ChatMessage) {
+        guard message.role == .assistant, let source = message.noteSource else { return }
+        let trimmed = message.content.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        // 复习卡正面 = 划线原文或章节,背面 = AI 解读;首次到期由 SM-2 NULL 分支接管
+        let card = Highlight(
+            bookId: source.bookId,
+            bookTitle: source.bookTitle,
+            chapterIndex: source.chapterIndex,
+            chapterTitle: source.chapterTitle,
+            text: "【AI 复习卡】\(source.chapterTitle)",
+            colorHex: "#B9A5FF",
+            note: trimmed,
+            source: "ai_review_card"
+        )
+        database.upsertHighlights([card])
+        highlights.append(card)
+        // 立即排期:今天到期,首次复习从 1 天间隔起步
+        database.recordReview(highlightId: card.id, score: 3)
+    }
+
     /// Kindle 生词本闭环：查词动作把词自动收进生词库（source="vocabulary"），
     /// 首次到期复习由 review_schedule 的 NULL 分支自然接管，进入 7/14/28 天队列。
     func saveVocabularyWord(_ raw: String) {

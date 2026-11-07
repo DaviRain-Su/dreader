@@ -68,8 +68,9 @@ struct ReaderMainView: View {
                             },
                             onOpenGuide: { book in
                                 vm.selectBookForReading(book)
-                                vm.sidebarTab = .guide
-                                vm.isSidebarVisible = true
+                                vm.sidebarTab = .toc
+                                vm.isSidebarVisible = false
+                                vm.isAIPanelVisible = true
                             },
                             onAddClassic: { classic in
                                 Task {
@@ -369,64 +370,114 @@ struct ReaderMainView: View {
         .overlay(Rectangle().stroke(Color(hex: "#9E7A45").opacity(0.18), lineWidth: 0.6))
     }
 
+    /// 侧栏(拆出 readingWorkspaceView,缓解类型检查器表达式超时)
+    @ViewBuilder
+    private var sidebarPanel: some View {
+        SidebarView(
+            currentTab: $vm.sidebarTab,
+            book: vm.currentBook,
+            books: vm.books,
+            highlights: vm.highlights,
+            bookmarks: vm.bookmarks,
+            onSelectChapter: { index in
+                vm.jumpToChapter(index)
+            },
+            onSelectBook: { book in
+                vm.currentBook = book
+            },
+            onImportEPUB: {
+                vm.showImportOpenPanel()
+            },
+            onDeleteHighlight: { id in
+                vm.deleteHighlight(id)
+            },
+            onUpdateHighlight: { id, note in
+                vm.updateHighlight(id: id, note: note)
+            },
+            onSelectHighlight: { highlight in
+                vm.jumpToHighlight(highlight)
+            },
+            onMakeQuoteCard: { highlight in
+                quoteCardHighlight = highlight
+            },
+            onDeleteBookmark: { id in
+                vm.deleteBookmark(id: id)
+            },
+            onSearchTerm: { term in
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    vm.isSearchPresented = true
+                }
+                vm.performSearch(query: term)
+            },
+            onAskAIAboutTerm: { term in
+                vm.selectionManager.quoteForAI = "【X-Ray 核心透视】\(term)"
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    vm.isAIPanelVisible = true
+                }
+            },
+            onOpenWeChatSync: {
+                vm.showWeChatSyncModal = true
+            },
+            onOpenAIPanel: {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    vm.isAIPanelVisible = true
+                }
+            },
+            chineseScriptMode: vm.settings.chineseScriptMode,
+            onChapterBodyText: { [weak vm] in
+                vm?.currentChapterBodyText(maxLength: 2400) ?? ""
+            },
+            onDeleteBook: { id in
+                vm.removeBook(id: id)
+            }
+        )
+        .transition(.move(edge: .leading))
+    }
+
+    /// AI 面板(拆出 readingWorkspaceView,缓解类型检查器表达式超时)
+    @ViewBuilder
+    private var aiPanel: some View {
+        AIChatPanel(
+            book: vm.currentBook,
+            currentChapter: vm.currentBook?.currentChapter,
+            allBooks: vm.books,
+            activeQuote: $vm.selectionManager.quoteForAI,
+            agentService: vm.agentService,
+            onClose: {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    vm.isAIPanelVisible = false
+                }
+            },
+            chapterBodyText: {
+                vm.currentChapterBodyText()
+            },
+            retrieveBookPassages: { question in
+                guard let book = vm.currentBook else { return [] }
+                // 索引懒构建：首次提问触发后台建索引，本次返回空（仅失全书检索，单章上下文不受影响）
+                BookIndexService.shared.ensureIndexLazily(for: book) { _ in nil }
+                return BookIndexService.shared.retrieve(
+                    question: question,
+                    bookId: book.id,
+                    currentChapterIndex: book.currentChapterIndex
+                )
+            },
+            onJumpToOriginalText: { text in
+                vm.scrollToSearchMatchAction?(text, 0)
+            },
+            onSaveMessageAsNote: { message in
+                vm.saveAIMessageAsNote(message)
+            },
+            onSaveMessageAsReviewCard: { message in
+                vm.saveAIMessageAsReviewCard(message)
+            }
+        )
+        .transition(.move(edge: .trailing))
+    }
+
     private var readingWorkspaceView: some View {
         HStack(spacing: 0) {            // 1. Sidebar (TOC, Highlights, Books)
             if !vm.settings.isZenMode && vm.isSidebarVisible {
-                SidebarView(
-                    currentTab: $vm.sidebarTab,
-                    book: vm.currentBook,
-                    books: vm.books,
-                    highlights: vm.highlights,
-                    bookmarks: vm.bookmarks,
-                    onSelectChapter: { index in
-                        vm.jumpToChapter(index)
-                    },
-                    onSelectBook: { book in
-                        vm.currentBook = book
-                    },
-                    onImportEPUB: {
-                        vm.showImportOpenPanel()
-                    },
-                    onDeleteHighlight: { id in
-                        vm.deleteHighlight(id)
-                    },
-                    onUpdateHighlight: { id, note in
-                        vm.updateHighlight(id: id, note: note)
-                    },
-                    onSelectHighlight: { highlight in
-                        vm.jumpToHighlight(highlight)
-                    },
-                    onMakeQuoteCard: { highlight in
-                        quoteCardHighlight = highlight
-                    },
-                    onDeleteBookmark: { id in
-                        vm.deleteBookmark(id: id)
-                    },
-                    onSearchTerm: { term in
-                        withAnimation(.easeInOut(duration: 0.2)) {
-                            vm.isSearchPresented = true
-                        }
-                        vm.performSearch(query: term)
-                    },
-                    onAskAIAboutTerm: { term in
-                        vm.selectionManager.quoteForAI = "【X-Ray 核心透视】\(term)"
-                        withAnimation(.easeInOut(duration: 0.2)) {
-                            vm.isAIPanelVisible = true
-                        }
-                    },
-                    onOpenWeChatSync: {
-                        vm.showWeChatSyncModal = true
-                    },
-                    chineseScriptMode: vm.settings.chineseScriptMode,
-                    onChapterBodyText: { [weak vm] in
-                        vm?.currentChapterBodyText(maxLength: 2400) ?? ""
-                    },
-                    onDeleteBook: { id in
-                        vm.removeBook(id: id)
-                    }
-                )
-                .transition(.move(edge: .leading))
-
+                sidebarPanel
                 Divider()
             }
 
@@ -693,38 +744,7 @@ struct ReaderMainView: View {
             if !vm.settings.isZenMode && vm.isAIPanelVisible {
                 Divider()
 
-                AIChatPanel(
-                    book: vm.currentBook,
-                    currentChapter: vm.currentBook?.currentChapter,
-                    allBooks: vm.books,
-                    activeQuote: $vm.selectionManager.quoteForAI,
-                    agentService: vm.agentService,
-                    onClose: {
-                        withAnimation(.easeInOut(duration: 0.2)) {
-                            vm.isAIPanelVisible = false
-                        }
-                    },
-                    chapterBodyText: {
-                        vm.currentChapterBodyText()
-                    },
-                    retrieveBookPassages: { question in
-                        guard let book = vm.currentBook else { return [] }
-                        // 索引懒构建：首次提问触发后台建索引，本次返回空（仅失全书检索，单章上下文不受影响）
-                        BookIndexService.shared.ensureIndexLazily(for: book) { _ in nil }
-                        return BookIndexService.shared.retrieve(
-                            question: question,
-                            bookId: book.id,
-                            currentChapterIndex: book.currentChapterIndex
-                        )
-                    },
-                    onJumpToOriginalText: { text in
-                        vm.scrollToSearchMatchAction?(text, 0)
-                    },
-                    onSaveMessageAsNote: { message in
-                        vm.saveAIMessageAsNote(message)
-                    }
-                )
-                .transition(.move(edge: .trailing))
+                aiPanel
             }
         }
         // 双语开关(弹窗 Toggle 直写路径):开→接力起跑,关→终止队列。⌘T 路径在 vm 内同步处理。
