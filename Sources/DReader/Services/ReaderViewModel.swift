@@ -19,7 +19,7 @@ final class ReaderViewModel: @unchecked Sendable {
     var highlights: [Highlight] = []
     var settings = ReaderSettings()
     var selectionManager = ReaderSelectionManager()
-    var agentService = AIAgentService()
+    var agentService = PiAgentService.shared
     private let databaseOverride: LibraryDatabase?
     private var database: LibraryDatabase { databaseOverride ?? .shared }
     private var deletedHighlights: [Highlight] = []
@@ -1723,7 +1723,7 @@ final class ReaderViewModel: @unchecked Sendable {
         let paragraphs = chapterParagraphs(book: vmBook, chapterIndex: chapterIndex)
         NSLog("[双语] 接力开翻：书=%@ 章=%d 段数=%d", book, chapterIndex, paragraphs.count)
         guard !paragraphs.isEmpty else { return false }
-        let agentName = agentService.currentPreset.name
+        let agentName = agentService.displayName
         let chapterTitle = vmBook.chapters[chapterIndex].title
         await BilingualTranslationService.shared.translateChapterBatch(
             paragraphs: paragraphs,
@@ -1826,7 +1826,7 @@ final class ReaderViewModel: @unchecked Sendable {
         let bookTitle = book.title
         let chapterTitle = chapter.title
         let chapterIndex = book.currentChapterIndex
-        let agentName = agentService.currentPreset.name
+        let agentName = agentService.displayName
 
         Task {
             let translation = await BilingualTranslationService.shared.translateParagraph(
@@ -1859,7 +1859,7 @@ final class ReaderViewModel: @unchecked Sendable {
         }
         let bookTitle = book.title
         let chapterTitle = chapter.title
-        let agentName = agentService.currentPreset.name
+        let agentName = agentService.displayName
 
         // 与 DOM 锚点(data-dreader-para)同源的抽取:sanitize 后再数段——
         // 直接在全 rawHTML 上抽会因「标题提升替换 <p>」错位一格(逐段模式曾踩过)。

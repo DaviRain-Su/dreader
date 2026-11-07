@@ -11,6 +11,7 @@ struct BookshelfBookDetailView: View {
 
     @Environment(\.dismiss) private var dismiss
     @State private var cover: NSImage?
+    @State private var showGuideSheet = false
 
     private var title: String {
         ChineseScriptConverter.convert(book.title, mode: chineseScriptMode)
@@ -104,6 +105,16 @@ struct BookshelfBookDetailView: View {
                             .buttonStyle(.borderedProminent)
                             .tint(Color(hex: "#1F3FB0"))
                             .padding(.top, 6)
+
+                            Button {
+                                showGuideSheet = true
+                            } label: {
+                                Label("AI 导读", systemImage: "sparkles")
+                                    .font(.system(size: 13))
+                                    .frame(minWidth: 148)
+                                    .padding(.vertical, 8)
+                            }
+                            .buttonStyle(.bordered)
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
                     }
@@ -115,6 +126,9 @@ struct BookshelfBookDetailView: View {
             }
         }
         .frame(minWidth: 760, minHeight: 560)
+        .sheet(isPresented: $showGuideSheet) {
+            BookGuideSheet(book: book, chineseScriptMode: chineseScriptMode)
+        }
         .accessibilityElement(children: .contain)
         .task(id: book.coverImageURL) {
             cover = nil

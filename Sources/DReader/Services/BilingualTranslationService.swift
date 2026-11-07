@@ -286,7 +286,7 @@ final class BilingualTranslationService: @unchecked Sendable {
         chapterTitle: String,
         chapterIndex: Int,
         paragraphIndex: Int,
-        agentService: AIAgentService
+        agentService: PiAgentService
     ) async -> String {
         if let cached = getCachedTranslations(bookTitle: bookTitle, chapterIndex: chapterIndex)?[paragraphIndex] {
             return cached
@@ -299,8 +299,8 @@ final class BilingualTranslationService: @unchecked Sendable {
                 chapterTitle: chapterTitle
             )
             guard !Self.isEchoTranslation(source: text, translated: translation) else {
-                // 回声假翻译视同失败,转入 Embedded 词典兜底
-                throw AIAgentService.BatchTranslationError.emptyResponse
+                // 回声假翻译视同失败(空响应语义:上层缺段记账重试)
+                throw PiAgentService.BatchTranslationError.emptyResponse
             }
             saveTranslation(
                 bookTitle: bookTitle,
@@ -310,14 +310,9 @@ final class BilingualTranslationService: @unchecked Sendable {
             )
             return translation
         } catch {
-            let fallback = EmbeddedTranslationEngine.shared.translate(text: text, bookTitle: bookTitle)
-            saveTranslation(
-                bookTitle: bookTitle,
-                chapterIndex: chapterIndex,
-                paragraphIndex: paragraphIndex,
-                translation: fallback
-            )
-            return fallback
+            // Embedded 词典假译文兜底已删(pi 化):失败段保持未译,由重翻链补
+            NSLog("[双语] 段 %d 单段翻译失败:%@", paragraphIndex, error.localizedDescription)
+            return ""
         }
     }
 
@@ -332,7 +327,7 @@ final class BilingualTranslationService: @unchecked Sendable {
         bookTitle: String,
         chapterTitle: String,
         chapterIndex: Int,
-        agentService: AIAgentService,
+        agentService: PiAgentService,
         onParagraphTranslated: @escaping @MainActor (Int, String) -> Void,
         onBatchStarted: (@MainActor ([Int]) -> Void)? = nil
     ) async {
@@ -358,7 +353,7 @@ final class BilingualTranslationService: @unchecked Sendable {
         bookTitle: String,
         chapterTitle: String,
         chapterIndex: Int,
-        agentService: AIAgentService,
+        agentService: PiAgentService,
         onParagraphTranslated: @escaping @MainActor (Int, String) -> Void,
         onBatchStarted: (@MainActor ([Int]) -> Void)? = nil,
         isCancelled: (@MainActor @Sendable () -> Bool)? = nil
@@ -410,10 +405,9 @@ final class BilingualTranslationService: @unchecked Sendable {
         let total = Double(pending.count)
         // 超巨段按句边界拆块后同编号多行进同一包；批翻缺编号时逐段兜底要用整段原文
         let fullTextByIndex = Dictionary(pending.map { ($0.index, $0.text) }, uniquingKeysWith: { a, _ in a })
-        let batches = AIAgentService.planChapterBatches(pending)
-        NSLog("[双语] 批翻开始：书=%@ 章=%d 段数=%d(缓存命中 %d) 包数=%d 驱动=%@",
-              bookTitle, chapterIndex, paragraphs.count, cached.count, batches.count,
-              agentService.currentPreset.name)
+        let batches = PiAgentService.planChapterBatches(pending)
+        NSLog("[双语] 批翻开始：书=%@ 章=%d 段数=%d(缓存命中 %d) 包数=%d 驱动=pi",
+              bookTitle, chapterIndex, paragraphs.count, cached.count, batches.count)
         let semaphore = AsyncSemaphore(permits: Self.batchConcurrency)
         let counter = ProgressCounter()
         let bookTitle = bookTitle
@@ -465,7 +459,7 @@ final class BilingualTranslationService: @unchecked Sendable {
         bookTitle: String,
         chapterTitle: String,
         chapterIndex: Int,
-        agent: AIAgentService,
+        agent: PiAgentService,
         counter: ProgressCounter,
         onParagraphTranslated: @escaping @MainActor (Int, String) -> Void,
         onBatchStarted: (@MainActor ([Int]) -> Void)?,
@@ -551,7 +545,7 @@ final class BilingualTranslationService: @unchecked Sendable {
         bookTitle: String,
         chapterTitle: String,
         chapterIndex: Int,
-        agent: AIAgentService,
+        agent: PiAgentService,
         counter: ProgressCounter,
         onParagraphTranslated: @escaping @MainActor (Int, String) -> Void
     ) async {

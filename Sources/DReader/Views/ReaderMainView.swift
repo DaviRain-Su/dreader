@@ -413,6 +413,9 @@ struct ReaderMainView: View {
                         vm.showWeChatSyncModal = true
                     },
                     chineseScriptMode: vm.settings.chineseScriptMode,
+                    onChapterBodyText: { [weak vm] in
+                        vm?.currentChapterBodyText(maxLength: 2400) ?? ""
+                    },
                     onDeleteBook: { id in
                         vm.removeBook(id: id)
                     }
@@ -913,7 +916,7 @@ struct ReaderMainView: View {
                 ReaderTypographySettingsPopover(
                     settings: vm.settings,
                     currentBookId: vm.currentBook?.id,
-                    agentName: vm.agentService.currentPreset.name,
+                    agentName: vm.agentService.displayName,
                     isTranslating: vm.isTranslatingChapter,
                     translationProgress: vm.chapterTranslationProgress,
                     bilingualBatchDescription: vm.bilingualBatchDescription,
@@ -1076,7 +1079,7 @@ struct ReaderMainView: View {
                             handleKeyboardAnnotate(wantThought: wantThought)
                         },
                         bilingualTranslations: vm.currentChapterBilingualTranslations(),
-                        agentName: vm.agentService.currentPreset.name,
+                        agentName: vm.agentService.displayName,
                         onTranslateParagraph: { idx, text in
                             vm.translateParagraphAt(index: idx, text: text)
                         },
@@ -1390,7 +1393,7 @@ struct ReaderMainView: View {
                         .fill(Color.green)
                         .frame(width: 6, height: 6)
                         .shadow(color: .green.opacity(0.6), radius: 3)
-                    Text("\(vm.agentService.currentPreset.name)")
+                    Text("\(vm.agentService.displayName)")
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(.primary.opacity(0.85))
                 }
@@ -1400,7 +1403,7 @@ struct ReaderMainView: View {
                 .clipShape(Capsule())
             }
             .buttonStyle(.plain)
-            .help("当前伴读 Agent：\(vm.agentService.currentPreset.name)，点击展开讨论面板")
+            .help("当前伴读 Agent：\(vm.agentService.displayName)，点击展开讨论面板")
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 6)

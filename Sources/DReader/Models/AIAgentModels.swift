@@ -1,36 +1,5 @@
 import Foundation
 
-/// Supported AI Agent Providers
-enum AIAgentProvider: String, CaseIterable, Identifiable, Codable {
-    case ollama = "Ollama (本地)"
-    case openAICompatible = "LM Studio / 本地 API"
-    case builtIn = "内置智能导读 (离线体验)"
-
-    var id: String { rawValue }
-
-    var defaultEndpoint: String {
-        switch self {
-        case .ollama:
-            return "http://localhost:11434"
-        case .openAICompatible:
-            return "http://localhost:1234/v1"
-        case .builtIn:
-            return "local://built-in"
-        }
-    }
-
-    var defaultModel: String {
-        switch self {
-        case .ollama:
-            return "llama3.2"
-        case .openAICompatible:
-            return "local-model"
-        case .builtIn:
-            return "dreader-reader-agent"
-        }
-    }
-}
-
 /// Agent Personas / Roles
 enum AIAgentRole: String, CaseIterable, Identifiable, Codable {
     case deepReader = "深度导读"

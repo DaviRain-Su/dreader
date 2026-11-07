@@ -22,7 +22,7 @@ struct AIChatPanel: View {
     let currentChapter: EPUBChapter?
     var allBooks: [EPUBBook] = []
     @Binding var activeQuote: String?
-    @Bindable var agentService: AIAgentService
+    @Bindable var agentService: PiAgentService
     let onClose: () -> Void
     /// Sanitized plain-text of the current chapter (AI can actually read this chapter)
     var chapterBodyText: (() -> String)? = nil
@@ -88,7 +88,7 @@ struct AIChatPanel: View {
                             HStack(spacing: 8) {
                                 ProgressView()
                                     .controlSize(.small)
-                                Text("正在向 \(agentService.currentPreset.name) 传输语境并思考...")
+                                Text("正在向 \(agentService.displayName) 传输语境并思考...")
                                     .font(.system(size: 12))
                                     .foregroundStyle(.secondary)
                             }
@@ -193,7 +193,7 @@ struct AIChatPanel: View {
                     Circle()
                         .fill(connectionStatusColor)
                         .frame(width: 6, height: 6)
-                    Text(agentService.currentPreset.name)
+                    Text(agentService.displayName)
                         .font(.system(size: 10.5))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
@@ -451,10 +451,10 @@ struct AIChatPanel: View {
                 .padding(.horizontal, 24)
 
             VStack(alignment: .leading, spacing: 8) {
-                Label("Agent: \(agentService.currentPreset.name)", systemImage: agentService.currentPreset.iconName)
+                Label("Agent: \(agentService.displayName)", systemImage: "point.3.connected.trianglepath.dotted")
                     .font(.system(size: 11))
                     .foregroundStyle(Color.primary.opacity(0.75))
-                Label("通讯驱动: \(agentService.currentPreset.driverType.rawValue)", systemImage: "bolt.horizontal.fill")
+                Label("通讯驱动: pi agent RPC(长驻子进程)", systemImage: "bolt.horizontal.fill")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
             }
@@ -619,7 +619,7 @@ struct AIChatPanel: View {
                 } else {
                     messages.append(ChatMessage(
                         role: .assistant,
-                        content: "（未收到来自 \(agentService.currentPreset.name) 的有效回答，请检查本地环境或切换 Agent）",
+                        content: "（未收到来自 \(agentService.displayName) 的有效回答，请检查本地环境或切换 Agent）",
                         quoteContext: actualQuote,
                         noteSource: noteSource
                     ))
@@ -815,9 +815,9 @@ private struct LiveStreamingRow: View {
     }
 }
 
-// MARK: - AI Agent Settings Sheet
+// MARK: - AI Agent Settings Sheet(pi agent 版)
 struct AIAgentSettingsSheet: View {
-    @Bindable var agentService: AIAgentService
+    @Bindable var agentService: PiAgentService
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -826,7 +826,7 @@ struct AIAgentSettingsSheet: View {
                 HStack(spacing: 6) {
                     Image(systemName: "point.3.connected.trianglepath.dotted")
                         .foregroundStyle(.secondary)
-                    Text("配置 ACP (Agent Client Protocol) 客户端")
+                    Text("AI 伴读引擎(pi agent)")
                         .font(.headline)
                 }
                 Spacer()
@@ -836,39 +836,17 @@ struct AIAgentSettingsSheet: View {
             .padding(.bottom, 8)
 
             Form {
-                Picker("选择伴读 Agent:", selection: $agentService.currentPreset) {
-                    ForEach(ACPAgentPreset.allPresets) { p in
-                        HStack {
-                            Image(systemName: p.iconName)
-                            Text(p.name)
-                        }
-                        .tag(p)
-                    }
-                }
-                .onChange(of: agentService.currentPreset) { _, newP in
-                    agentService.selectPreset(newP)
-                }
-
                 HStack {
                     Text("驱动类型:")
                         .font(.system(size: 11, weight: .medium))
-                    Text(agentService.currentPreset.driverType.rawValue)
+                    Text("pi agent RPC(长驻子进程池)")
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
                 }
 
-                Text(agentService.currentPreset.description)
+                Text("模型与密钥由 pi 统一管理:运行 `pi` 一次完成登录/配置,或在 ~/.pi/agent/models.json 配置 provider。DReader 无需单独配置。")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
-
-                if agentService.currentPreset.driverType == .acpStdio || agentService.currentPreset.driverType == .cliStreaming {
-                    TextField("执行命令:", text: $agentService.customCommand)
-                        .textFieldStyle(.roundedBorder)
-                        .help("如 `grok agent stdio`、`kimi acp`、`pi -p`、`claude -p` 等")
-                } else if agentService.currentPreset.driverType == .httpAdapter {
-                    TextField("服务接口地址:", text: $agentService.customCommand)
-                        .textFieldStyle(.roundedBorder)
-                }
 
                 HStack {
                     Text("状态:")
@@ -878,30 +856,23 @@ struct AIAgentSettingsSheet: View {
                         .foregroundStyle(statusColor)
                 }
 
-                Picker("伴读思考角色:", selection: $agentService.role) {
-                    ForEach(AIAgentRole.allCases) { role in
-                        Label(role.rawValue, systemImage: role.icon).tag(role)
-                    }
+                Button("重新检测") {
+                    agentService.checkConnection()
                 }
+                .font(.system(size: 12))
             }
 
             // Connection Help Note
             VStack(alignment: .leading, spacing: 6) {
-                Text("💡 支持的多 Agent 接入矩阵：")
+                Text("💡 pi agent 架构:")
                     .font(.system(size: 12, weight: .semibold))
-                Text("• **Grok**：xAI 官方原生 ACP (Agent Client Protocol) 协议接口 (`grok agent stdio`)。")
+                Text("• 4 条常驻 RPC 通道:聊天 1 + 导读 1 + 翻译 2,互不阻塞。")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
-                Text("• **Kimi**：Moonshot Kimi Code 原生 ACP 协议服务 (`kimi acp`)。")
+                Text("• 模型配置一次,聊天/导读/翻译共用;停止翻译不影响聊天。")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
-                Text("• **Claude Code**：Anthropic 官方 Claude Code CLI 流式驱动 (`claude -p`)。")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-                Text("• **Pi / Codex / Cursor**：支持本地 Pi CLI (`pi -p`)、Codex CLI (`codex exec`) 及 Cursor Agent (`agent -p`)。")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-                Text("• **内置引擎 / 本地模型**：支持离线伴读引擎与 Ollama / LM Studio 本地模型服务。")
+                Text("• 安装:curl -fsSL https://pi.dev/install.sh | sh")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
             }
@@ -911,6 +882,9 @@ struct AIAgentSettingsSheet: View {
         }
         .padding(20)
         .frame(width: 520)
+        .onAppear {
+            agentService.checkConnection()
+        }
     }
 
     private var statusText: String {

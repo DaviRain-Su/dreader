@@ -9,23 +9,23 @@ final class BatchTranslationTests: XCTestCase {
     func testPlanChapterBatchesRespectsBudgetAndParagraphCap() {
         // 每段 100 字,预算 500 → 每包最多 5 段
         let paragraphs = (0..<12).map { (index: $0, text: String(repeating: "字", count: 100)) }
-        let batches = AIAgentService.planChapterBatches(paragraphs, charBudget: 500)
+        let batches = PiAgentService.planChapterBatches(paragraphs, charBudget: 500)
         XCTAssertEqual(batches.count, 3)
         XCTAssertTrue(batches.allSatisfy { $0.count <= 5 })
         XCTAssertEqual(batches.flatMap { $0.map(\.index) }, Array(0..<12), "切包不得丢段或改序")
 
         // 段数上限 60 优先(段小预算大时)
         let small = (0..<70).map { (index: $0, text: "文") }
-        let capped = AIAgentService.planChapterBatches(small, charBudget: 100_000)
+        let capped = PiAgentService.planChapterBatches(small, charBudget: 100_000)
         XCTAssertEqual(capped.count, 2)
-        XCTAssertEqual(capped.first?.count, AIAgentService.batchMaxParagraphs)
+        XCTAssertEqual(capped.first?.count, PiAgentService.batchMaxParagraphs)
     }
 
     func testPlanChapterBatchesSplitsHugeParagraphIntoOneBatch() {
         // 超硬顶巨段:按句边界拆块,同编号多行必须进同一个包(跨包会互相覆盖丢前半译文)
         let longText = (0..<1200).map { _ in "这是一句很长的测试句子。" }.joined()
-        XCTAssertGreaterThan(longText.count, AIAgentService.batchHardSegmentLimit)
-        let batches = AIAgentService.planChapterBatches([(index: 3, text: longText)])
+        XCTAssertGreaterThan(longText.count, PiAgentService.batchHardSegmentLimit)
+        let batches = PiAgentService.planChapterBatches([(index: 3, text: longText)])
         XCTAssertEqual(batches.count, 1, "巨段拆块后同编号多行必须进同一个包")
         let mega = batches.first ?? []
         XCTAssertGreaterThan(mega.count, 1, "巨段应被拆成多个子块")
@@ -37,10 +37,10 @@ final class BatchTranslationTests: XCTestCase {
     }
 
     func testPlanChapterBatchesFiltersEmptyAndKeepsSmallParagraphAlone() {
-        let batches = AIAgentService.planChapterBatches([
+        let batches = PiAgentService.planChapterBatches([
             (index: 0, text: ""),
             (index: 1, text: "   \n\t "),
-            (index: 2, text: String(repeating: "短", count: AIAgentService.batchHardSegmentLimit + 10)),
+            (index: 2, text: String(repeating: "短", count: PiAgentService.batchHardSegmentLimit + 10)),
             (index: 3, text: "正常段"),
         ])
         XCTAssertEqual(batches.count, 2)
@@ -52,22 +52,22 @@ final class BatchTranslationTests: XCTestCase {
 
     func testParseBatchResponseAcceptsCanonicalItemsShape() {
         let raw = #"{"items":[{"i":1,"t":"甲"},{"i":2,"t":"乙"}]}"#
-        let parsed = AIAgentService.parseBatchResponse(raw, validIndices: [1, 2])
+        let parsed = PiAgentService.parseBatchResponse(raw, validIndices: [1, 2])
         XCTAssertEqual(parsed[1], "甲")
         XCTAssertEqual(parsed[2], "乙")
     }
 
     func testParseBatchResponseAcceptsAlternateShapesAndAliases() {
         // 顶层 map 形态
-        let mapShape = AIAgentService.parseBatchResponse(#"{"1":"甲转换","2":"乙转换"}"#, validIndices: [1, 2])
+        let mapShape = PiAgentService.parseBatchResponse(#"{"1":"甲转换","2":"乙转换"}"#, validIndices: [1, 2])
         XCTAssertEqual(mapShape[1], "甲转换")
         XCTAssertEqual(mapShape[2], "乙转换")
         // 顶层数组 + 键名别名
-        let arrayShape = AIAgentService.parseBatchResponse(
+        let arrayShape = PiAgentService.parseBatchResponse(
             #"[{"index":"4","translation":"四"},{"n":5,"text":"五"}]"#, validIndices: Set(1..<10))
         XCTAssertEqual(arrayShape[4], "四")
         XCTAssertEqual(arrayShape[5], "五")
-        let itemsAlias = AIAgentService.parseBatchResponse(
+        let itemsAlias = PiAgentService.parseBatchResponse(
             #"{"translations":[{"i":6,"zh":"陆"}]}"#, validIndices: [6])
         XCTAssertEqual(itemsAlias[6], "陆")
     }
@@ -79,13 +79,13 @@ final class BatchTranslationTests: XCTestCase {
         {"items":[{"i":1,"t":"围栏甲"}]}
         ```
         """
-        let parsed = AIAgentService.parseBatchResponse(raw, validIndices: [1])
+        let parsed = PiAgentService.parseBatchResponse(raw, validIndices: [1])
         XCTAssertEqual(parsed[1], "围栏甲")
     }
 
     func testParseBatchResponseIgnoresForeignIndicesAndEmptyText() {
         let raw = #"{"items":[{"i":1,"t":""},{"i":99,"t":"不属于本包"},{"i":2,"t":"乙"}]}"#
-        let parsed = AIAgentService.parseBatchResponse(raw, validIndices: [1, 2])
+        let parsed = PiAgentService.parseBatchResponse(raw, validIndices: [1, 2])
         XCTAssertEqual(parsed[1], nil, "空译文不能顶替兜底")
         XCTAssertEqual(parsed[99], nil)
         XCTAssertEqual(parsed[2], "乙")
@@ -94,7 +94,7 @@ final class BatchTranslationTests: XCTestCase {
     func testParseBatchResponseMergesSameIndexPartsInOrder() {
         // 超巨段拆块:同编号多条目按行序拼接
         let raw = #"{"items":[{"i":7,"t":"上半段"},{"i":7,"t":"下半段"}]}"#
-        let parsed = AIAgentService.parseBatchResponse(raw, validIndices: [7])
+        let parsed = PiAgentService.parseBatchResponse(raw, validIndices: [7])
         XCTAssertEqual(parsed[7], "上半段下半段")
     }
 
@@ -111,7 +111,7 @@ final class BatchTranslationTests: XCTestCase {
     func testBatchTranslationPersistsCacheAndPublishesEveryParagraph() async throws {
         let service = BilingualTranslationService(cacheDirectory: makeTempCacheDirectory())
         // 批翻 override 直接返回全量 map
-        let agent = AIAgentService(testBatchDriverOverride: { items in
+        let agent = PiAgentService(testBatchDriverOverride: { items in
             Dictionary(items.map { ($0.index, "译\($0.index)") }, uniquingKeysWith: { a, _ in a })
         })
         let recorder = TranslationRecorder()
@@ -138,14 +138,12 @@ final class BatchTranslationTests: XCTestCase {
     func testBatchTranslationFallsBackPerParagraphWhenAgentFails() async throws {
         let service = BilingualTranslationService(cacheDirectory: makeTempCacheDirectory())
         let recorder = TranslationRecorder()
-        let agent = AIAgentService(testBatchDriverOverride: { _ in
+        let agent = PiAgentService(testBatchDriverOverride: { _ in
             recorder.recordFailure()
-            throw AIAgentService.BatchTranslationError.emptyResponse
+            throw PiAgentService.BatchTranslationError.emptyResponse
         })
-        // 兜底逐段走 agent.translate:切到 embedded 预设,避免测试拉起真实 CLI 子进程
-        if let embedded = ACPAgentPreset.allPresets.first(where: { $0.driverType == .embedded }) {
-            agent.selectPreset(embedded)
-        }
+        // pi 化后 Embedded 假译文兜底已删:批翻两连败 → 逐段兜底走 agent.translate
+        // (同样失败)→ 段保持未译,但每段都有回调、进度必达 1.0 的契约不变
         let publishRecorder = TranslationRecorder()
         await service.translateChapterBatch(
             paragraphs: [(0, "兜底段一"), (1, "兜底段二")],
@@ -164,7 +162,7 @@ final class BatchTranslationTests: XCTestCase {
 
     func testBatchTranslationStopsEarlyWhenCancelled() async throws {
         let service = BilingualTranslationService(cacheDirectory: makeTempCacheDirectory())
-        let agent = AIAgentService(testBatchDriverOverride: { items in
+        let agent = PiAgentService(testBatchDriverOverride: { items in
             try await Task.sleep(for: .milliseconds(50))
             return Dictionary(items.map { ($0.index, "译\($0.index)") }, uniquingKeysWith: { a, _ in a })
         })
@@ -194,7 +192,7 @@ final class BatchTranslationTests: XCTestCase {
 
     func testBatchStartedNotifiesMergedInFlightSet() async throws {
         let service = BilingualTranslationService(cacheDirectory: makeTempCacheDirectory())
-        let agent = AIAgentService(testBatchDriverOverride: { items in
+        let agent = PiAgentService(testBatchDriverOverride: { items in
             try await Task.sleep(for: .milliseconds(30))
             return Dictionary(items.map { ($0.index, "译\($0.index)") }, uniquingKeysWith: { a, _ in a })
         })
@@ -254,7 +252,7 @@ final class BatchTranslationTests: XCTestCase {
 
     func testChapterFingerprintInvalidatesStaleCache() async throws {
         let service = BilingualTranslationService(cacheDirectory: makeTempCacheDirectory())
-        let agent = AIAgentService(testBatchDriverOverride: { items in
+        let agent = PiAgentService(testBatchDriverOverride: { items in
             Dictionary(items.map { ($0.index, "译\($0.index)") }, uniquingKeysWith: { a, _ in a })
         })
         let first = [(index: 0, text: "第一段原文。"), (index: 1, text: "第二段原文。")]
@@ -309,7 +307,7 @@ final class BatchTranslationTests: XCTestCase {
 
     func testSecondBatchWaitsOnLaneInsteadOfBeingRejected() async throws {
         let service = BilingualTranslationService(cacheDirectory: makeTempCacheDirectory())
-        let agent = AIAgentService(testBatchDriverOverride: { items in
+        let agent = PiAgentService(testBatchDriverOverride: { items in
             try await Task.sleep(for: .milliseconds(60))
             return Dictionary(items.map { ($0.index, "译\($0.index)") }, uniquingKeysWith: { a, _ in a })
         })
@@ -340,7 +338,7 @@ final class BatchTranslationTests: XCTestCase {
     func testCancelledBatchLeavesNoFingerprintSidecar() async throws {
         let service = BilingualTranslationService(cacheDirectory: makeTempCacheDirectory())
         // 130 段 → 3 包(60 上限):包 1(0–59)快返发完即触发取消;后两包慢/不入住
-        let agent = AIAgentService(testBatchDriverOverride: { items in
+        let agent = PiAgentService(testBatchDriverOverride: { items in
             let isSlowBatch = items.contains { $0.index >= 60 }
             if isSlowBatch {
                 try await Task.sleep(for: .milliseconds(900))
@@ -366,14 +364,11 @@ final class BatchTranslationTests: XCTestCase {
 
     func testMissingParagraphFallsBackPublishedExactlyOnce() async throws {
         let service = BilingualTranslationService(cacheDirectory: makeTempCacheDirectory())
-        let agent = AIAgentService(testBatchDriverOverride: { items in
-            // 段 0 有译文,段 1 缺译 → 走逐段兜底(Embedded 驱动)
+        let agent = PiAgentService(testBatchDriverOverride: { items in
+            // 段 0 有译文,段 1 缺译 → 走逐段兜底(单段路径)
             Dictionary(items.filter { $0.index == 0 }.map { ($0.index, "译\($0.index)") },
                        uniquingKeysWith: { a, _ in a })
         })
-        if let embedded = ACPAgentPreset.allPresets.first(where: { $0.driverType == .embedded }) {
-            agent.selectPreset(embedded)
-        }
         let publishRecorder = TranslationRecorder()
         await service.translateChapterBatch(
             paragraphs: [(0, "缺段原文甲"), (1, "缺段原文乙")],

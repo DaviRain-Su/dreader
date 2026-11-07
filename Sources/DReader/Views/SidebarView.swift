@@ -6,6 +6,7 @@ enum SidebarTab: String, CaseIterable, Identifiable {
     case highlights = "划线笔记"
     case bookmarks = "书签"
     case xray = "X-Ray"
+    case guide = "导读"
     case library = "藏书"
 
     var id: String { rawValue }
@@ -16,6 +17,7 @@ enum SidebarTab: String, CaseIterable, Identifiable {
         case .highlights: return "highlighter"
         case .bookmarks: return "bookmark.fill"
         case .xray: return "atom"
+        case .guide: return "sparkles"
         case .library: return "books.vertical.fill"
         }
     }
@@ -39,6 +41,7 @@ struct SidebarView: View {
     var onAskAIAboutTerm: ((String) -> Void)? = nil
     var onOpenWeChatSync: (() -> Void)? = nil
     var chineseScriptMode: ChineseScriptMode = .original
+    var onChapterBodyText: (() -> String)? = nil
     let onDeleteBook: (UUID) -> Void
 
     enum HighlightSourceFilter: String, CaseIterable, Identifiable {
@@ -152,6 +155,26 @@ struct SidebarView: View {
                         Spacer()
                     }
                 }
+            case .guide:
+                if let currentBook = book {
+                    BookGuideSheet(
+                        book: currentBook,
+                        initialChapter: currentBook.currentChapter,
+                        chineseScriptMode: chineseScriptMode,
+                        chapterBodyProvider: onChapterBodyText
+                    )
+                } else {
+                    VStack(spacing: 8) {
+                        Spacer()
+                        Image(systemName: "sparkles")
+                            .font(.system(size: 28))
+                            .foregroundStyle(.secondary)
+                        Text("请先打开一本书以查看 AI 导读")
+                            .font(.system(size: 12.5))
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                    }
+                }
             case .library:
                 libraryListView
             }
@@ -249,6 +272,8 @@ struct SidebarView: View {
             return "折角书签 · 共 \(currentBookBookmarks.count) 个"
         case .xray:
             return "全书透视 · X-Ray 深度解析"
+        case .guide:
+            return "AI 导读 · 全书地图与章节速览"
         case .library:
             return "私人藏书 · 共 \(books.count) 卷"
         }

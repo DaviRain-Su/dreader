@@ -172,6 +172,12 @@ final class LibraryDatabase: @unchecked Sendable {
             chunk_text TEXT NOT NULL DEFAULT '',
             updated_at REAL NOT NULL DEFAULT 0
         );
+        CREATE TABLE IF NOT EXISTS book_guides (
+            book_id TEXT PRIMARY KEY,
+            guide_json TEXT NOT NULL,
+            generated_at REAL NOT NULL DEFAULT 0,
+            model TEXT NOT NULL DEFAULT ''
+        );
         """
         sqlite3_exec(db, sql, nil, nil, nil)
         // SM-2 ease 因子列（对已存在的旧表幂等——列已有时 ALTER 报错被忽略）
@@ -181,6 +187,94 @@ final class LibraryDatabase: @unchecked Sendable {
         // 划线前后文快照(旧库幂等增列;CREATE 分支已含,ALTER 报错被忽略)
         sqlite3_exec(db, "ALTER TABLE highlights ADD COLUMN prefix TEXT;", nil, nil, nil)
         sqlite3_exec(db, "ALTER TABLE highlights ADD COLUMN suffix TEXT;", nil, nil, nil)
+    }
+
+    // MARK: - AI 导读(BookGuide 持久化)
+
+    /// 落/覆盖一本书的 AI 导读(整包 JSON 存储;重新生成即覆盖)
+    func saveBookGuide(_ guide: BookGuide, bookId: UUID, model: String) {
+        dbQueue.sync {
+            guard let db,
+                  let data = try? JSONEncoder().encode(guide),
+                  let json = String(data: data, encoding: .utf8) else { return }
+            var stmt: OpaquePointer?
+            let sql = "INSERT OR REPLACE INTO book_guides (book_id, guide_json, generated_at, model) VALUES (?,?,?,?)"
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
+            defer { sqlite3_finalize(stmt) }
+            bindText(stmt, 1, bookId.uuidString)
+            bindText(stmt, 2, json)
+            sqlite3_bind_double(stmt, 3, Date().timeIntervalSince1970)
+            bindText(stmt, 4, model)
+            _ = sqlite3_step(stmt)
+            scheduleBackup()
+        }
+    }
+
+    /// 读一本书的 AI 导读;无记录返回 nil
+    func loadBookGuide(bookId: UUID) -> BookGuide? {
+        dbQueue.sync {
+            guard let db else { return nil }
+            var stmt: OpaquePointer?
+            let sql = "SELECT guide_json FROM book_guides WHERE book_id = ?"
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return nil }
+            defer { sqlite3_finalize(stmt) }
+            bindText(stmt, 1, bookId.uuidString)
+            guard sqlite3_step(stmt) == SQLITE_ROW,
+                  let json = text(stmt, 0),
+                  let data = json.data(using: .utf8) else { return nil }
+            return try? JSONDecoder().decode(BookGuide.self, from: data)
+        }
+    }
+
+    /// 删书时连带清理导读
+    func deleteBookGuide(bookId: UUID) {
+        dbQueue.sync {
+            guard let db else { return }
+            var stmt: OpaquePointer?
+            let sql = "DELETE FROM book_guides WHERE book_id = ?"
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
+            defer { sqlite3_finalize(stmt) }
+            bindText(stmt, 1, bookId.uuidString)
+            _ = sqlite3_step(stmt)
+        }
+    }
+
+    // MARK: - 导读笔记(独立于 AI 导读 JSON;复用 book_guides 表,model 列标记 "notes")
+
+    /// 落一本书的全部导读笔记(整包 JSON 存储;增删后全量重写)
+    func saveGuideNotes(_ notes: [GuideNote], bookId: UUID) {
+        dbQueue.sync {
+            guard let db,
+                  let data = try? JSONEncoder().encode(notes),
+                  let json = String(data: data, encoding: .utf8) else { return }
+            var stmt: OpaquePointer?
+            let sql = "INSERT OR REPLACE INTO book_guides (book_id, guide_json, generated_at, model) VALUES (?,?,?,?)"
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
+            defer { sqlite3_finalize(stmt) }
+            bindText(stmt, 1, "notes-\(bookId.uuidString)")
+            bindText(stmt, 2, json)
+            sqlite3_bind_double(stmt, 3, Date().timeIntervalSince1970)
+            bindText(stmt, 4, "notes")
+            _ = sqlite3_step(stmt)
+            scheduleBackup()
+        }
+    }
+
+    /// 读一本书的全部导读笔记;无记录返回空数组
+    func loadGuideNotes(bookId: UUID) -> [GuideNote] {
+        dbQueue.sync {
+            guard let db else { return [] }
+            var stmt: OpaquePointer?
+            let sql = "SELECT guide_json FROM book_guides WHERE book_id = ? AND model = 'notes'"
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
+            defer { sqlite3_finalize(stmt) }
+            bindText(stmt, 1, "notes-\(bookId.uuidString)")
+            guard sqlite3_step(stmt) == SQLITE_ROW,
+                  let json = text(stmt, 0),
+                  let data = json.data(using: .utf8),
+                  let notes = try? JSONDecoder().decode([GuideNote].self, from: data) else { return [] }
+            return notes
+        }
     }
 
     // MARK: - Mastery Review Scheduling (Readwise-style spaced resurfacing)
